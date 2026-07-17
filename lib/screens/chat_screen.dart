@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../state/app_session.dart';
 import '../state/conversation.dart';
 import '../util/address_format.dart';
+import '../util/errors.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -44,7 +45,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Send failed: $e')));
+        ).showSnackBar(SnackBar(content: Text('Send failed: ${describeError(e)}')));
       }
     } finally {
       if (mounted) setState(() => _sending = false);

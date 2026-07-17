@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 
 import '../state/app_session.dart';
 import '../state/conversation.dart';
+import '../util/errors.dart';
 import 'admin_screen.dart';
 import 'chat_screen.dart';
 
@@ -168,7 +169,7 @@ class _NewChatSheetState extends State<_NewChatSheet> {
       Navigator.of(context).pop(convo.peerAccountId);
     } catch (e) {
       setState(() {
-        _error = '$e';
+        _error = describeError(e);
         _loading = false;
       });
     }

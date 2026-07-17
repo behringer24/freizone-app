@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../net/dto.dart';
 import '../state/app_session.dart';
 import '../util/address_format.dart';
+import '../util/errors.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key, required this.session});
@@ -46,7 +47,7 @@ class _AdminScreenState extends State<AdminScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        _error = describeError(e);
         _loading = false;
       });
     }
@@ -60,7 +61,9 @@ class _AdminScreenState extends State<AdminScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _policy = previous);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to change policy: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to change policy: ${describeError(e)}')));
     }
   }
 
@@ -88,7 +91,7 @@ class _AdminScreenState extends State<AdminScreen> {
       await widget.session.setAccountRole(account.id, role);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to set role: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to set role: ${describeError(e)}')));
       }
     }
   }
@@ -102,7 +105,7 @@ class _AdminScreenState extends State<AdminScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: ${describeError(e)}')));
       }
     }
   }
@@ -126,7 +129,9 @@ class _AdminScreenState extends State<AdminScreen> {
       await widget.session.deleteAccount(account.id);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to delete: ${describeError(e)}')));
       }
     }
   }
@@ -156,14 +161,34 @@ class _AdminScreenState extends State<AdminScreen> {
     );
   }
 
+  // Blocked status wins over role -- a lock says "can't sign in right
+  // now" at a glance, which matters more than what they could do if
+  // unblocked. Otherwise: filled person+hat for admin, filled plain
+  // person for moderator, outline person for a regular member -- same
+  // Material "person" icon family throughout so the three read as
+  // variants of one glyph rather than unrelated symbols.
+  Icon _roleIcon(AdminAccountSummary account) {
+    if (account.status != 'active') return const Icon(Icons.lock);
+    switch (account.role) {
+      case 'admin':
+        return const Icon(Icons.engineering);
+      case 'moderator':
+        return const Icon(Icons.person);
+      default:
+        return const Icon(Icons.person_outline);
+    }
+  }
+
   Widget _buildAccountRow(BuildContext context, AdminAccountSummary account) {
     final blocked = account.status != 'active';
     return ListTile(
+      leading: _roleIcon(account),
       title: Text(formatAccountIdForDisplay(account.id)),
       subtitle: Text('${account.role}${blocked ? ' -- blocked' : ''}'),
       onTap: _isAdmin ? () => _showRolePicker(account) : null,
       trailing: _isAdmin
           ? PopupMenuButton<String>(
+              padding: EdgeInsets.zero,
               onSelected: (action) {
                 switch (action) {
                   case 'toggle_block':

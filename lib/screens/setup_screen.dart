@@ -9,6 +9,7 @@ import '../ffi/freizone_core.dart';
 import '../net/api_client.dart';
 import '../state/app_session.dart';
 import '../state/local_state.dart';
+import '../util/errors.dart';
 import 'chat_list_screen.dart';
 
 class SetupScreen extends StatefulWidget {
@@ -82,7 +83,7 @@ class _SetupScreenState extends State<SetupScreen> {
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ChatListScreen(session: session)));
     } catch (e) {
       setState(() {
-        _error = '$e';
+        _error = describeError(e);
         _submitting = false;
       });
     } finally {
