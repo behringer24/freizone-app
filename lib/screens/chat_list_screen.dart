@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 
 import '../state/app_session.dart';
 import '../state/conversation.dart';
+import 'admin_screen.dart';
 import 'chat_screen.dart';
 
 class ChatListScreen extends StatelessWidget {
@@ -64,9 +65,14 @@ class ChatListScreen extends StatelessWidget {
                   const SnackBar(content: Text('Address copied to clipboard')),
                 );
               }
+              if (value == 'admin') {
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => AdminScreen(session: session)));
+              }
             },
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: 'copy_id', child: Text('Copy my address')),
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'copy_id', child: Text('Copy my address')),
+              if (session.myRole == 'admin' || session.myRole == 'moderator')
+                const PopupMenuItem(value: 'admin', child: Text('Server Admin')),
             ],
           ),
         ],

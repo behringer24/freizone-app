@@ -191,6 +191,57 @@ class ApiClient {
     _checkStatus(resp, {200});
   }
 
+  // --- Server admin ---------------------------------------------------------
+
+  /// Lists every registered account. Admin or moderator only -- a 403
+  /// (surfaced as an [ApiException] with statusCode 403) means the caller
+  /// has neither role, which is also how the app discovers this.
+  Future<List<AdminAccountSummary>> listAccounts(DeviceCredentials creds) async {
+    final resp = await _signedRequest('GET', '/v1/admin/accounts', null, creds);
+    _checkStatus(resp, {200});
+    final list = json.decode(resp.body) as List<dynamic>;
+    return list.map((e) => AdminAccountSummary.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Grants or revokes admin/moderator status. Admin only.
+  Future<void> setAccountRole(DeviceCredentials creds, String accountId, String role) async {
+    final resp = await _signedRequest('POST', '/v1/admin/accounts/$accountId/role', {'role': role}, creds);
+    _checkStatus(resp, {200});
+  }
+
+  /// Temporarily disables an account -- it can no longer authenticate.
+  /// Admin only.
+  Future<void> blockAccount(DeviceCredentials creds, String accountId) async {
+    final resp = await _signedRequest('POST', '/v1/admin/accounts/$accountId/block', null, creds);
+    _checkStatus(resp, {200});
+  }
+
+  /// Restores a previously blocked account. Admin only.
+  Future<void> unblockAccount(DeviceCredentials creds, String accountId) async {
+    final resp = await _signedRequest('POST', '/v1/admin/accounts/$accountId/unblock', null, creds);
+    _checkStatus(resp, {200});
+  }
+
+  /// Permanently deletes an account. Admin only, irreversible.
+  Future<void> deleteAccount(DeviceCredentials creds, String accountId) async {
+    final resp = await _signedRequest('DELETE', '/v1/admin/accounts/$accountId', null, creds);
+    _checkStatus(resp, {200});
+  }
+
+  /// Returns the current registration policy ("open", "invite", or
+  /// "closed"). Admin or moderator.
+  Future<String> getRegistrationPolicy(DeviceCredentials creds) async {
+    final resp = await _signedRequest('GET', '/v1/admin/registration-policy', null, creds);
+    return _decodeObject(resp, {200})['policy'] as String;
+  }
+
+  /// Changes the registration policy (persisted -- survives a restart).
+  /// Admin only.
+  Future<void> setRegistrationPolicy(DeviceCredentials creds, String policy) async {
+    final resp = await _signedRequest('PUT', '/v1/admin/registration-policy', {'policy': policy}, creds);
+    _checkStatus(resp, {200});
+  }
+
   /// Builds (but does not send) a signed GET request for the long-lived
   /// SSE stream endpoint -- used by SseClient, which needs the raw
   /// streamed response rather than a buffered http.Response.
