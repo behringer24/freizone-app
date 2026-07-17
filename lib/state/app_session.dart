@@ -1,0 +1,335 @@
+// Owns everything that used to live inside a single ChatScreen: the Go
+// core, the API client, one long-lived SSE stream, prekey upload, X3DH
+// session establishment, and encrypt/decrypt -- for the lifetime of the
+// app, independent of which screen is on screen. This is what lets the
+// chat list update (new conversation, last-message preview, ordering)
+// while a different conversation -- or no conversation -- is open,
+// which a per-screen SSE connection cannot do.
+//
+// Deliberately a plain ChangeNotifier, not a state-management package:
+// screens rebuild via ListenableBuilder, the same primitive already
+// used everywhere else in this codebase.
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart';
+
+import '../ffi/freizone_core.dart';
+import '../ffi/models.dart';
+import '../net/api_client.dart';
+import '../net/dto.dart';
+import '../net/sse_client.dart';
+import '../util/address_format.dart';
+import 'conversation.dart';
+import 'local_state.dart';
+
+/// How many one-time prekeys to generate and upload at once, mirroring
+/// cmd/devclient's defaultOneTimePrekeyBatch.
+const _oneTimePrekeyBatch = 10;
+
+class AppSession extends ChangeNotifier {
+  AppSession(this.state) {
+    api = ApiClient(baseUrl: state.server, core: core);
+  }
+
+  final AppState state;
+  final FreizoneCore core = FreizoneCore();
+  late final ApiClient api;
+  SseClient? _sse;
+
+  bool prekeysReady = false;
+  String? lastError;
+
+  /// Conversations sorted newest-activity-first, for the chat list.
+  List<Conversation> get conversations {
+    final list = state.conversations.values.toList();
+    list.sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
+    return list;
+  }
+
+  Conversation? conversation(String peerAccountId) => state.conversations[peerAccountId];
+
+  /// Uploads prekeys if this is the first run, then opens the live
+  /// message stream. Call once, right after construction.
+  Future<void> init() async {
+    try {
+      if (state.signedPrekeyPub == null) {
+        await _uploadPrekeys();
+      }
+      prekeysReady = true;
+      notifyListeners();
+      _startStream();
+    } catch (e) {
+      lastError = 'prekey upload failed: $e';
+      notifyListeners();
+    }
+  }
+
+  Future<void> _uploadPrekeys() async {
+    final now = DateTime.now().toUtc();
+
+    DHIdentityCertDTO? dhCertDto;
+    if (state.dhIdentityPub == null) {
+      final dh = core.generateX25519KeyPair();
+      final cert = core.signDHIdentityCertificate(
+        accountId: state.accountId,
+        deviceId: state.deviceId,
+        dhPub: dh.pub,
+        issuedAt: now,
+        devicePriv: state.devicePriv,
+      );
+      state.dhIdentityPub = dh.pub;
+      state.dhIdentityPriv = dh.priv;
+      dhCertDto = DHIdentityCertDTO(dhPubKey: cert.dhPubKey, issuedAt: cert.issuedAt, signature: cert.signature);
+    }
+
+    final spk = core.generateX25519KeyPair();
+    final spkId = state.nextSignedPrekeyId;
+    state.nextSignedPrekeyId++;
+    final spkCert = core.signSignedPrekeyCertificate(
+      accountId: state.accountId,
+      deviceId: state.deviceId,
+      keyId: spkId,
+      dhIdentityPub: state.dhIdentityPub!,
+      prekeyPub: spk.pub,
+      issuedAt: now,
+      devicePriv: state.devicePriv,
+    );
+    state.signedPrekeyId = spkId;
+    state.signedPrekeyPub = spk.pub;
+    state.signedPrekeyPriv = spk.priv;
+
+    final otpkDtos = <OneTimePrekeyDTO>[];
+    for (var i = 0; i < _oneTimePrekeyBatch; i++) {
+      final kp = core.generateX25519KeyPair();
+      final keyId = state.nextOtpkKeyId;
+      state.nextOtpkKeyId++;
+      state.oneTimePrekeys[keyId] = OneTimePrekeyState(pub: kp.pub, priv: kp.priv);
+      otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
+    }
+
+    await api.uploadPrekeys(
+      creds: state.credentials,
+      dhIdentityCert: dhCertDto,
+      signedPrekey: SignedPrekeyDTO(
+        keyId: spkCert.keyId,
+        dhIdentityPubKey: spkCert.dhIdentityPubKey,
+        pubKey: spkCert.prekeyPubKey,
+        issuedAt: spkCert.issuedAt,
+        signature: spkCert.signature,
+      ),
+      oneTimePrekeys: otpkDtos,
+    );
+    await LocalStateStore.save(state);
+  }
+
+  void _startStream() {
+    _sse = SseClient(apiClient: api, creds: state.credentials);
+    unawaited(_sse!.connect(
+      onMessage: _handleIncoming,
+      onError: (e) {
+        lastError = 'stream error: $e';
+        notifyListeners();
+      },
+    ));
+  }
+
+  Future<void> _handleIncoming(MessageResponse msg) async {
+    try {
+      final parsed = core.parseEnvelope(msg.payload);
+
+      var session = state.sessions[msg.senderAccountId];
+      if (session == null) {
+        final initial = parsed.initial;
+        if (initial == null) return; // no session and no X3DH material to start one -- drop.
+
+        Uint8List? otpkPriv;
+        final otpkId = initial.oneTimePrekeyId;
+        if (otpkId != null && state.oneTimePrekeys.containsKey(otpkId)) {
+          otpkPriv = state.oneTimePrekeys[otpkId]!.priv;
+          state.oneTimePrekeys.remove(otpkId);
+        }
+        session = core.respondToSession(
+          localDhIdentityPriv: state.dhIdentityPriv!,
+          signedPrekeyPriv: state.signedPrekeyPriv!,
+          oneTimePrekeyPriv: otpkPriv,
+          initial: initial,
+        );
+      }
+
+      final dec = core.sessionDecrypt(session: session, header: parsed.header, ciphertext: parsed.ciphertext);
+      state.sessions[msg.senderAccountId] = dec.session;
+      final text = utf8.decode(dec.plaintext);
+      final now = DateTime.now().toUtc();
+
+      final convo = state.conversations.putIfAbsent(
+        msg.senderAccountId,
+        () => Conversation(peerAccountId: msg.senderAccountId),
+      );
+      convo.messages.add(StoredMessage(text: text, mine: false, timestamp: now));
+      convo.lastActivityAt = now;
+
+      await LocalStateStore.save(state);
+      unawaited(api.deleteMessage(msg.messageId, state.credentials));
+
+      lastError = null;
+      notifyListeners();
+    } catch (e) {
+      lastError = 'decrypt error: $e';
+      notifyListeners();
+    }
+  }
+
+  /// Resolves peerAccountId's verified active device (independently
+  /// verifying the full self-certifying chain, per docs/PROTOCOL.md --
+  /// no trust in the server required) and creates, or returns the
+  /// already-resolved, Conversation with them. peerAccountId is
+  /// normalized first, so a dash-grouped or phone-dictated id ("k5x9
+  /// p2qa n7f3...") resolves the same as the canonical form. If
+  /// displayName is given and this is a new conversation, it's set as
+  /// the initial local alias.
+  Future<Conversation> startConversation(String peerAccountId, {String? displayName}) async {
+    final normalized = normalizeAccountId(peerAccountId);
+    final existing = state.conversations[normalized];
+    if (existing != null && existing.peerDeviceId != null) return existing;
+
+    final acc = await api.getAccount(normalized);
+    if (!core.verifyAddressId(acc.id, acc.rootPubKey)) {
+      throw StateError('peer account id does not match its root key');
+    }
+
+    DeviceResponse? verified;
+    for (final d in acc.devices) {
+      if (d.status != 'active') continue;
+      final cert = DeviceCertificate(
+        accountId: acc.id,
+        deviceId: d.deviceId,
+        devicePubKey: d.devicePubKey,
+        issuedAt: d.issuedAt,
+        signature: d.signature,
+      );
+      if (core.verifyDeviceCertificate(cert, acc.rootPubKey)) {
+        verified = d;
+        break;
+      }
+    }
+    if (verified == null) {
+      throw StateError('no verifiable active device found for $peerAccountId');
+    }
+
+    final convo = state.conversations.putIfAbsent(acc.id, () => Conversation(peerAccountId: acc.id));
+    convo.peerDeviceId = verified.deviceId;
+    convo.peerDevicePubKey = verified.devicePubKey;
+    if (convo.displayName == null && displayName != null && displayName.trim().isNotEmpty) {
+      convo.displayName = displayName.trim();
+    }
+    await LocalStateStore.save(state);
+    notifyListeners();
+    return convo;
+  }
+
+  /// Sets, changes, or (name == null / blank) removes a conversation's
+  /// local alias. Purely local -- never sent to the peer or the server.
+  Future<void> setDisplayName(String peerAccountId, String? name) async {
+    final convo = state.conversations[peerAccountId];
+    if (convo == null) return;
+    convo.displayName = (name == null || name.trim().isEmpty) ? null : name.trim();
+    await LocalStateStore.save(state);
+    notifyListeners();
+  }
+
+  /// Returns the existing session with a conversation's peer, or
+  /// establishes a new one as X3DH initiator by claiming their prekey
+  /// bundle.
+  Future<(RatchetSessionJson, InitialMessage?)> _getOrCreateCryptoSession(Conversation convo) async {
+    final existing = state.sessions[convo.peerAccountId];
+    if (existing != null) return (existing, null);
+
+    final bundle = await api.claimPrekeyBundle(convo.peerDeviceId!);
+
+    final dhCert = DHIdentityCertificate(
+      accountId: convo.peerAccountId,
+      deviceId: convo.peerDeviceId!,
+      dhPubKey: bundle.dhIdentityPubKey,
+      issuedAt: bundle.dhIdentityCert.issuedAt,
+      signature: bundle.dhIdentityCert.signature,
+    );
+    if (!core.verifyDHIdentityCertificate(dhCert, convo.peerDevicePubKey!)) {
+      throw StateError('invalid dh identity certificate');
+    }
+
+    final spkCert = SignedPrekeyCertificate(
+      accountId: convo.peerAccountId,
+      deviceId: convo.peerDeviceId!,
+      keyId: bundle.signedPrekey.keyId,
+      dhIdentityPubKey: bundle.signedPrekey.dhIdentityPubKey,
+      prekeyPubKey: bundle.signedPrekey.pubKey,
+      issuedAt: bundle.signedPrekey.issuedAt,
+      signature: bundle.signedPrekey.signature,
+    );
+    if (!core.verifySignedPrekeyCertificate(spkCert, convo.peerDevicePubKey!)) {
+      throw StateError('invalid signed prekey certificate');
+    }
+    if (!listEquals(bundle.signedPrekey.dhIdentityPubKey, bundle.dhIdentityPubKey)) {
+      throw StateError('signed prekey is not bound to the claimed dh identity key');
+    }
+
+    final remote = RemoteBundle(
+      dhIdentityPub: bundle.dhIdentityPubKey,
+      signedPrekeyId: bundle.signedPrekey.keyId,
+      signedPrekeyPub: bundle.signedPrekey.pubKey,
+      oneTimePrekeyId: bundle.oneTimePrekey?.keyId,
+      oneTimePrekeyPub: bundle.oneTimePrekey?.pubKey,
+    );
+    final result = core.initiateSession(localDhIdentityPriv: state.dhIdentityPriv!, remote: remote);
+    state.sessions[convo.peerAccountId] = result.session;
+    return (result.session, result.initial);
+  }
+
+  /// Encrypts and sends text to peerAccountId's conversation, appending
+  /// it to the persisted history. Throws on failure -- the calling
+  /// screen decides how to surface that (e.g. a SnackBar).
+  Future<void> sendMessage(String peerAccountId, String text) async {
+    final convo = state.conversations[peerAccountId];
+    if (convo == null || convo.peerDeviceId == null) {
+      throw StateError('no resolved conversation for $peerAccountId');
+    }
+
+    final (session, initial) = await _getOrCreateCryptoSession(convo);
+    final enc = core.sessionEncrypt(session: session, plaintext: Uint8List.fromList(utf8.encode(text)));
+    state.sessions[peerAccountId] = enc.session;
+
+    final payload = core.buildEnvelope(initial: initial, header: enc.header, ciphertext: enc.ciphertext);
+    await api.sendMessage(
+      creds: state.credentials,
+      messageId: _randomHex(16),
+      recipientDeviceId: convo.peerDeviceId!,
+      payload: payload,
+    );
+
+    final now = DateTime.now().toUtc();
+    convo.messages.add(StoredMessage(text: text, mine: true, timestamp: now));
+    convo.lastActivityAt = now;
+    await LocalStateStore.save(state);
+
+    lastError = null;
+    notifyListeners();
+  }
+
+  String _randomHex(int byteLen) {
+    final rnd = Random.secure();
+    final buf = StringBuffer();
+    for (var i = 0; i < byteLen; i++) {
+      buf.write(rnd.nextInt(256).toRadixString(16).padLeft(2, '0'));
+    }
+    return buf.toString();
+  }
+
+  @override
+  void dispose() {
+    _sse?.close();
+    api.close();
+    super.dispose();
+  }
+}
