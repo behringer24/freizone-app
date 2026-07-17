@@ -142,6 +142,22 @@ class PrekeyBundleResponse {
   final OneTimePrekeyDTO? oneTimePrekey;
 }
 
+class AdminAccountSummary {
+  AdminAccountSummary({required this.id, required this.role, required this.status, required this.createdAt});
+
+  factory AdminAccountSummary.fromJson(Map<String, dynamic> j) => AdminAccountSummary(
+        id: j['id'] as String,
+        role: j['role'] as String,
+        status: j['status'] as String,
+        createdAt: decodeTime(j['created_at'] as String),
+      );
+
+  final String id;
+  final String role;
+  final String status;
+  final DateTime createdAt;
+}
+
 class MessageResponse {
   MessageResponse({
     required this.messageId,

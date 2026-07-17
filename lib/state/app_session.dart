@@ -41,6 +41,79 @@ class AppSession extends ChangeNotifier {
   bool prekeysReady = false;
   String? lastError;
 
+  /// This device's own server role ("admin"/"moderator"), or null if it
+  /// has neither -- in which case the admin area should be hidden
+  /// entirely. Deliberately in-memory only (not persisted): re-derived
+  /// from the server on every refresh so a promotion/demotion made
+  /// elsewhere is picked up rather than trusting a stale local copy.
+  String? myRole;
+
+  /// The most recently fetched account list (admin/moderator only),
+  /// cached so the admin screen has something to show immediately while
+  /// a fresh fetch is in flight.
+  List<AdminAccountSummary> adminAccounts = [];
+
+  /// Refreshes [myRole] and [adminAccounts] from the server. A 403 means
+  /// this device is neither admin nor moderator -- not an error, just
+  /// the answer. Call once after [init] and again whenever the admin
+  /// area is opened, so a role change elsewhere in the meantime is seen.
+  Future<void> refreshMyRole() async {
+    try {
+      final accounts = await api.listAccounts(state.credentials);
+      adminAccounts = accounts;
+      AdminAccountSummary? mine;
+      for (final acc in accounts) {
+        if (acc.id == state.accountId) {
+          mine = acc;
+          break;
+        }
+      }
+      myRole = mine?.role;
+    } on ApiException catch (e) {
+      if (e.statusCode == 403) {
+        myRole = null;
+        adminAccounts = [];
+      } else {
+        lastError = 'checking admin role failed: $e';
+      }
+    } catch (e) {
+      lastError = 'checking admin role failed: $e';
+    }
+    notifyListeners();
+  }
+
+  /// Grants or revokes admin/moderator status. Admin only (enforced
+  /// server-side regardless of what this device believes its own role
+  /// is). Refreshes the account list afterwards.
+  Future<void> setAccountRole(String accountId, String role) async {
+    await api.setAccountRole(state.credentials, accountId, role);
+    await refreshMyRole();
+  }
+
+  /// Temporarily disables an account. Admin only.
+  Future<void> blockAccount(String accountId) async {
+    await api.blockAccount(state.credentials, accountId);
+    await refreshMyRole();
+  }
+
+  /// Restores a previously blocked account. Admin only.
+  Future<void> unblockAccount(String accountId) async {
+    await api.unblockAccount(state.credentials, accountId);
+    await refreshMyRole();
+  }
+
+  /// Permanently deletes an account. Admin only, irreversible.
+  Future<void> deleteAccount(String accountId) async {
+    await api.deleteAccount(state.credentials, accountId);
+    await refreshMyRole();
+  }
+
+  /// Returns the current registration policy ("open"/"invite"/"closed").
+  Future<String> getRegistrationPolicy() => api.getRegistrationPolicy(state.credentials);
+
+  /// Changes the registration policy (persisted server-side). Admin only.
+  Future<void> setRegistrationPolicy(String policy) => api.setRegistrationPolicy(state.credentials, policy);
+
   /// Conversations sorted newest-activity-first, for the chat list.
   List<Conversation> get conversations {
     final list = state.conversations.values.toList();
@@ -60,6 +133,7 @@ class AppSession extends ChangeNotifier {
       prekeysReady = true;
       notifyListeners();
       _startStream();
+      unawaited(refreshMyRole());
     } catch (e) {
       lastError = 'prekey upload failed: $e';
       notifyListeners();
