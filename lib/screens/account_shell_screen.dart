@@ -27,6 +27,7 @@ class AccountShellScreen extends StatelessWidget {
         builder: (_) => SetupScreen(
           onRegistered: (state) => manager.addProfile(state),
           existingServers: manager.sessions.map((s) => s.state.server).toList(),
+          isAddingAccount: true,
         ),
       ),
     );

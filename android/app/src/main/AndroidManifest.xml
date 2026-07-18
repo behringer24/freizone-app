@@ -2,6 +2,11 @@
     <!-- Required on Android 13+ to show the generic "new message" notification
          a push wake triggers (see lib/push/push_manager.dart). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- QR scanning (mobile_scanner), used by the setup wizard's scan
+         entry point, see lib/screens/qr_scan_screen.dart. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <application
         android:label="freizone"
         android:name="${applicationName}"

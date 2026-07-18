@@ -12,6 +12,7 @@ import '../state/conversation.dart';
 import '../util/errors.dart';
 import 'admin_screen.dart';
 import 'chat_screen.dart';
+import 'invite_screen.dart';
 
 class ChatListScreen extends StatelessWidget {
   const ChatListScreen({super.key, required this.session, this.appBarBottom});
@@ -48,6 +49,21 @@ class ChatListScreen extends StatelessWidget {
     return '${two(dt.day)}.${two(dt.month)}.${dt.year}';
   }
 
+  /// Whether this device can currently show an "Invite" action: nobody
+  /// can on a closed server; on an invite server only admin/moderator
+  /// (matches the server-side gate on POST /v1/admin/invites); on an
+  /// open server, everyone (no code needed, so there's nothing to gate).
+  bool _canInvite(AppSession session) {
+    switch (session.registrationPolicy) {
+      case 'open':
+        return true;
+      case 'invite':
+        return session.myRole == 'admin' || session.myRole == 'moderator';
+      default:
+        return false;
+    }
+  }
+
   Future<void> _openNewChatSheet(BuildContext context) async {
     final peerAccountId = await showModalBottomSheet<String>(
       context: context,
@@ -77,11 +93,17 @@ class ChatListScreen extends StatelessWidget {
                 );
               }
               if (value == 'admin') {
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => AdminScreen(session: session)));
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => AdminScreen(session: session)))
+                    .then((_) => session.refreshRegistrationPolicy());
+              }
+              if (value == 'invite') {
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => InviteScreen(session: session)));
               }
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'copy_id', child: Text('Copy my address')),
+              if (_canInvite(session)) const PopupMenuItem(value: 'invite', child: Text('Invite')),
               if (session.myRole == 'admin' || session.myRole == 'moderator')
                 const PopupMenuItem(value: 'admin', child: Text('Server Admin')),
             ],

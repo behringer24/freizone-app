@@ -156,6 +156,19 @@ class PrekeyBundleResponse {
   final OneTimePrekeyDTO? oneTimePrekey;
 }
 
+/// POST /v1/admin/invites -- a freshly minted single-use invite code.
+class CreateInviteResponse {
+  CreateInviteResponse({required this.code, this.expiresAt});
+
+  factory CreateInviteResponse.fromJson(Map<String, dynamic> j) => CreateInviteResponse(
+        code: j['code'] as String,
+        expiresAt: j['expires_at'] == null ? null : decodeTime(j['expires_at'] as String),
+      );
+
+  final String code;
+  final DateTime? expiresAt;
+}
+
 class AdminAccountSummary {
   AdminAccountSummary({required this.id, required this.role, required this.status, required this.createdAt});
 

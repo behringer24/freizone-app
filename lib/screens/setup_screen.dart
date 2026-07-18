@@ -18,12 +18,19 @@ import '../ffi/freizone_core.dart';
 import '../net/api_client.dart';
 import '../state/local_state.dart';
 import '../util/errors.dart';
+import '../util/invite_uri.dart';
 import '../util/server_url.dart';
+import 'qr_scan_screen.dart';
 
 enum _WizardStep { address, bootstrap, invite, openRegister, closed }
 
 class SetupScreen extends StatefulWidget {
-  const SetupScreen({super.key, required this.onRegistered, this.existingServers = const []});
+  const SetupScreen({
+    super.key,
+    required this.onRegistered,
+    this.existingServers = const [],
+    this.isAddingAccount = false,
+  });
 
   /// Called with the newly persisted profile once registration succeeds.
   final Future<void> Function(AppState state) onRegistered;
@@ -35,6 +42,11 @@ class SetupScreen extends StatefulWidget {
   /// accounts on the same server is a legitimate, intentional setup
   /// (e.g. a personal + a work identity), so this is just a heads-up.
   final List<String> existingServers;
+
+  /// True when pushed from the "+" button in AccountShellScreen to add
+  /// another account on this device, rather than this being the very
+  /// first (only) account -- just changes the title bar's wording.
+  final bool isAddingAccount;
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
@@ -49,6 +61,12 @@ class _SetupScreenState extends State<SetupScreen> {
   bool _submitting = false;
   String? _error;
 
+  /// An invite code carried by a scanned QR (lib/util/invite_uri.dart),
+  /// pre-filled into the token field once _checkServer lands on the
+  /// invite step. Null for a manually-typed address, an open/closed
+  /// server, or a scanned code-less (open-server) QR.
+  String? _scannedCode;
+
   @override
   void dispose() {
     _serverController.dispose();
@@ -60,8 +78,33 @@ class _SetupScreenState extends State<SetupScreen> {
     setState(() {
       _step = _WizardStep.address;
       _error = null;
+      _scannedCode = null;
       _tokenController.clear();
     });
+  }
+
+  /// Pushes the QR scanner and, on a recognizable freizone://join result
+  /// (lib/util/invite_uri.dart), fills the address field and runs the
+  /// same _checkServer the "Continue" button does -- so scanning gets
+  /// you to the next step without an extra tap. A QR for an unclaimed
+  /// server has no meaningful code to carry (there's no setup token in
+  /// this wire format), so that case just lands on the ordinary bootstrap
+  /// step with the address pre-filled -- no special-casing needed.
+  Future<void> _scanQr() async {
+    final raw = await Navigator.of(
+      context,
+    ).push<String>(MaterialPageRoute(builder: (_) => const QrScanScreen()));
+    if (raw == null || !mounted) return;
+
+    final invite = parseInviteUri(raw);
+    if (invite == null) {
+      setState(() => _error = 'That QR code is not a Freizone invite');
+      return;
+    }
+
+    _serverController.text = invite.server;
+    _scannedCode = invite.code;
+    await _checkServer();
   }
 
   Future<bool> _confirmDuplicateServer() async {
@@ -114,6 +157,9 @@ class _SetupScreenState extends State<SetupScreen> {
             'invite' => _WizardStep.invite,
             _ => _WizardStep.closed,
           };
+          if (_step == _WizardStep.invite && _scannedCode != null) {
+            _tokenController.text = _scannedCode!;
+          }
         }
       });
     } catch (e) {
@@ -219,6 +265,12 @@ class _SetupScreenState extends State<SetupScreen> {
               ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
               : const Text('Continue'),
         ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _submitting ? null : _scanQr,
+          icon: const Icon(Icons.qr_code_scanner),
+          label: const Text('Scan QR code'),
+        ),
       ],
     );
   }
@@ -242,8 +294,9 @@ class _SetupScreenState extends State<SetupScreen> {
         tokenLabel = null;
         buttonLabel = 'Create account';
       case _WizardStep.closed:
-        description = 'This server is closed for registration. Ask its admin for an invite, '
-            'or try a different server.';
+        description = 'This server has registration blocked -- no new accounts can be created '
+            'right now, not even with an invite code. Ask its admin to open registration, or try '
+            'a different server.';
         tokenLabel = null;
         buttonLabel = '';
       case _WizardStep.address:
@@ -289,7 +342,7 @@ class _SetupScreenState extends State<SetupScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Freizone -- Setup'),
+          title: Text(widget.isAddingAccount ? 'Add Account' : 'Freizone -- Setup'),
           leading: onAddressStep
               ? null
               : IconButton(icon: const Icon(Icons.arrow_back), onPressed: _goToAddressStep),
