@@ -4,6 +4,7 @@ import 'push/push_manager.dart';
 import 'screens/account_shell_screen.dart';
 import 'screens/setup_screen.dart';
 import 'state/account_manager.dart';
+import 'state/app_settings.dart';
 
 /// UnifiedPush may relaunch this entrypoint in a background isolate,
 /// passing `--unifiedpush-bg`, purely to deliver a wake without ever
@@ -13,21 +14,33 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   await initPush();
   if (!args.contains('--unifiedpush-bg')) {
-    runApp(const FreizoneApp());
+    final settings = await AppSettings.load();
+    runApp(FreizoneApp(settings: settings));
   }
 }
 
 class FreizoneApp extends StatelessWidget {
-  const FreizoneApp({super.key});
+  const FreizoneApp({super.key, required this.settings});
+
+  final AppSettings settings;
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Freizone',
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal, brightness: Brightness.light)),
-      darkTheme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal, brightness: Brightness.dark)),
-      themeMode: ThemeMode.system,
-      home: const AppRoot(),
+    // Rebuilds the whole MaterialApp (theme + home) whenever a setting
+    // changes, so switching theme mode/accent color takes effect
+    // immediately without needing an app restart.
+    return ListenableBuilder(
+      listenable: settings,
+      builder: (context, _) {
+        final seed = settings.accentPreset.color;
+        return MaterialApp(
+          title: 'Freizone',
+          theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light)),
+          darkTheme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark)),
+          themeMode: settings.themeMode,
+          home: AppRoot(settings: settings),
+        );
+      },
     );
   }
 }
@@ -36,7 +49,9 @@ class FreizoneApp extends StatelessWidget {
 /// and routes to SetupScreen (no account on this device yet) or the
 /// account switcher + chat list otherwise.
 class AppRoot extends StatefulWidget {
-  const AppRoot({super.key});
+  const AppRoot({super.key, required this.settings});
+
+  final AppSettings settings;
 
   @override
   State<AppRoot> createState() => _AppRootState();
@@ -53,7 +68,7 @@ class _AppRootState extends State<AppRoot> {
   }
 
   Future<void> _load() async {
-    final manager = await AccountManager.load();
+    final manager = await AccountManager.load(widget.settings);
     if (!mounted) return;
     setState(() {
       _manager = manager;
@@ -75,6 +90,6 @@ class _AppRootState extends State<AppRoot> {
         },
       );
     }
-    return AccountShellScreen(manager: manager);
+    return AccountShellScreen(manager: manager, settings: widget.settings);
   }
 }
