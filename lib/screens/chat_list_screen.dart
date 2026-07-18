@@ -14,9 +14,17 @@ import 'admin_screen.dart';
 import 'chat_screen.dart';
 
 class ChatListScreen extends StatelessWidget {
-  const ChatListScreen({super.key, required this.session});
+  const ChatListScreen({super.key, required this.session, this.appBarBottom});
 
   final AppSession session;
+
+  /// Rendered directly below the "Freizone" title bar, as part of the
+  /// same AppBar -- e.g. the account switcher strip (AccountShellScreen).
+  /// Using AppBar.bottom rather than stacking a separate widget above
+  /// this whole screen keeps the status bar icon styling (which Flutter
+  /// derives from the topmost AppBar) correct and avoids a seam/gap
+  /// between the two.
+  final PreferredSizeWidget? appBarBottom;
 
   Color _avatarColor(String seed) => Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
@@ -57,6 +65,8 @@ class ChatListScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Freizone'),
+        backgroundColor: Colors.grey.shade100,
+        bottom: appBarBottom,
         actions: [
           PopupMenuButton<String>(
             onSelected: (value) {
