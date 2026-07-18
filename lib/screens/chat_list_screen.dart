@@ -66,6 +66,61 @@ class ChatListScreen extends StatelessWidget {
     }
   }
 
+  /// Long-press menu for a chat row: clear its history or delete it
+  /// entirely, both purely local (the server never stored the history
+  /// in the first place). Either action asks for confirmation first,
+  /// since there's no undo.
+  Future<void> _showChatOptions(BuildContext context, Conversation convo) async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: Text(convo.title),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(context).pop('clear'),
+            child: const Text('Clear chat'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(context).pop('delete'),
+            child: const Text('Delete chat'),
+          ),
+        ],
+      ),
+    );
+    if (action == null || !context.mounted) return;
+
+    if (action == 'clear') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Clear chat?'),
+          content: Text('This permanently deletes the message history with ${convo.title} on this device. '
+              'The conversation itself stays -- this cannot be undone.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Clear')),
+          ],
+        ),
+      );
+      if (confirmed == true) await session.clearConversation(convo.peerAccountId);
+    } else if (action == 'delete') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Delete chat?'),
+          content: Text('This permanently removes the conversation with ${convo.title} and its message history from '
+              'this device -- this cannot be undone. ${convo.title} still exists; you can start a new chat with '
+              'them again any time.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Delete')),
+          ],
+        ),
+      );
+      if (confirmed == true) await session.deleteConversation(convo.peerAccountId);
+    }
+  }
+
   Future<void> _openNewChatSheet(BuildContext context) async {
     final peerAccountId = await showModalBottomSheet<String>(
       context: context,
@@ -187,6 +242,7 @@ class ChatListScreen extends StatelessWidget {
                     builder: (_) => ChatScreen(session: session, peerAccountId: convo.peerAccountId),
                   ),
                 ),
+                onLongPress: () => _showChatOptions(context, convo),
               );
             },
           );

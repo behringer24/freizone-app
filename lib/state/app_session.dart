@@ -413,6 +413,35 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Empties peerAccountId's message history, keeping the conversation
+  /// itself (resolved peer device, alias) -- purely local, since the
+  /// server never stored the history in the first place.
+  Future<void> clearConversation(String peerAccountId) async {
+    final convo = state.conversations[peerAccountId];
+    if (convo == null) return;
+    convo.messages.clear();
+    final hadUnread = convo.hasUnread;
+    convo.hasUnread = false;
+    await LocalStateStore.saveProfile(state);
+    if (hadUnread && !hasAnyUnread) unawaited(clearMessageNotification(state.accountId));
+    notifyListeners();
+  }
+
+  /// Removes peerAccountId's conversation entirely -- history, the
+  /// resolved peer device, and its ratchet session, so a later chat with
+  /// them starts genuinely fresh (a new X3DH handshake) rather than
+  /// silently continuing a session behind now-invisible history. Purely
+  /// local: the account itself is untouched on the server.
+  Future<void> deleteConversation(String peerAccountId) async {
+    final removed = state.conversations.remove(peerAccountId);
+    if (removed == null) return;
+    state.sessions.remove(peerAccountId);
+    if (_openConversationPeerId == peerAccountId) _openConversationPeerId = null;
+    await LocalStateStore.saveProfile(state);
+    if (removed.hasUnread && !hasAnyUnread) unawaited(clearMessageNotification(state.accountId));
+    notifyListeners();
+  }
+
   /// Returns the existing session with a conversation's peer, or
   /// establishes a new one as X3DH initiator by claiming their prekey
   /// bundle.
