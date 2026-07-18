@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
 
-import 'screens/chat_list_screen.dart';
+import 'push/push_manager.dart';
+import 'screens/account_shell_screen.dart';
 import 'screens/setup_screen.dart';
-import 'state/app_session.dart';
-import 'state/local_state.dart';
+import 'state/account_manager.dart';
 
-void main() {
-  runApp(const FreizoneApp());
+/// UnifiedPush may relaunch this entrypoint in a background isolate,
+/// passing `--unifiedpush-bg`, purely to deliver a wake without ever
+/// showing UI -- initPush() must still run in that case (its callbacks
+/// are what handles the wake), but runApp() must not.
+Future<void> main(List<String> args) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initPush();
+  if (!args.contains('--unifiedpush-bg')) {
+    runApp(const FreizoneApp());
+  }
 }
 
 class FreizoneApp extends StatelessWidget {
@@ -24,9 +32,9 @@ class FreizoneApp extends StatelessWidget {
   }
 }
 
-/// Loads any persisted identity on startup and routes to SetupScreen (no
-/// account on this device yet) or, once its AppSession has uploaded
-/// prekeys and opened the live message stream, straight to ChatListScreen.
+/// Loads every locally connected account on startup (see AccountManager)
+/// and routes to SetupScreen (no account on this device yet) or the
+/// account switcher + chat list otherwise.
 class AppRoot extends StatefulWidget {
   const AppRoot({super.key});
 
@@ -35,9 +43,8 @@ class AppRoot extends StatefulWidget {
 }
 
 class _AppRootState extends State<AppRoot> {
-  AppSession? _session;
+  AccountManager? _manager;
   bool _loading = true;
-  bool _needsSetup = false;
 
   @override
   void initState() {
@@ -46,27 +53,10 @@ class _AppRootState extends State<AppRoot> {
   }
 
   Future<void> _load() async {
-    AppState? state;
-    try {
-      state = await LocalStateStore.load();
-    } catch (_) {
-      state = null;
-    }
-
-    if (state == null) {
-      if (!mounted) return;
-      setState(() {
-        _needsSetup = true;
-        _loading = false;
-      });
-      return;
-    }
-
-    final session = AppSession(state);
-    await session.init();
+    final manager = await AccountManager.load();
     if (!mounted) return;
     setState(() {
-      _session = session;
+      _manager = manager;
       _loading = false;
     });
   }
@@ -76,9 +66,15 @@ class _AppRootState extends State<AppRoot> {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    if (_needsSetup) {
-      return const SetupScreen();
+    final manager = _manager!;
+    if (manager.sessions.isEmpty) {
+      return SetupScreen(
+        onRegistered: (state) async {
+          await manager.addProfile(state);
+          setState(() {});
+        },
+      );
     }
-    return ChatListScreen(session: _session!);
+    return AccountShellScreen(manager: manager);
   }
 }

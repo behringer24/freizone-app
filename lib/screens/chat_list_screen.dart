@@ -81,6 +81,21 @@ class ChatListScreen extends StatelessWidget {
       body: ListenableBuilder(
         listenable: session,
         builder: (context, _) {
+          if (session.pushDistributorMissing) {
+            session.pushDistributorMissing = false; // one-time hint, consume it
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'No push notification app found -- install one (e.g. ntfy) to get notified while Freizone is closed.',
+                  ),
+                  duration: Duration(seconds: 6),
+                ),
+              );
+            });
+          }
+
           final conversations = session.conversations;
           if (conversations.isEmpty) {
             return Center(

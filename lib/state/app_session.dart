@@ -20,6 +20,7 @@ import '../ffi/models.dart';
 import '../net/api_client.dart';
 import '../net/dto.dart';
 import '../net/sse_client.dart';
+import '../push/push_manager.dart';
 import '../util/address_format.dart';
 import 'conversation.dart';
 import 'local_state.dart';
@@ -40,6 +41,12 @@ class AppSession extends ChangeNotifier {
 
   bool prekeysReady = false;
   String? lastError;
+
+  /// True once a push-registration attempt has found no UnifiedPush
+  /// distributor installed. Consumed (reset to false) by whichever
+  /// screen shows the one-time hint about it -- chat keeps working via
+  /// SSE regardless.
+  bool pushDistributorMissing = false;
 
   /// This device's own server role ("admin"/"moderator"), or null if it
   /// has neither -- in which case the admin area should be hidden
@@ -134,8 +141,22 @@ class AppSession extends ChangeNotifier {
       notifyListeners();
       _startStream();
       unawaited(refreshMyRole());
+      unawaited(_registerPush());
     } catch (e) {
       lastError = 'prekey upload failed: $e';
+      notifyListeners();
+    }
+  }
+
+  Future<void> _registerPush() async {
+    try {
+      final hasDistributor = await registerForPush(api, state.accountId);
+      if (!hasDistributor) {
+        pushDistributorMissing = true;
+        notifyListeners();
+      }
+    } catch (e) {
+      lastError = 'push registration failed: $e';
       notifyListeners();
     }
   }
@@ -195,7 +216,7 @@ class AppSession extends ChangeNotifier {
       ),
       oneTimePrekeys: otpkDtos,
     );
-    await LocalStateStore.save(state);
+    await LocalStateStore.saveProfile(state);
   }
 
   void _startStream() {
@@ -244,7 +265,7 @@ class AppSession extends ChangeNotifier {
       convo.messages.add(StoredMessage(text: text, mine: false, timestamp: now));
       convo.lastActivityAt = now;
 
-      await LocalStateStore.save(state);
+      await LocalStateStore.saveProfile(state);
       unawaited(api.deleteMessage(msg.messageId, state.credentials));
 
       lastError = null;
@@ -255,25 +276,15 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Resolves peerAccountId's verified active device (independently
-  /// verifying the full self-certifying chain, per docs/PROTOCOL.md --
-  /// no trust in the server required) and creates, or returns the
-  /// already-resolved, Conversation with them. peerAccountId is
-  /// normalized first, so a dash-grouped or phone-dictated id ("k5x9
-  /// p2qa n7f3...") resolves the same as the canonical form. If
-  /// displayName is given and this is a new conversation, it's set as
-  /// the initial local alias.
-  Future<Conversation> startConversation(String peerAccountId, {String? displayName}) async {
-    final normalized = normalizeAccountId(peerAccountId);
-    final existing = state.conversations[normalized];
-    if (existing != null && existing.peerDeviceId != null) return existing;
-
-    final acc = await api.getAccount(normalized);
+  /// Resolves peerAccountId's verified active device -- independently
+  /// verifying the full self-certifying chain, per docs/PROTOCOL.md, no
+  /// trust in the server required.
+  Future<DeviceResponse> _resolvePeerDevice(String peerAccountId) async {
+    final acc = await api.getAccount(peerAccountId);
     if (!core.verifyAddressId(acc.id, acc.rootPubKey)) {
       throw StateError('peer account id does not match its root key');
     }
 
-    DeviceResponse? verified;
     for (final d in acc.devices) {
       if (d.status != 'active') continue;
       final cert = DeviceCertificate(
@@ -284,21 +295,31 @@ class AppSession extends ChangeNotifier {
         signature: d.signature,
       );
       if (core.verifyDeviceCertificate(cert, acc.rootPubKey)) {
-        verified = d;
-        break;
+        return d;
       }
     }
-    if (verified == null) {
-      throw StateError('no verifiable active device found for $peerAccountId');
-    }
+    throw StateError('no verifiable active device found for $peerAccountId');
+  }
 
-    final convo = state.conversations.putIfAbsent(acc.id, () => Conversation(peerAccountId: acc.id));
+  /// Resolves and creates, or returns the already-resolved, Conversation
+  /// with peerAccountId. peerAccountId is normalized first, so a
+  /// dash-grouped or phone-dictated id ("k5x9 p2qa n7f3...") resolves the
+  /// same as the canonical form. If displayName is given and this is a
+  /// new conversation, it's set as the initial local alias.
+  Future<Conversation> startConversation(String peerAccountId, {String? displayName}) async {
+    final normalized = normalizeAccountId(peerAccountId);
+    final existing = state.conversations[normalized];
+    if (existing != null && existing.peerDeviceId != null) return existing;
+
+    final verified = await _resolvePeerDevice(normalized);
+
+    final convo = state.conversations.putIfAbsent(normalized, () => Conversation(peerAccountId: normalized));
     convo.peerDeviceId = verified.deviceId;
     convo.peerDevicePubKey = verified.devicePubKey;
     if (convo.displayName == null && displayName != null && displayName.trim().isNotEmpty) {
       convo.displayName = displayName.trim();
     }
-    await LocalStateStore.save(state);
+    await LocalStateStore.saveProfile(state);
     notifyListeners();
     return convo;
   }
@@ -309,7 +330,7 @@ class AppSession extends ChangeNotifier {
     final convo = state.conversations[peerAccountId];
     if (convo == null) return;
     convo.displayName = (name == null || name.trim().isEmpty) ? null : name.trim();
-    await LocalStateStore.save(state);
+    await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
 
@@ -366,8 +387,17 @@ class AppSession extends ChangeNotifier {
   /// screen decides how to surface that (e.g. a SnackBar).
   Future<void> sendMessage(String peerAccountId, String text) async {
     final convo = state.conversations[peerAccountId];
-    if (convo == null || convo.peerDeviceId == null) {
-      throw StateError('no resolved conversation for $peerAccountId');
+    if (convo == null) {
+      throw StateError('no conversation for $peerAccountId');
+    }
+    if (convo.peerDeviceId == null) {
+      // A conversation that only ever received messages (never started
+      // via startConversation) has no resolved peer device yet -- resolve
+      // it now, lazily, so replying to whoever messaged first works.
+      final verified = await _resolvePeerDevice(peerAccountId);
+      convo.peerDeviceId = verified.deviceId;
+      convo.peerDevicePubKey = verified.devicePubKey;
+      await LocalStateStore.saveProfile(state);
     }
 
     final (session, initial) = await _getOrCreateCryptoSession(convo);
@@ -385,7 +415,7 @@ class AppSession extends ChangeNotifier {
     final now = DateTime.now().toUtc();
     convo.messages.add(StoredMessage(text: text, mine: true, timestamp: now));
     convo.lastActivityAt = now;
-    await LocalStateStore.save(state);
+    await LocalStateStore.saveProfile(state);
 
     lastError = null;
     notifyListeners();

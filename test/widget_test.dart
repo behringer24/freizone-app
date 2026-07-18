@@ -10,7 +10,7 @@ void main() {
   // FreizoneApp -- avoiding a plugin call that would otherwise hang the
   // test indefinitely.
   testWidgets('setup screen shows the server field and mode toggle', (WidgetTester tester) async {
-    await tester.pumpWidget(const MaterialApp(home: SetupScreen()));
+    await tester.pumpWidget(MaterialApp(home: SetupScreen(onRegistered: (_) async {})));
 
     expect(find.text('Freizone -- Setup'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Bootstrap'), findsOneWidget);

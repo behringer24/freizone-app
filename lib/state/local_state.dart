@@ -133,27 +133,65 @@ class AppState {
       };
 }
 
-/// Reads/writes the single local AppState file under the app's documents
-/// directory.
+/// Reads/writes one profile file per connected account under the app's
+/// documents directory -- a device can hold several independent accounts
+/// (each its own root/device key + server, by construction, since an
+/// account id is `hash(root_pubkey)`), so there is one `AppState` per
+/// profile rather than a single global one.
 class LocalStateStore {
-  static const _fileName = 'freizone_state.json';
+  // Legacy single-profile file from before multi-account support --
+  // migrated once, automatically, the first time listProfiles() runs.
+  static const _legacyFileName = 'freizone_state.json';
 
-  static Future<File> _file() async {
-    final dir = await getApplicationDocumentsDirectory();
-    return File('${dir.path}${Platform.pathSeparator}$_fileName');
+  static String _profileFileName(String accountId) => 'freizone_profile_$accountId.json';
+
+  static Future<Directory> _dir() async => getApplicationDocumentsDirectory();
+
+  static Future<File> _profileFile(String accountId) async {
+    final dir = await _dir();
+    return File('${dir.path}${Platform.pathSeparator}${_profileFileName(accountId)}');
   }
 
-  /// Loads the persisted state, or null if none has been saved yet (no
-  /// account bootstrapped/registered on this device).
-  static Future<AppState?> load() async {
-    final file = await _file();
+  /// Lists every locally stored profile, migrating the old single-profile
+  /// file format on first run if one is found.
+  static Future<List<AppState>> listProfiles() async {
+    final dir = await _dir();
+    await _migrateLegacyIfNeeded(dir);
+
+    final profiles = <AppState>[];
+    for (final entity in dir.listSync()) {
+      final name = entity.path.split(Platform.pathSeparator).last;
+      if (entity is! File || !name.startsWith('freizone_profile_') || !name.endsWith('.json')) continue;
+      final data = await entity.readAsString();
+      profiles.add(AppState.fromJson(json.decode(data) as Map<String, dynamic>));
+    }
+    return profiles;
+  }
+
+  static Future<void> _migrateLegacyIfNeeded(Directory dir) async {
+    final legacy = File('${dir.path}${Platform.pathSeparator}$_legacyFileName');
+    if (!legacy.existsSync()) return;
+    final data = await legacy.readAsString();
+    final state = AppState.fromJson(json.decode(data) as Map<String, dynamic>);
+    await saveProfile(state);
+    await legacy.delete();
+  }
+
+  /// Loads one profile by account id, or null if it doesn't exist.
+  static Future<AppState?> loadProfile(String accountId) async {
+    final file = await _profileFile(accountId);
     if (!file.existsSync()) return null;
     final data = await file.readAsString();
     return AppState.fromJson(json.decode(data) as Map<String, dynamic>);
   }
 
-  static Future<void> save(AppState state) async {
-    final file = await _file();
+  static Future<void> saveProfile(AppState state) async {
+    final file = await _profileFile(state.accountId);
     await file.writeAsString(const JsonEncoder.withIndent('  ').convert(state.toJson()));
+  }
+
+  static Future<void> deleteProfile(String accountId) async {
+    final file = await _profileFile(accountId);
+    if (file.existsSync()) await file.delete();
   }
 }
