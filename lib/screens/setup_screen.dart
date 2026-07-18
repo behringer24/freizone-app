@@ -1,9 +1,15 @@
-// First-run (or "+ add another account") screen: generate a fresh
-// identity and either bootstrap the first admin account (one-time setup
-// token, printed to the server's log) or self-register a new one
-// (open/invite registration policy) -- see docs/PROTOCOL.md in
-// freizone-server, §4. On success the resulting AppState is persisted and
-// handed to onRegistered, which owns turning it into a live session
+// First-run (or "+ add another account") screen -- a short wizard:
+// 1. Server address only.
+// 2. Whatever that server actually needs, discovered via GET
+//    /v1/server-status (no identity required for that call): if nobody
+//    has bootstrapped it yet, a one-time setup token; otherwise an invite
+//    code, nothing at all, or a "registration is closed" dead end,
+//    depending on the server's registration policy. Most users will
+//    never see the bootstrap step -- that's for whoever stands up a
+//    fresh server, which is rare by design.
+// See docs/PROTOCOL.md in freizone-server, §4, for the underlying calls.
+// On success the resulting AppState is persisted and handed to
+// onRegistered, which owns turning it into a live session
 // (AccountManager.addProfile) -- this screen doesn't know or care whether
 // it's the very first account on this device or an additional one.
 import 'package:flutter/material.dart';
@@ -12,21 +18,34 @@ import '../ffi/freizone_core.dart';
 import '../net/api_client.dart';
 import '../state/local_state.dart';
 import '../util/errors.dart';
+import '../util/server_url.dart';
+
+enum _WizardStep { address, bootstrap, invite, openRegister, closed }
 
 class SetupScreen extends StatefulWidget {
-  const SetupScreen({super.key, required this.onRegistered});
+  const SetupScreen({super.key, required this.onRegistered, this.existingServers = const []});
 
   /// Called with the newly persisted profile once registration succeeds.
   final Future<void> Function(AppState state) onRegistered;
+
+  /// Server URLs of accounts already connected on this device -- used to
+  /// warn (not block) if the address just entered matches one of them,
+  /// since every registration is a brand-new, separate identity (fresh
+  /// root key), never a reconnect to an existing account. Having several
+  /// accounts on the same server is a legitimate, intentional setup
+  /// (e.g. a personal + a work identity), so this is just a heads-up.
+  final List<String> existingServers;
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-  final _serverController = TextEditingController(text: 'http://10.0.2.2:18080');
+  final _serverController = TextEditingController();
   final _tokenController = TextEditingController();
-  bool _isBootstrap = true;
+
+  _WizardStep _step = _WizardStep.address;
+  String? _server;
   bool _submitting = false;
   String? _error;
 
@@ -37,11 +56,43 @@ class _SetupScreenState extends State<SetupScreen> {
     super.dispose();
   }
 
-  Future<void> _submit() async {
-    final server = _serverController.text.trim();
-    if (server.isEmpty) {
-      setState(() => _error = 'Server URL is required');
+  void _goToAddressStep() {
+    setState(() {
+      _step = _WizardStep.address;
+      _error = null;
+      _tokenController.clear();
+    });
+  }
+
+  Future<bool> _confirmDuplicateServer() async {
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Account already exists here'),
+        content: const Text(
+          'You already have at least one account on this server. Continuing creates a new, '
+          'separate account -- it does not reconnect to the existing one.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Continue anyway')),
+        ],
+      ),
+    );
+    return proceed ?? false;
+  }
+
+  Future<void> _checkServer() async {
+    final input = _serverController.text.trim();
+    if (input.isEmpty) {
+      setState(() => _error = 'Server address is required');
       return;
+    }
+
+    final server = normalizeServerUrl(input);
+    if (widget.existingServers.map(normalizeServerUrl).contains(server)) {
+      if (!await _confirmDuplicateServer()) return;
+      if (!mounted) return;
     }
 
     setState(() {
@@ -49,8 +100,40 @@ class _SetupScreenState extends State<SetupScreen> {
       _error = null;
     });
 
+    final api = ApiClient(baseUrl: server, core: FreizoneCore());
+    try {
+      final status = await api.getServerStatus();
+      setState(() {
+        _server = server;
+        _submitting = false;
+        if (!status.claimed) {
+          _step = _WizardStep.bootstrap;
+        } else {
+          _step = switch (status.registrationPolicy) {
+            'open' => _WizardStep.openRegister,
+            'invite' => _WizardStep.invite,
+            _ => _WizardStep.closed,
+          };
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _error = describeError(e);
+        _submitting = false;
+      });
+    } finally {
+      api.close();
+    }
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+
     final core = FreizoneCore();
-    final apiClient = ApiClient(baseUrl: server, core: core);
+    final api = ApiClient(baseUrl: _server!, core: core);
     try {
       final identity = core.generateIdentity();
       final issuedAt = DateTime.now().toUtc();
@@ -62,15 +145,28 @@ class _SetupScreenState extends State<SetupScreen> {
         rootPriv: identity.rootPriv,
       );
 
-      if (_isBootstrap) {
-        await apiClient.bootstrapClaim(setupToken: _tokenController.text.trim(), identity: identity, cert: cert);
-      } else {
-        final invite = _tokenController.text.trim();
-        await apiClient.registerAccount(identity: identity, cert: cert, inviteCode: invite.isEmpty ? null : invite);
+      switch (_step) {
+        case _WizardStep.bootstrap:
+          await api.bootstrapClaim(
+            setupToken: _tokenController.text.trim(),
+            identity: identity,
+            cert: cert,
+          );
+        case _WizardStep.invite:
+          await api.registerAccount(
+            identity: identity,
+            cert: cert,
+            inviteCode: _tokenController.text.trim(),
+          );
+        case _WizardStep.openRegister:
+          await api.registerAccount(identity: identity, cert: cert);
+        case _WizardStep.address:
+        case _WizardStep.closed:
+          return;
       }
 
       final state = AppState(
-        server: server,
+        server: _server!,
         accountId: identity.accountId,
         rootPub: identity.rootPub,
         rootPriv: identity.rootPriv,
@@ -94,53 +190,113 @@ class _SetupScreenState extends State<SetupScreen> {
         _submitting = false;
       });
     } finally {
-      apiClient.close();
+      api.close();
     }
+  }
+
+  Widget _buildAddressStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _serverController,
+          decoration: const InputDecoration(
+            labelText: 'Server address',
+            hintText: 'chat.example.org',
+            helperText: 'No https:// or port needed if the server uses the standard ones',
+          ),
+          enabled: !_submitting,
+          onSubmitted: (_) => _checkServer(),
+        ),
+        const SizedBox(height: 24),
+        if (_error != null) ...[
+          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          const SizedBox(height: 16),
+        ],
+        ElevatedButton(
+          onPressed: _submitting ? null : _checkServer,
+          child: _submitting
+              ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Continue'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFinalStep() {
+    final String description;
+    final String? tokenLabel;
+    final String buttonLabel;
+    switch (_step) {
+      case _WizardStep.bootstrap:
+        description = 'Nobody has set this server up yet. Enter the one-time setup token '
+            'printed in its logs to become its first admin.';
+        tokenLabel = 'Setup token';
+        buttonLabel = 'Bootstrap';
+      case _WizardStep.invite:
+        description = 'This server requires an invite code to register.';
+        tokenLabel = 'Invite code';
+        buttonLabel = 'Register';
+      case _WizardStep.openRegister:
+        description = 'This server is open for registration -- no invite needed.';
+        tokenLabel = null;
+        buttonLabel = 'Create account';
+      case _WizardStep.closed:
+        description = 'This server is closed for registration. Ask its admin for an invite, '
+            'or try a different server.';
+        tokenLabel = null;
+        buttonLabel = '';
+      case _WizardStep.address:
+        return const SizedBox();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(description),
+        if (tokenLabel != null) ...[
+          const SizedBox(height: 16),
+          TextField(
+            controller: _tokenController,
+            decoration: InputDecoration(labelText: tokenLabel),
+            enabled: !_submitting,
+            onSubmitted: (_) => _submit(),
+          ),
+        ],
+        const SizedBox(height: 24),
+        if (_error != null) ...[
+          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          const SizedBox(height: 16),
+        ],
+        if (_step != _WizardStep.closed)
+          ElevatedButton(
+            onPressed: _submitting ? null : _submit,
+            child: _submitting
+                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : Text(buttonLabel),
+          ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Freizone -- Setup')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _serverController,
-              decoration: const InputDecoration(labelText: 'Server URL', hintText: 'http://host:18080'),
-              enabled: !_submitting,
-            ),
-            const SizedBox(height: 16),
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: true, label: Text('Bootstrap admin')),
-                ButtonSegment(value: false, label: Text('Register account')),
-              ],
-              selected: {_isBootstrap},
-              onSelectionChanged: _submitting ? null : (s) => setState(() => _isBootstrap = s.first),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _tokenController,
-              decoration: InputDecoration(
-                labelText: _isBootstrap ? 'Setup token' : 'Invite code (optional)',
-              ),
-              enabled: !_submitting,
-            ),
-            const SizedBox(height: 24),
-            if (_error != null) ...[
-              Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-              const SizedBox(height: 16),
-            ],
-            ElevatedButton(
-              onPressed: _submitting ? null : _submit,
-              child: _submitting
-                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : Text(_isBootstrap ? 'Bootstrap' : 'Register'),
-            ),
-          ],
+    final onAddressStep = _step == _WizardStep.address;
+    return PopScope(
+      canPop: onAddressStep,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _goToAddressStep();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Freizone -- Setup'),
+          leading: onAddressStep
+              ? null
+              : IconButton(icon: const Icon(Icons.arrow_back), onPressed: _goToAddressStep),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: onAddressStep ? _buildAddressStep() : _buildFinalStep(),
         ),
       ),
     );

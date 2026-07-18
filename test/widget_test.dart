@@ -9,10 +9,11 @@ void main() {
   // this test targets SetupScreen directly rather than the full
   // FreizoneApp -- avoiding a plugin call that would otherwise hang the
   // test indefinitely.
-  testWidgets('setup screen shows the server field and mode toggle', (WidgetTester tester) async {
+  testWidgets('setup wizard starts by asking for the server address', (WidgetTester tester) async {
     await tester.pumpWidget(MaterialApp(home: SetupScreen(onRegistered: (_) async {})));
 
     expect(find.text('Freizone -- Setup'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Bootstrap'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Server address'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Continue'), findsOneWidget);
   });
 }

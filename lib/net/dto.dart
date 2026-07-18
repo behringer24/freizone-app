@@ -7,6 +7,20 @@ import 'dart:typed_data';
 
 import '../ffi/models.dart' show decodeB64, decodeTime, encodeB64, encodeTime;
 
+/// GET /v1/server-status -- lets the setup wizard decide which path
+/// applies (bootstrap/open/invite/closed) before any identity exists.
+class ServerStatus {
+  ServerStatus({required this.claimed, required this.registrationPolicy});
+
+  factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
+        claimed: j['claimed'] as bool,
+        registrationPolicy: j['registration_policy'] as String,
+      );
+
+  final bool claimed;
+  final String registrationPolicy;
+}
+
 class AccountResponse {
   AccountResponse({required this.id, required this.rootPubKey, required this.devices});
 
