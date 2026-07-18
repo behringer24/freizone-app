@@ -1,19 +1,23 @@
-// First-run screen: generate a fresh identity and either bootstrap the
-// first admin account (one-time setup token, printed to the server's
-// log) or self-register a new one (open/invite registration policy) --
-// see docs/PROTOCOL.md in freizone-server, §4. On success the resulting
-// AppState is persisted and the app moves on to ChatScreen.
+// First-run (or "+ add another account") screen: generate a fresh
+// identity and either bootstrap the first admin account (one-time setup
+// token, printed to the server's log) or self-register a new one
+// (open/invite registration policy) -- see docs/PROTOCOL.md in
+// freizone-server, §4. On success the resulting AppState is persisted and
+// handed to onRegistered, which owns turning it into a live session
+// (AccountManager.addProfile) -- this screen doesn't know or care whether
+// it's the very first account on this device or an additional one.
 import 'package:flutter/material.dart';
 
 import '../ffi/freizone_core.dart';
 import '../net/api_client.dart';
-import '../state/app_session.dart';
 import '../state/local_state.dart';
 import '../util/errors.dart';
-import 'chat_list_screen.dart';
 
 class SetupScreen extends StatefulWidget {
-  const SetupScreen({super.key});
+  const SetupScreen({super.key, required this.onRegistered});
+
+  /// Called with the newly persisted profile once registration succeeds.
+  final Future<void> Function(AppState state) onRegistered;
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
@@ -74,13 +78,16 @@ class _SetupScreenState extends State<SetupScreen> {
         devicePub: identity.devicePub,
         devicePriv: identity.devicePriv,
       );
-      await LocalStateStore.save(state);
-
-      final session = AppSession(state);
-      await session.init();
+      await LocalStateStore.saveProfile(state);
+      await widget.onRegistered(state);
 
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ChatListScreen(session: session)));
+      // Pushed via Navigator when adding an additional account ("+" in
+      // AccountShellScreen) -- pop back to it. When this is the very
+      // first account on the device, this screen is the app's initial
+      // route (no push happened), so there's nothing to pop; the parent
+      // rebuilds away from it once onRegistered's setState runs instead.
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
     } catch (e) {
       setState(() {
         _error = describeError(e);

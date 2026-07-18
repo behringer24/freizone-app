@@ -133,6 +133,40 @@ class ApiClient {
     return AccountResponse.fromJson(_decodeObject(resp, {200}));
   }
 
+  // --- Push -------------------------------------------------------------------
+
+  /// Returns this server's VAPID public key (not secret) -- pass this to
+  /// UnifiedPush.registerApp(vapid: ...) since some distributors require it.
+  Future<String> getVAPIDPublicKey() async {
+    final resp = await _unauthedRequest('GET', '/v1/vapid-public-key', null);
+    return _decodeObject(resp, {200})['key'] as String;
+  }
+
+  /// Registers this device's push subscription (endpoint + the ECDH
+  /// public key/auth secret the server needs to RFC 8291-encrypt wake
+  /// notifications for it).
+  Future<void> setPushEndpoint({
+    required DeviceCredentials creds,
+    required String endpoint,
+    required String p256dh,
+    required String auth,
+  }) async {
+    final resp = await _signedRequest(
+      'PUT',
+      '/v1/devices/${creds.deviceId}/push-endpoint',
+      {'endpoint': endpoint, 'p256dh': p256dh, 'auth': auth},
+      creds,
+    );
+    _checkStatus(resp, {200});
+  }
+
+  /// Clears this device's push subscription (e.g. the distributor
+  /// unregistered it).
+  Future<void> clearPushEndpoint(DeviceCredentials creds) async {
+    final resp = await _signedRequest('PUT', '/v1/devices/${creds.deviceId}/push-endpoint', {}, creds);
+    _checkStatus(resp, {200});
+  }
+
   // --- Prekeys ----------------------------------------------------------------
 
   Future<void> uploadPrekeys({
