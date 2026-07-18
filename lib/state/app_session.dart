@@ -22,6 +22,7 @@ import '../net/dto.dart';
 import '../net/sse_client.dart';
 import '../push/push_manager.dart';
 import '../util/address_format.dart';
+import '../util/freizone_address.dart';
 import 'conversation.dart';
 import 'local_state.dart';
 
@@ -370,16 +371,28 @@ class AppSession extends ChangeNotifier {
   }
 
   /// Resolves and creates, or returns the already-resolved, Conversation
-  /// with peerAccountId. peerAccountId is normalized first, so a
+  /// with peerAddress -- a full Freizone address (`id*server`, `id*local`,
+  /// or just a bare id/prefix, see lib/util/freizone_address.dart), so a
   /// dash-grouped or phone-dictated id ("k5x9 p2qa n7f3...") resolves the
-  /// same as the canonical form -- and may be just the first
+  /// same as the canonical form, and may be just the first
   /// [accountIdPrefixLength] characters (unique per server, see
   /// docs/PROTOCOL.md), in which case an already-known conversation
-  /// resolves purely locally, with no network round trip. If displayName
-  /// is given and this is a new conversation, it's set as the initial
-  /// local alias.
-  Future<Conversation> startConversation(String peerAccountId, {String? displayName}) async {
-    final normalized = normalizeAccountId(peerAccountId);
+  /// resolves purely locally, with no network round trip. There's no
+  /// federation yet, so an explicit `*server` that isn't this session's
+  /// own server (or `local`) throws rather than silently either failing
+  /// confusingly or -- worse -- resolving against the wrong account,
+  /// since a prefix is only unique per server, not globally. If
+  /// displayName is given and this is a new conversation, it's set as
+  /// the initial local alias.
+  Future<Conversation> startConversation(String peerAddress, {String? displayName}) async {
+    final parsed = parseFreizoneAddress(peerAddress);
+    if (parsed == null) throw StateError('Not a valid Freizone address');
+    if (parsed.server != null && parsed.server != state.server) {
+      throw StateError(
+        'This address is on a different server (${parsed.server}) -- not supported yet, no federation.',
+      );
+    }
+    final normalized = parsed.idOrPrefix;
 
     final existing = state.conversations[normalized];
     if (existing != null && existing.peerDeviceId != null) return existing;
