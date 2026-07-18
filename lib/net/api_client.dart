@@ -284,6 +284,13 @@ class ApiClient {
     _checkStatus(resp, {200});
   }
 
+  /// Mints a single-use invite code. Admin or moderator only -- matches
+  /// the server-side gate in handleCreateInvite.
+  Future<CreateInviteResponse> createInvite(DeviceCredentials creds) async {
+    final resp = await _signedRequest('POST', '/v1/admin/invites', {}, creds);
+    return CreateInviteResponse.fromJson(_decodeObject(resp, {201}));
+  }
+
   /// Builds (but does not send) a signed GET request for the long-lived
   /// SSE stream endpoint -- used by SseClient, which needs the raw
   /// streamed response rather than a buffered http.Response.

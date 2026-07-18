@@ -5,6 +5,8 @@
 // once (their own SSE connection, their own UnifiedPush registration)
 // rather than only the currently-viewed one, so push notifications work
 // regardless of which account's server most recently changed.
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
@@ -82,6 +84,12 @@ class AccountManager extends ChangeNotifier {
   void setActive(String accountId) {
     if (!_sessions.containsKey(accountId) || _activeAccountId == accountId) return;
     _activeAccountId = accountId;
+    // registrationPolicy (and myRole) are only fetched once at session
+    // creation -- refresh them on every switch so a policy/role change
+    // made on this or another device is reflected without an app
+    // restart, e.g. the Invite/Server Admin menu entries.
+    unawaited(_sessions[accountId]!.refreshRegistrationPolicy());
+    unawaited(_sessions[accountId]!.refreshMyRole());
     notifyListeners();
   }
 

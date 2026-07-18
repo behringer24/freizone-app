@@ -60,6 +60,25 @@ class AppSession extends ChangeNotifier {
   /// a fresh fetch is in flight.
   List<AdminAccountSummary> adminAccounts = [];
 
+  /// The server's current registration policy ("open"/"invite"/"closed"),
+  /// fetched via the public GET /v1/server-status -- unlike [myRole]'s
+  /// admin-only source, this works for every role, which is what lets a
+  /// plain "user" account still see the Invite action on an open server.
+  String? registrationPolicy;
+
+  /// Refreshes [registrationPolicy] from the server. Call once after
+  /// [init] and again whenever the chat list is shown, so a policy
+  /// change made elsewhere is picked up.
+  Future<void> refreshRegistrationPolicy() async {
+    try {
+      final status = await api.getServerStatus();
+      registrationPolicy = status.registrationPolicy;
+    } catch (e) {
+      lastError = 'checking registration policy failed: $e';
+    }
+    notifyListeners();
+  }
+
   /// Refreshes [myRole] and [adminAccounts] from the server. A 403 means
   /// this device is neither admin nor moderator -- not an error, just
   /// the answer. Call once after [init] and again whenever the admin
@@ -121,6 +140,9 @@ class AppSession extends ChangeNotifier {
   /// Changes the registration policy (persisted server-side). Admin only.
   Future<void> setRegistrationPolicy(String policy) => api.setRegistrationPolicy(state.credentials, policy);
 
+  /// Mints a single-use invite code. Admin or moderator only.
+  Future<CreateInviteResponse> createInvite() => api.createInvite(state.credentials);
+
   /// Conversations sorted newest-activity-first, for the chat list.
   List<Conversation> get conversations {
     final list = state.conversations.values.toList();
@@ -141,6 +163,7 @@ class AppSession extends ChangeNotifier {
       notifyListeners();
       _startStream();
       unawaited(refreshMyRole());
+      unawaited(refreshRegistrationPolicy());
       unawaited(_registerPush());
     } catch (e) {
       lastError = 'prekey upload failed: $e';

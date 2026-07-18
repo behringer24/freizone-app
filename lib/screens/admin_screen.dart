@@ -140,7 +140,12 @@ class _AdminScreenState extends State<AdminScreen> {
     const options = [
       ('open', 'Open', 'Anyone can self-register.'),
       ('invite', 'Invite', 'Registration requires an invite code.'),
-      ('closed', 'Closed', 'Only an admin can create accounts.'),
+      (
+        'closed',
+        'Closed',
+        'Registration is fully blocked -- no new accounts, not even with an invite code. Switch to '
+            'Invite or Open first to let new people join.',
+      ),
     ];
     return RadioGroup<String>(
       groupValue: _policy,
