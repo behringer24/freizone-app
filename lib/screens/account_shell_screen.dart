@@ -113,10 +113,21 @@ class AccountShellScreen extends StatelessWidget {
               ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: IconButton.filledTonal(
-                onPressed: () => _addAccount(context),
-                icon: const Icon(Icons.add),
-                tooltip: 'Add account',
+              child: Tooltip(
+                message: 'Add account',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(24),
+                  onTap: () => _addAccount(context),
+                  child: Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Theme.of(context).colorScheme.outline),
+                    ),
+                    child: Icon(Icons.add, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                ),
               ),
             ),
           ],

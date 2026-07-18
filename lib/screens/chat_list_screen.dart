@@ -11,6 +11,7 @@ import '../state/app_session.dart';
 import '../state/conversation.dart';
 import '../util/address_format.dart';
 import '../util/errors.dart';
+import '../util/freizone_address.dart';
 import '../util/unread_dot.dart';
 import 'admin_screen.dart';
 import 'chat_screen.dart';
@@ -144,7 +145,14 @@ class ChatListScreen extends StatelessWidget {
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'copy_id') {
-                Clipboard.setData(ClipboardData(text: formatAccountIdForDisplay(session.state.accountId)));
+                Clipboard.setData(
+                  ClipboardData(
+                    text: buildFreizoneAddress(
+                      id: session.state.accountId.substring(0, accountIdPrefixLength),
+                      server: session.state.server,
+                    ),
+                  ),
+                );
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Address copied to clipboard')),
                 );
@@ -250,6 +258,11 @@ class ChatListScreen extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _openNewChatSheet(context),
+        // Explicit rather than the Material 3 default (colorScheme.
+        // primaryContainer, a much lighter tone) -- matches the darker
+        // teal used for the user's own message bubbles in chat_screen.dart.
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
         child: const Icon(Icons.chat),
       ),
     );
@@ -321,7 +334,7 @@ class _NewChatSheetState extends State<_NewChatSheet> {
             autofocus: true,
             decoration: const InputDecoration(
               labelText: 'Peer account id',
-              helperText: 'Full id, or just its first 5 characters if you already know them',
+              helperText: 'Full id, first 5 characters, or a full address like id*server',
             ),
             enabled: !_loading,
           ),
