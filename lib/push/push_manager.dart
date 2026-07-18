@@ -18,6 +18,7 @@ import 'package:unifiedpush/unifiedpush.dart';
 
 import '../ffi/freizone_core.dart';
 import '../net/api_client.dart';
+import '../state/app_settings.dart';
 import '../state/local_state.dart';
 import '../util/address_format.dart';
 
@@ -149,17 +150,24 @@ Future<void> showMessageNotification(String instance) async {
   // cancels the right one.
   final body = 'New message(s) for ${formatAccountIdForDisplay(instance)}';
 
+  // Loaded fresh each time, same reasoning as above: this can run in the
+  // background-isolate case, so nothing from a live AppSettings instance
+  // can be captured/injected here.
+  final settings = await AppSettings.load();
+
   await _notifications.show(
     id: _notificationIdFor(instance),
     title: 'Freizone',
     body: body,
-    notificationDetails: const NotificationDetails(
+    notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         _messagesChannelId,
         'Messages',
         channelDescription: 'Notifies about new messages while the app is closed',
         importance: Importance.high,
         priority: Priority.high,
+        playSound: settings.notificationSound,
+        enableVibration: settings.notificationVibration,
       ),
     ),
   );

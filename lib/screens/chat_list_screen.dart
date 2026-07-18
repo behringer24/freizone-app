@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../state/app_session.dart';
+import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../util/address_format.dart';
 import '../util/errors.dart';
@@ -16,11 +17,13 @@ import '../util/unread_dot.dart';
 import 'admin_screen.dart';
 import 'chat_screen.dart';
 import 'invite_screen.dart';
+import 'settings_screen.dart';
 
 class ChatListScreen extends StatelessWidget {
-  const ChatListScreen({super.key, required this.session, this.appBarBottom});
+  const ChatListScreen({super.key, required this.session, required this.settings, this.appBarBottom});
 
   final AppSession session;
+  final AppSettings settings;
 
   /// Rendered directly below the "Freizone" title bar, as part of the
   /// same AppBar -- e.g. the account switcher strip (AccountShellScreen).
@@ -145,13 +148,11 @@ class ChatListScreen extends StatelessWidget {
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'copy_id') {
+                final id = settings.copyIdShort
+                    ? session.state.accountId.substring(0, accountIdPrefixLength)
+                    : session.state.accountId;
                 Clipboard.setData(
-                  ClipboardData(
-                    text: buildFreizoneAddress(
-                      id: session.state.accountId.substring(0, accountIdPrefixLength),
-                      server: session.state.server,
-                    ),
-                  ),
+                  ClipboardData(text: buildFreizoneAddress(id: id, server: session.state.server)),
                 );
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Address copied to clipboard')),
@@ -164,6 +165,9 @@ class ChatListScreen extends StatelessWidget {
               }
               if (value == 'invite') {
                 Navigator.of(context).push(MaterialPageRoute(builder: (_) => InviteScreen(session: session)));
+              }
+              if (value == 'settings') {
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => SettingsScreen(settings: settings)));
               }
             },
             itemBuilder: (context) => [
@@ -186,6 +190,7 @@ class ChatListScreen extends StatelessWidget {
               if (_canInvite(session)) const PopupMenuItem(value: 'invite', child: Text('Invite')),
               if (session.myRole == 'admin' || session.myRole == 'moderator')
                 const PopupMenuItem(value: 'admin', child: Text('Server Admin')),
+              const PopupMenuItem(value: 'settings', child: Text('Settings')),
             ],
           ),
         ],

@@ -12,21 +12,27 @@ import 'package:unifiedpush/unifiedpush.dart';
 
 import '../push/push_manager.dart';
 import 'app_session.dart';
+import 'app_settings.dart';
 import 'local_state.dart';
 
 class AccountManager extends ChangeNotifier {
-  AccountManager._(this._sessions, this._activeAccountId);
+  AccountManager._(this._sessions, this._activeAccountId, this._settings);
 
   final Map<String, AppSession> _sessions;
   String? _activeAccountId;
+  final AppSettings _settings;
 
   List<AppSession> get sessions => _sessions.values.toList();
   AppSession? get active => _sessions[_activeAccountId];
   String? get activeAccountId => _activeAccountId;
 
   /// Loads every locally stored profile and starts a live session for
-  /// each. Call once, at app startup.
-  static Future<AccountManager> load() async {
+  /// each. Call once, at app startup. Reactivates whichever account was
+  /// last active (settings.lastActiveAccountId) rather than always
+  /// falling back to an arbitrary "first in the list" order -- falls
+  /// back to that only if the remembered id no longer exists (e.g. that
+  /// account was removed on another device in the meantime).
+  static Future<AccountManager> load(AppSettings settings) async {
     await requestNotificationPermission();
 
     final profiles = await LocalStateStore.listProfiles();
@@ -36,7 +42,11 @@ class AccountManager extends ChangeNotifier {
       await session.init();
       sessions[profile.accountId] = session;
     }
-    return AccountManager._(sessions, profiles.isEmpty ? null : profiles.first.accountId);
+    final remembered = settings.lastActiveAccountId;
+    final initialActiveId = (remembered != null && sessions.containsKey(remembered))
+        ? remembered
+        : (profiles.isEmpty ? null : profiles.first.accountId);
+    return AccountManager._(sessions, initialActiveId, settings);
   }
 
   /// Adds a freshly registered/bootstrapped account (see SetupScreen) and
@@ -53,6 +63,7 @@ class AccountManager extends ChangeNotifier {
     await session.init();
     _sessions[state.accountId] = session;
     _activeAccountId = state.accountId;
+    unawaited(_settings.setLastActiveAccountId(state.accountId));
     notifyListeners();
   }
 
@@ -77,6 +88,7 @@ class AccountManager extends ChangeNotifier {
 
     if (_activeAccountId == accountId) {
       _activeAccountId = _sessions.keys.isEmpty ? null : _sessions.keys.first;
+      unawaited(_settings.setLastActiveAccountId(_activeAccountId));
     }
     notifyListeners();
   }
@@ -84,6 +96,7 @@ class AccountManager extends ChangeNotifier {
   void setActive(String accountId) {
     if (!_sessions.containsKey(accountId) || _activeAccountId == accountId) return;
     _activeAccountId = accountId;
+    unawaited(_settings.setLastActiveAccountId(accountId));
     // registrationPolicy (and myRole) are only fetched once at session
     // creation -- refresh them on every switch so a policy/role change
     // made on this or another device is reflected without an app

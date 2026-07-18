@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../state/account_manager.dart';
 import '../state/app_session.dart';
+import '../state/app_settings.dart';
 import '../util/address_format.dart';
 import '../util/role_icon.dart';
 import '../util/unread_dot.dart';
@@ -17,9 +18,10 @@ import 'chat_list_screen.dart';
 import 'setup_screen.dart';
 
 class AccountShellScreen extends StatelessWidget {
-  const AccountShellScreen({super.key, required this.manager});
+  const AccountShellScreen({super.key, required this.manager, required this.settings});
 
   final AccountManager manager;
+  final AppSettings settings;
 
   Color _avatarColor(String seed) => Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
@@ -147,6 +149,7 @@ class AccountShellScreen extends StatelessWidget {
         }
         return ChatListScreen(
           session: active,
+          settings: settings,
           appBarBottom: PreferredSize(
             preferredSize: const Size.fromHeight(72),
             child: _buildSwitcher(context, active),
