@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import '../state/app_session.dart';
 import '../state/conversation.dart';
 import '../util/errors.dart';
+import '../util/unread_dot.dart';
 import 'admin_screen.dart';
 import 'chat_screen.dart';
 import 'invite_screen.dart';
@@ -149,9 +150,15 @@ class ChatListScreen extends StatelessWidget {
             itemBuilder: (context, i) {
               final convo = conversations[i];
               return ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: _avatarColor(convo.peerAccountId),
-                  child: Text(_initials(convo), style: const TextStyle(color: Colors.white)),
+                leading: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: _avatarColor(convo.peerAccountId),
+                      child: Text(_initials(convo), style: const TextStyle(color: Colors.white)),
+                    ),
+                    if (convo.hasUnread) const Positioned(top: -2, right: -2, child: UnreadDot()),
+                  ],
                 ),
                 title: Text(convo.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                 subtitle: Text(convo.lastMessagePreview, maxLines: 1, overflow: TextOverflow.ellipsis),

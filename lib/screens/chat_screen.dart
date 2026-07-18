@@ -33,6 +33,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Color _avatarColor(String seed) =>
       Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
+  @override
+  void initState() {
+    super.initState();
+    widget.session.enterConversation(widget.peerAccountId);
+  }
+
   Future<void> _send() async {
     final text = _messageController.text.trim();
     if (text.isEmpty || _sending) return;
@@ -102,6 +108,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    widget.session.leaveConversation(widget.peerAccountId);
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();

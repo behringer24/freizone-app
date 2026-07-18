@@ -39,6 +39,7 @@ class Conversation {
     this.peerDevicePubKey,
     List<StoredMessage>? messages,
     DateTime? lastActivityAt,
+    this.hasUnread = false,
   })  : messages = messages ?? [],
         lastActivityAt = lastActivityAt ?? DateTime.now().toUtc();
 
@@ -52,6 +53,7 @@ class Conversation {
             ?.map((m) => StoredMessage.fromJson(m as Map<String, dynamic>))
             .toList(),
         lastActivityAt: decodeTime(j['last_activity_at'] as String),
+        hasUnread: j['has_unread'] as bool? ?? false,
       );
 
   final String peerAccountId;
@@ -60,6 +62,11 @@ class Conversation {
   Uint8List? peerDevicePubKey;
   List<StoredMessage> messages;
   DateTime lastActivityAt;
+
+  /// True once an incoming message has arrived while this conversation's
+  /// ChatScreen wasn't the one open -- cleared when it's opened. Drives
+  /// the unread dot in the chat list and the account switcher.
+  bool hasUnread;
 
   /// The alias if one is set, otherwise the id in its readable,
   /// dash-grouped form (docs/PROTOCOL.md's cosmetic display format).
@@ -74,5 +81,6 @@ class Conversation {
         if (peerDevicePubKey != null) 'peer_device_pub_key': encodeB64(peerDevicePubKey!),
         'messages': messages.map((m) => m.toJson()).toList(),
         'last_activity_at': encodeTime(lastActivityAt),
+        'has_unread': hasUnread,
       };
 }
