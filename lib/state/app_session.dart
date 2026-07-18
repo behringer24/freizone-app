@@ -339,11 +339,16 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Resolves peerAccountId's verified active device -- independently
-  /// verifying the full self-certifying chain, per docs/PROTOCOL.md, no
-  /// trust in the server required.
-  Future<DeviceResponse> _resolvePeerDevice(String peerAccountId) async {
-    final acc = await api.getAccount(peerAccountId);
+  /// Resolves peerIdOrPrefix's true account id and verified active device
+  /// -- independently verifying the full self-certifying chain, per
+  /// docs/PROTOCOL.md, no trust in the server required. peerIdOrPrefix may
+  /// be either the full canonical id or just its first
+  /// [accountIdPrefixLength] characters (docs/PROTOCOL.md's id-prefix
+  /// uniqueness note) -- either way, the returned id is always the true
+  /// full one, verified against the returned device's key chain, never
+  /// just echoed back from whatever shorthand was looked up with.
+  Future<(String accountId, DeviceResponse device)> _resolvePeerDevice(String peerIdOrPrefix) async {
+    final acc = await api.getAccount(peerIdOrPrefix);
     if (!core.verifyAddressId(acc.id, acc.rootPubKey)) {
       throw StateError('peer account id does not match its root key');
     }
@@ -358,25 +363,36 @@ class AppSession extends ChangeNotifier {
         signature: d.signature,
       );
       if (core.verifyDeviceCertificate(cert, acc.rootPubKey)) {
-        return d;
+        return (acc.id, d);
       }
     }
-    throw StateError('no verifiable active device found for $peerAccountId');
+    throw StateError('no verifiable active device found for $peerIdOrPrefix');
   }
 
   /// Resolves and creates, or returns the already-resolved, Conversation
   /// with peerAccountId. peerAccountId is normalized first, so a
   /// dash-grouped or phone-dictated id ("k5x9 p2qa n7f3...") resolves the
-  /// same as the canonical form. If displayName is given and this is a
-  /// new conversation, it's set as the initial local alias.
+  /// same as the canonical form -- and may be just the first
+  /// [accountIdPrefixLength] characters (unique per server, see
+  /// docs/PROTOCOL.md), in which case an already-known conversation
+  /// resolves purely locally, with no network round trip. If displayName
+  /// is given and this is a new conversation, it's set as the initial
+  /// local alias.
   Future<Conversation> startConversation(String peerAccountId, {String? displayName}) async {
     final normalized = normalizeAccountId(peerAccountId);
+
     final existing = state.conversations[normalized];
     if (existing != null && existing.peerDeviceId != null) return existing;
 
-    final verified = await _resolvePeerDevice(normalized);
+    if (normalized.length == accountIdPrefixLength) {
+      for (final convo in state.conversations.values) {
+        if (convo.peerDeviceId != null && convo.peerAccountId.startsWith(normalized)) return convo;
+      }
+    }
 
-    final convo = state.conversations.putIfAbsent(normalized, () => Conversation(peerAccountId: normalized));
+    final (resolvedId, verified) = await _resolvePeerDevice(normalized);
+
+    final convo = state.conversations.putIfAbsent(resolvedId, () => Conversation(peerAccountId: resolvedId));
     convo.peerDeviceId = verified.deviceId;
     convo.peerDevicePubKey = verified.devicePubKey;
     if (convo.displayName == null && displayName != null && displayName.trim().isNotEmpty) {
@@ -457,7 +473,7 @@ class AppSession extends ChangeNotifier {
       // A conversation that only ever received messages (never started
       // via startConversation) has no resolved peer device yet -- resolve
       // it now, lazily, so replying to whoever messaged first works.
-      final verified = await _resolvePeerDevice(peerAccountId);
+      final (_, verified) = await _resolvePeerDevice(peerAccountId);
       convo.peerDeviceId = verified.deviceId;
       convo.peerDevicePubKey = verified.devicePubKey;
       await LocalStateStore.saveProfile(state);

@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 
 import '../state/app_session.dart';
 import '../state/conversation.dart';
+import '../util/address_format.dart';
 import '../util/errors.dart';
 import '../util/unread_dot.dart';
 import 'admin_screen.dart';
@@ -88,7 +89,7 @@ class ChatListScreen extends StatelessWidget {
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'copy_id') {
-                Clipboard.setData(ClipboardData(text: session.state.accountId));
+                Clipboard.setData(ClipboardData(text: formatAccountIdForDisplay(session.state.accountId)));
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Address copied to clipboard')),
                 );
@@ -103,7 +104,22 @@ class ChatListScreen extends StatelessWidget {
               }
             },
             itemBuilder: (context) => [
-              const PopupMenuItem(value: 'copy_id', child: Text('Copy my address')),
+              PopupMenuItem(
+                value: 'copy_id',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Copy my address'),
+                    Text(
+                      session.state.server,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
               if (_canInvite(session)) const PopupMenuItem(value: 'invite', child: Text('Invite')),
               if (session.myRole == 'admin' || session.myRole == 'moderator')
                 const PopupMenuItem(value: 'admin', child: Text('Server Admin')),
@@ -247,7 +263,10 @@ class _NewChatSheetState extends State<_NewChatSheet> {
           TextField(
             controller: _idController,
             autofocus: true,
-            decoration: const InputDecoration(labelText: 'Peer account id'),
+            decoration: const InputDecoration(
+              labelText: 'Peer account id',
+              helperText: 'Full id, or just its first 5 characters if you already know them',
+            ),
             enabled: !_loading,
           ),
           const SizedBox(height: 8),
