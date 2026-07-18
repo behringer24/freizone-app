@@ -15,6 +15,7 @@
 import 'package:flutter/material.dart';
 
 import '../ffi/freizone_core.dart';
+import '../ffi/models.dart';
 import '../net/api_client.dart';
 import '../state/local_state.dart';
 import '../util/errors.dart';
@@ -181,34 +182,54 @@ class _SetupScreenState extends State<SetupScreen> {
     final core = FreizoneCore();
     final api = ApiClient(baseUrl: _server!, core: core);
     try {
-      final identity = core.generateIdentity();
-      final issuedAt = DateTime.now().toUtc();
-      final cert = core.signDeviceCertificate(
-        accountId: identity.accountId,
-        deviceId: identity.deviceId,
-        devicePub: identity.devicePub,
-        issuedAt: issuedAt,
-        rootPriv: identity.rootPriv,
-      );
+      // The server enforces each account id's first 5 characters unique
+      // per server (docs/PROTOCOL.md §1's id-prefix uniqueness note) -- a
+      // fresh identity always fixes this (a new root key derives a new
+      // id), so retry a few times with a new one rather than surfacing
+      // what would otherwise look like an inexplicable failure. A real
+      // collision is rare (up to ~1M possible prefixes per server); this
+      // cap is just a defensive backstop, never expected to be hit.
+      const maxIdentityAttempts = 8;
+      late final Identity identity;
+      var attempt = 0;
+      while (true) {
+        attempt++;
+        final candidateIdentity = core.generateIdentity();
+        final issuedAt = DateTime.now().toUtc();
+        final candidateCert = core.signDeviceCertificate(
+          accountId: candidateIdentity.accountId,
+          deviceId: candidateIdentity.deviceId,
+          devicePub: candidateIdentity.devicePub,
+          issuedAt: issuedAt,
+          rootPriv: candidateIdentity.rootPriv,
+        );
 
-      switch (_step) {
-        case _WizardStep.bootstrap:
-          await api.bootstrapClaim(
-            setupToken: _tokenController.text.trim(),
-            identity: identity,
-            cert: cert,
-          );
-        case _WizardStep.invite:
-          await api.registerAccount(
-            identity: identity,
-            cert: cert,
-            inviteCode: _tokenController.text.trim(),
-          );
-        case _WizardStep.openRegister:
-          await api.registerAccount(identity: identity, cert: cert);
-        case _WizardStep.address:
-        case _WizardStep.closed:
-          return;
+        try {
+          switch (_step) {
+            case _WizardStep.bootstrap:
+              await api.bootstrapClaim(
+                setupToken: _tokenController.text.trim(),
+                identity: candidateIdentity,
+                cert: candidateCert,
+              );
+            case _WizardStep.invite:
+              await api.registerAccount(
+                identity: candidateIdentity,
+                cert: candidateCert,
+                inviteCode: _tokenController.text.trim(),
+              );
+            case _WizardStep.openRegister:
+              await api.registerAccount(identity: candidateIdentity, cert: candidateCert);
+            case _WizardStep.address:
+            case _WizardStep.closed:
+              return;
+          }
+          identity = candidateIdentity;
+          break;
+        } on ApiException catch (e) {
+          if (e.code == 'id_prefix_taken' && attempt < maxIdentityAttempts) continue;
+          rethrow;
+        }
       }
 
       final state = AppState(
