@@ -1,8 +1,11 @@
 // Wraps ChatListScreen with an account switcher strip -- one avatar per
 // connected account (all of which stay live in the background regardless
 // of which is shown, see AccountManager), plus "+" to add another.
-// ChatListScreen itself is untouched: this just decides which AppSession
-// it's handed.
+// Rendered via ChatListScreen's appBarBottom slot (AppBar.bottom) rather
+// than stacked above the whole screen as a separate widget -- that keeps
+// it seamlessly attached to the "Freizone" title bar (no gap) and lets
+// Flutter's usual AppBar-driven status bar icon styling keep working,
+// since there's still exactly one AppBar at the top of the widget tree.
 import 'package:flutter/material.dart';
 
 import '../state/account_manager.dart';
@@ -47,71 +50,72 @@ class AccountShellScreen extends StatelessWidget {
     }
   }
 
+  Widget _buildSwitcher(BuildContext context, AppSession? active) {
+    return Container(
+      color: Colors.white,
+      height: 72,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        children: [
+          for (final session in manager.sessions)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: GestureDetector(
+                onTap: () => manager.setActive(session.state.accountId),
+                onLongPress: () => _confirmRemove(context, session),
+                child: CircleAvatar(
+                  radius: 24,
+                  backgroundColor: _avatarColor(session.state.accountId),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Center(
+                        child: Text(
+                          session.state.accountId.substring(0, 2).toUpperCase(),
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      if (session == active)
+                        Positioned(
+                          bottom: -4,
+                          left: 16,
+                          right: 16,
+                          child: Container(height: 3, color: Theme.of(context).colorScheme.primary),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: IconButton.filledTonal(
+              onPressed: () => _addAccount(context),
+              icon: const Icon(Icons.add),
+              tooltip: 'Add account',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: manager,
       builder: (context, _) {
         final active = manager.active;
-        return Column(
-          children: [
-            SafeArea(
-              bottom: false,
-              child: SizedBox(
-                height: 72,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                  children: [
-                    for (final session in manager.sessions)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: GestureDetector(
-                          onTap: () => manager.setActive(session.state.accountId),
-                          onLongPress: () => _confirmRemove(context, session),
-                          child: CircleAvatar(
-                            radius: 24,
-                            backgroundColor: _avatarColor(session.state.accountId),
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                Center(
-                                  child: Text(
-                                    session.state.accountId.substring(0, 2).toUpperCase(),
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                  ),
-                                ),
-                                if (session == active)
-                                  Positioned(
-                                    bottom: -4,
-                                    left: 16,
-                                    right: 16,
-                                    child: Container(height: 3, color: Theme.of(context).colorScheme.primary),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: IconButton.filledTonal(
-                        onPressed: () => _addAccount(context),
-                        icon: const Icon(Icons.add),
-                        tooltip: 'Add account',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: active == null
-                  ? const Center(child: Text('No account selected'))
-                  : ChatListScreen(session: active),
-            ),
-          ],
+        if (active == null) {
+          return const Scaffold(body: Center(child: Text('No account selected')));
+        }
+        return ChatListScreen(
+          session: active,
+          appBarBottom: PreferredSize(
+            preferredSize: const Size.fromHeight(72),
+            child: _buildSwitcher(context, active),
+          ),
         );
       },
     );
