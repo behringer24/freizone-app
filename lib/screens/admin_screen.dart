@@ -8,6 +8,7 @@ import '../net/dto.dart';
 import '../state/app_session.dart';
 import '../util/address_format.dart';
 import '../util/errors.dart';
+import '../util/role_icon.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key, required this.session});
@@ -160,7 +161,7 @@ class _AdminScreenState extends State<AdminScreen> {
             child: Text('Registration policy', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
           for (final (value, title, subtitle) in options)
-            RadioListTile<String>(value: value, title: Text(title), subtitle: Text(subtitle)),
+            RadioListTile<String>(value: value, title: Text(title), subtitle: Text(subtitle), enabled: _isAdmin),
         ],
       ),
     );
@@ -174,14 +175,7 @@ class _AdminScreenState extends State<AdminScreen> {
   // variants of one glyph rather than unrelated symbols.
   Icon _roleIcon(AdminAccountSummary account) {
     if (account.status != 'active') return const Icon(Icons.lock);
-    switch (account.role) {
-      case 'admin':
-        return const Icon(Icons.engineering);
-      case 'moderator':
-        return const Icon(Icons.person);
-      default:
-        return const Icon(Icons.person_outline);
-    }
+    return Icon(roleBadgeIcon(account.role) ?? Icons.person_outline);
   }
 
   Widget _buildAccountRow(BuildContext context, AdminAccountSummary account) {
@@ -190,12 +184,12 @@ class _AdminScreenState extends State<AdminScreen> {
       leading: _roleIcon(account),
       title: Text(formatAccountIdForDisplay(account.id)),
       subtitle: Text('${account.role}${blocked ? ' -- blocked' : ''}'),
-      onTap: _isAdmin ? () => _showRolePicker(account) : null,
       trailing: _isAdmin
           ? PopupMenuButton<String>(
-              padding: EdgeInsets.zero,
               onSelected: (action) {
                 switch (action) {
+                  case 'set_role':
+                    _showRolePicker(account);
                   case 'toggle_block':
                     _toggleBlock(account);
                   case 'delete':
@@ -203,6 +197,7 @@ class _AdminScreenState extends State<AdminScreen> {
                 }
               },
               itemBuilder: (context) => [
+                const PopupMenuItem(value: 'set_role', child: Text('Set role')),
                 PopupMenuItem(value: 'toggle_block', child: Text(blocked ? 'Unblock' : 'Block')),
                 const PopupMenuItem(value: 'delete', child: Text('Delete')),
               ],

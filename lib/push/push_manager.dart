@@ -25,6 +25,17 @@ const _messagesChannelId = 'freizone_messages';
 
 final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
 
+/// One id per account, shared between showing and clearing its
+/// notification so they always refer to the same one.
+int _notificationIdFor(String instance) => instance.hashCode & 0x7fffffff;
+
+/// Clears instance's "new message(s)" notification, if any is showing --
+/// call once it has no more unread conversations, so the launcher icon's
+/// badge (which Android derives from active notifications) goes away
+/// again instead of lingering after the messages have been read.
+Future<void> clearMessageNotification(String instance) =>
+    _notifications.cancel(id: _notificationIdFor(instance));
+
 /// Sets up UnifiedPush + local-notification plumbing. Call once, as early
 /// as possible (before runApp), so it also runs correctly when the
 /// background isolate variant starts up.
@@ -115,15 +126,31 @@ Future<void> _onTempUnavailable(String instance) async {
 }
 
 Future<void> _onMessage(PushMessage message, String instance) async {
+  await showMessageNotification(instance);
+}
+
+/// Shows (or updates, if one's already up) instance's "new message(s)"
+/// notification -- which is also what makes Android show a badge on the
+/// launcher icon, since that's derived from active notifications, not
+/// from anything drawn inside the app. Called both from a background
+/// push wake (_onMessage) and live, from AppSession._handleIncoming,
+/// whenever a message actually becomes unread while the app is in the
+/// foreground -- the badge needs to reflect unread state regardless of
+/// whether the app happened to be open when the message arrived.
+Future<void> showMessageNotification(String instance) async {
   // instance is the waking account's own id -- purely local information
   // (never sent anywhere), so it's safe to show in the notification body
-  // to say which of the user's own accounts it's for. Also used as the
-  // notification id so two accounts waking don't overwrite each other.
-  final state = await LocalStateStore.loadProfile(instance);
-  final body = state == null ? 'New message(s)' : 'New message(s) for ${formatAccountIdForDisplay(state.accountId)}';
+  // to say which of the user's own accounts it's for; also used directly
+  // rather than reloading the profile from disk, since that raced
+  // AppSession's own concurrent (non-atomic) write to that same file on
+  // the live-message path and threw a FormatException on a half-written
+  // read. Also used as the notification id so two accounts overlap into
+  // one update, not a stack of duplicates, and so clearMessageNotification
+  // cancels the right one.
+  final body = 'New message(s) for ${formatAccountIdForDisplay(instance)}';
 
   await _notifications.show(
-    id: instance.hashCode & 0x7fffffff,
+    id: _notificationIdFor(instance),
     title: 'Freizone',
     body: body,
     notificationDetails: const NotificationDetails(

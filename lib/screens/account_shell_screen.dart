@@ -11,6 +11,8 @@ import 'package:flutter/material.dart';
 import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../util/address_format.dart';
+import '../util/role_icon.dart';
+import '../util/unread_dot.dart';
 import 'chat_list_screen.dart';
 import 'setup_screen.dart';
 
@@ -58,49 +60,67 @@ class AccountShellScreen extends StatelessWidget {
     return Container(
       color: Colors.white,
       height: 72,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        children: [
-          for (final session in manager.sessions)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: GestureDetector(
-                onTap: () => manager.setActive(session.state.accountId),
-                onLongPress: () => _confirmRemove(context, session),
-                child: CircleAvatar(
-                  radius: 24,
-                  backgroundColor: _avatarColor(session.state.accountId),
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Center(
-                        child: Text(
-                          session.state.accountId.substring(0, 2).toUpperCase(),
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      // Listens to every session directly (not just `manager`) so a
+      // badge -- an incoming message, a role change picked up by
+      // AccountManager.setActive's refresh -- updates live without
+      // needing an account switch to force a rebuild.
+      child: ListenableBuilder(
+        listenable: Listenable.merge(manager.sessions),
+        builder: (context, _) => ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          children: [
+            for (final session in manager.sessions)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: GestureDetector(
+                  onTap: () => manager.setActive(session.state.accountId),
+                  onLongPress: () => _confirmRemove(context, session),
+                  child: CircleAvatar(
+                    radius: 24,
+                    backgroundColor: _avatarColor(session.state.accountId),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Center(
+                          child: Text(
+                            session.state.accountId.substring(0, 2).toUpperCase(),
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
                         ),
-                      ),
-                      if (session == active)
-                        Positioned(
-                          bottom: -4,
-                          left: 16,
-                          right: 16,
-                          child: Container(height: 3, color: Theme.of(context).colorScheme.primary),
-                        ),
-                    ],
+                        if (session == active)
+                          Positioned(
+                            bottom: -4,
+                            left: 16,
+                            right: 16,
+                            child: Container(height: 3, color: Theme.of(context).colorScheme.primary),
+                          ),
+                        if (roleBadgeIcon(session.myRole) case final icon?)
+                          Positioned(
+                            bottom: -3,
+                            right: -3,
+                            child: CircleAvatar(
+                              radius: 12,
+                              backgroundColor: Colors.white,
+                              child: Icon(icon, size: 16, color: Colors.black87),
+                            ),
+                          ),
+                        if (session.hasAnyUnread) const Positioned(top: -2, right: -2, child: UnreadDot()),
+                      ],
+                    ),
                   ),
                 ),
               ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: IconButton.filledTonal(
+                onPressed: () => _addAccount(context),
+                icon: const Icon(Icons.add),
+                tooltip: 'Add account',
+              ),
             ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: IconButton.filledTonal(
-              onPressed: () => _addAccount(context),
-              icon: const Icon(Icons.add),
-              tooltip: 'Add account',
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

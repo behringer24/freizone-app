@@ -152,6 +152,36 @@ class AppSession extends ChangeNotifier {
 
   Conversation? conversation(String peerAccountId) => state.conversations[peerAccountId];
 
+  /// True if any conversation in this account has an unread message --
+  /// drives the account switcher's notification dot.
+  bool get hasAnyUnread => state.conversations.values.any((c) => c.hasUnread);
+
+  /// The peer whose ChatScreen is currently on screen, if any -- an
+  /// incoming message from them is never marked unread, since the user
+  /// is already looking at it (see _handleIncoming).
+  String? _openConversationPeerId;
+
+  /// Call when a ChatScreen for peerAccountId opens: clears its unread
+  /// flag and remembers it as "currently open" for _handleIncoming.
+  Future<void> enterConversation(String peerAccountId) async {
+    _openConversationPeerId = peerAccountId;
+    final convo = state.conversations[peerAccountId];
+    if (convo == null || !convo.hasUnread) return;
+    convo.hasUnread = false;
+    await LocalStateStore.saveProfile(state);
+    // If that was the last unread conversation, clear this account's
+    // "new message(s)" notification too, so its launcher-icon badge
+    // (which Android derives from active notifications) goes away
+    // rather than lingering after everything's been read.
+    if (!hasAnyUnread) unawaited(clearMessageNotification(state.accountId));
+    notifyListeners();
+  }
+
+  /// Call when that ChatScreen closes.
+  void leaveConversation(String peerAccountId) {
+    if (_openConversationPeerId == peerAccountId) _openConversationPeerId = null;
+  }
+
   /// Uploads prekeys if this is the first run, then opens the live
   /// message stream. Call once, right after construction.
   Future<void> init() async {
@@ -287,6 +317,16 @@ class AppSession extends ChangeNotifier {
       );
       convo.messages.add(StoredMessage(text: text, mine: false, timestamp: now));
       convo.lastActivityAt = now;
+      if (msg.senderAccountId != _openConversationPeerId) {
+        convo.hasUnread = true;
+        // This is the live (app-open) delivery path -- a push wake's
+        // _onMessage already shows this same notification for the
+        // background case. Without this, the launcher icon's badge
+        // (which Android derives from active notifications, not
+        // anything drawn in-app) would never appear for a message that
+        // happened to arrive while the app was in the foreground.
+        unawaited(showMessageNotification(state.accountId));
+      }
 
       await LocalStateStore.saveProfile(state);
       unawaited(api.deleteMessage(msg.messageId, state.credentials));
