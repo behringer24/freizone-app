@@ -38,8 +38,15 @@ class AccountManager extends ChangeNotifier {
   }
 
   /// Adds a freshly registered/bootstrapped account (see SetupScreen) and
-  /// makes it the active one.
+  /// makes it the active one. Registration always generates a fresh
+  /// random root key (so a fresh account id), so this can't collide with
+  /// an already-connected profile today -- but disposing of any existing
+  /// session at this key first is cheap and keeps this correct once a
+  /// "restore an existing account" flow (recovery seed) exists, which
+  /// would genuinely hit this path.
   Future<void> addProfile(AppState state) async {
+    _sessions[state.accountId]?.dispose();
+
     final session = AppSession(state);
     await session.init();
     _sessions[state.accountId] = session;

@@ -96,6 +96,14 @@ class ApiClient {
 
   // --- Bootstrap / registration / directory ---------------------------------
 
+  /// Public discovery call the setup wizard makes with only a server
+  /// address, before any identity exists, to decide which setup step
+  /// applies next (bootstrap / open / invite / closed).
+  Future<ServerStatus> getServerStatus() async {
+    final resp = await _unauthedRequest('GET', '/v1/server-status', null);
+    return ServerStatus.fromJson(_decodeObject(resp, {200}));
+  }
+
   Future<AccountResponse> bootstrapClaim({
     required String setupToken,
     required Identity identity,

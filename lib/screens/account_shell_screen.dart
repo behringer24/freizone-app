@@ -24,7 +24,10 @@ class AccountShellScreen extends StatelessWidget {
   Future<void> _addAccount(BuildContext context) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => SetupScreen(onRegistered: (state) => manager.addProfile(state)),
+        builder: (_) => SetupScreen(
+          onRegistered: (state) => manager.addProfile(state),
+          existingServers: manager.sessions.map((s) => s.state.server).toList(),
+        ),
       ),
     );
   }
