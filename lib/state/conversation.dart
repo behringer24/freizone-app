@@ -6,31 +6,60 @@ import 'dart:typed_data';
 
 import '../ffi/models.dart';
 import '../util/address_format.dart';
+import 'message_content.dart';
 
 /// One decrypted (or about-to-be-sent) chat line, persisted locally --
-/// the server never stores plaintext or keeps history.
+/// the server never stores plaintext or keeps history. [id] identifies
+/// this message for replies/delete/pin; messages from before those
+/// features existed get one synthesized on load (see fromJson) purely
+/// for local use -- it was never transmitted for them, so nothing else
+/// can reference it, which is fine since delete/pin are local-only and a
+/// reply naturally can't point at a message sent before replies existed.
 class StoredMessage {
   StoredMessage({
+    String? id,
     required this.text,
     required this.mine,
     required this.timestamp,
-  });
+    this.replyToId,
+    this.replyPreviewText,
+    this.replyPreviewMine,
+  }) : id = id ?? generateMessageId();
 
   factory StoredMessage.fromJson(Map<String, dynamic> j) => StoredMessage(
+    id: j['id'] as String? ?? generateMessageId(),
     text: j['text'] as String,
     mine: j['mine'] as bool,
     timestamp: decodeTime(j['timestamp'] as String),
+    replyToId: j['reply_to_id'] as String?,
+    replyPreviewText: j['reply_preview_text'] as String?,
+    replyPreviewMine: j['reply_preview_mine'] as bool?,
   );
 
   Map<String, dynamic> toJson() => {
+    'id': id,
     'text': text,
     'mine': mine,
     'timestamp': encodeTime(timestamp),
+    if (replyToId != null) 'reply_to_id': replyToId,
+    if (replyPreviewText != null) 'reply_preview_text': replyPreviewText,
+    if (replyPreviewMine != null) 'reply_preview_mine': replyPreviewMine,
   };
 
+  final String id;
   final String text;
   final bool mine;
   final DateTime timestamp;
+
+  /// The id of the message this one replies to, if any -- may point at a
+  /// message no longer in local history (deleted, or never received);
+  /// [replyPreviewText]/[replyPreviewMine] are the self-contained
+  /// snapshot to render regardless, see message_content.dart.
+  final String? replyToId;
+  final String? replyPreviewText;
+  final bool? replyPreviewMine;
+
+  bool get isReply => replyToId != null;
 }
 
 /// One peer conversation: who they are (resolved once, cached), and the
@@ -44,7 +73,9 @@ class Conversation {
     List<StoredMessage>? messages,
     DateTime? lastActivityAt,
     this.hasUnread = false,
+    List<String>? pinnedMessageIds,
   }) : messages = messages ?? [],
+       pinnedMessageIds = pinnedMessageIds ?? [],
        lastActivityAt = lastActivityAt ?? DateTime.now().toUtc();
 
   factory Conversation.fromJson(Map<String, dynamic> j) => Conversation(
@@ -59,6 +90,9 @@ class Conversation {
         .toList(),
     lastActivityAt: decodeTime(j['last_activity_at'] as String),
     hasUnread: j['has_unread'] as bool? ?? false,
+    pinnedMessageIds: (j['pinned_message_ids'] as List<dynamic>?)
+        ?.cast<String>()
+        .toList(),
   );
 
   final String peerAccountId;
@@ -73,11 +107,27 @@ class Conversation {
   /// the unread dot in the chat list and the account switcher.
   bool hasUnread;
 
+  /// Locally pinned message ids, oldest-pinned first -- purely local,
+  /// never sent to the peer or the server. The sticky bar in ChatScreen
+  /// shows the most recently pinned one by default, with </> to browse
+  /// the rest.
+  List<String> pinnedMessageIds;
+
   /// The alias if one is set, otherwise the id in its readable,
   /// dash-grouped form (docs/PROTOCOL.md's cosmetic display format).
   String get title => displayName ?? formatAccountIdForDisplay(peerAccountId);
 
   String get lastMessagePreview => messages.isEmpty ? '' : messages.last.text;
+
+  /// Looks up a message by id, or null if it's not (or no longer) in
+  /// local history -- e.g. it was deleted locally, or belongs to the
+  /// other side's history only.
+  StoredMessage? messageById(String id) {
+    for (final m in messages) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
 
   Map<String, dynamic> toJson() => {
     'peer_account_id': peerAccountId,
@@ -88,5 +138,6 @@ class Conversation {
     'messages': messages.map((m) => m.toJson()).toList(),
     'last_activity_at': encodeTime(lastActivityAt),
     'has_unread': hasUnread,
+    if (pinnedMessageIds.isNotEmpty) 'pinned_message_ids': pinnedMessageIds,
   };
 }

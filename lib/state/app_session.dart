@@ -10,7 +10,6 @@
 // screens rebuild via ListenableBuilder, the same primitive already
 // used everywhere else in this codebase.
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -25,6 +24,7 @@ import '../util/address_format.dart';
 import '../util/freizone_address.dart';
 import '../util/server_url.dart';
 import 'conversation.dart';
+import 'message_content.dart';
 import 'local_state.dart';
 
 /// How many one-time prekeys to generate and upload at once, mirroring
@@ -338,7 +338,10 @@ class AppSession extends ChangeNotifier {
         ciphertext: parsed.ciphertext,
       );
       state.sessions[msg.senderAccountId] = dec.session;
-      final text = utf8.decode(dec.plaintext);
+      final content = MessageContent.decode(
+        dec.plaintext,
+        fallbackId: generateMessageId(),
+      );
       final now = DateTime.now().toUtc();
 
       final convo = state.conversations.putIfAbsent(
@@ -346,7 +349,15 @@ class AppSession extends ChangeNotifier {
         () => Conversation(peerAccountId: msg.senderAccountId),
       );
       convo.messages.add(
-        StoredMessage(text: text, mine: false, timestamp: now),
+        StoredMessage(
+          id: content.id,
+          text: content.text,
+          mine: false,
+          timestamp: now,
+          replyToId: content.replyToId,
+          replyPreviewText: content.replyPreview?.text,
+          replyPreviewMine: content.replyPreview?.mine,
+        ),
       );
       convo.lastActivityAt = now;
       if (msg.senderAccountId != _openConversationPeerId) {
@@ -562,9 +573,24 @@ class AppSession extends ChangeNotifier {
   }
 
   /// Encrypts and sends text to peerAccountId's conversation, appending
-  /// it to the persisted history. Throws on failure -- the calling
-  /// screen decides how to surface that (e.g. a SnackBar).
-  Future<void> sendMessage(String peerAccountId, String text) async {
+  /// it to the persisted history. If [replyToId] names a message still in
+  /// local history, a self-contained snapshot of it (text + whether it
+  /// was ours) rides along inside the encrypted content -- so the quote
+  /// still renders for the recipient even if that original message is
+  /// later deleted (locally, on either side) or otherwise unavailable.
+  /// [replyToId] is silently dropped if the message can't be found
+  /// locally anymore (e.g. it was deleted in the time it took to compose
+  /// this reply) -- the calling screen only offers "reply" from a message
+  /// that's currently on screen, so that's expected to be rare, not an
+  /// error worth surfacing.
+  ///
+  /// Throws on failure -- the calling screen decides how to surface that
+  /// (e.g. a SnackBar).
+  Future<void> sendMessage(
+    String peerAccountId,
+    String text, {
+    String? replyToId,
+  }) async {
     final convo = state.conversations[peerAccountId];
     if (convo == null) {
       throw StateError('no conversation for $peerAccountId');
@@ -579,11 +605,23 @@ class AppSession extends ChangeNotifier {
       await LocalStateStore.saveProfile(state);
     }
 
-    final (session, initial) = await _getOrCreateCryptoSession(convo);
-    final enc = core.sessionEncrypt(
-      session: session,
-      plaintext: Uint8List.fromList(utf8.encode(text)),
+    final quoted = replyToId == null ? null : convo.messageById(replyToId);
+    // Flipped relative to our own `quoted.mine`: the recipient reads this
+    // same field as "mine" from *their* perspective, where the roles are
+    // swapped (see message_content.dart).
+    final wirePreview = quoted == null
+        ? null
+        : ReplyPreview(text: quoted.text, mine: !quoted.mine);
+
+    final content = MessageContent(
+      id: generateMessageId(),
+      text: text,
+      replyToId: quoted?.id,
+      replyPreview: wirePreview,
     );
+
+    final (session, initial) = await _getOrCreateCryptoSession(convo);
+    final enc = core.sessionEncrypt(session: session, plaintext: content.encode());
     state.sessions[peerAccountId] = enc.session;
 
     final payload = core.buildEnvelope(
@@ -599,11 +637,53 @@ class AppSession extends ChangeNotifier {
     );
 
     final now = DateTime.now().toUtc();
-    convo.messages.add(StoredMessage(text: text, mine: true, timestamp: now));
+    convo.messages.add(
+      StoredMessage(
+        id: content.id,
+        text: text,
+        mine: true,
+        timestamp: now,
+        replyToId: quoted?.id,
+        replyPreviewText: quoted?.text,
+        replyPreviewMine: quoted?.mine,
+      ),
+    );
     convo.lastActivityAt = now;
     await LocalStateStore.saveProfile(state);
 
     lastError = null;
+    notifyListeners();
+  }
+
+  /// Removes a single message from this device's own history only -- the
+  /// peer's copy and the (already-deleted-from-queue) server side are
+  /// unaffected. A no-op if the id isn't found (already removed).
+  Future<void> deleteMessageLocally(String peerAccountId, String messageId) async {
+    final convo = state.conversations[peerAccountId];
+    if (convo == null) return;
+    convo.messages.removeWhere((m) => m.id == messageId);
+    convo.pinnedMessageIds.remove(messageId);
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+  }
+
+  /// Pins a message locally -- purely a local display preference, never
+  /// sent to the peer or the server. Appending (rather than inserting at
+  /// the front) keeps "most recently pinned" as the natural last element,
+  /// which is what the sticky bar shows by default.
+  Future<void> pinMessage(String peerAccountId, String messageId) async {
+    final convo = state.conversations[peerAccountId];
+    if (convo == null || convo.pinnedMessageIds.contains(messageId)) return;
+    convo.pinnedMessageIds.add(messageId);
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+  }
+
+  Future<void> unpinMessage(String peerAccountId, String messageId) async {
+    final convo = state.conversations[peerAccountId];
+    if (convo == null) return;
+    convo.pinnedMessageIds.remove(messageId);
+    await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
 
