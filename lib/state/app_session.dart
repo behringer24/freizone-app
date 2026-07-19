@@ -41,6 +41,25 @@ class AppSession extends ChangeNotifier {
   late final ApiClient api;
   SseClient? _sse;
 
+  /// Additional ApiClients for federated peers, keyed by their (already
+  /// normalized) server url -- lazily created and reused, since a
+  /// conversation's peer server rarely changes. [api] itself stays the
+  /// one used for anything on this session's own server.
+  final Map<String, ApiClient> _peerApiClients = {};
+
+  /// The ApiClient to use for a peer whose home server is [server] --
+  /// this session's own [api] if null or the same server, otherwise a
+  /// cached (or freshly created) client pointed at that server directly.
+  /// See docs/PROTOCOL.md §9: federation is client-direct, not relayed
+  /// through this session's own server.
+  ApiClient _clientFor(String? server) {
+    if (server == null || sameServer(server, state.server)) return api;
+    return _peerApiClients.putIfAbsent(
+      server,
+      () => ApiClient(baseUrl: server, core: core),
+    );
+  }
+
   bool prekeysReady = false;
   String? lastError;
 
@@ -348,6 +367,12 @@ class AppSession extends ChangeNotifier {
         msg.senderAccountId,
         () => Conversation(peerAccountId: msg.senderAccountId),
       );
+      // Refreshed on every message that carries one (not just the
+      // first), so this self-heals if local state is ever lost -- see
+      // message_content.dart's senderServer.
+      if (content.senderServer != null) {
+        convo.peerServer = content.senderServer;
+      }
       convo.messages.add(
         StoredMessage(
           id: content.id,
@@ -390,10 +415,13 @@ class AppSession extends ChangeNotifier {
   /// uniqueness note) -- either way, the returned id is always the true
   /// full one, verified against the returned device's key chain, never
   /// just echoed back from whatever shorthand was looked up with.
+  /// [apiClient] is [api] for a same-server peer, or one from
+  /// [_clientFor] pointed directly at a federated peer's own server.
   Future<(String accountId, DeviceResponse device)> _resolvePeerDevice(
     String peerIdOrPrefix,
+    ApiClient apiClient,
   ) async {
-    final acc = await api.getAccount(peerIdOrPrefix);
+    final acc = await apiClient.getAccount(peerIdOrPrefix);
     if (!core.verifyAddressId(acc.id, acc.rootPubKey)) {
       throw StateError('peer account id does not match its root key');
     }
@@ -414,6 +442,17 @@ class AppSession extends ChangeNotifier {
     throw StateError('no verifiable active device found for $peerIdOrPrefix');
   }
 
+  /// Whether a and b name the same peer server for the purpose of
+  /// dedup'ing an already-resolved conversation -- both null (or both
+  /// same-server) counts as a match; a prefix is only unique per server
+  /// (docs/PROTOCOL.md), so a lookup must agree on the server too, not
+  /// just the id/prefix, once more than one server is in play.
+  bool _samePeerServer(String? a, String? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    return sameServer(a, b);
+  }
+
   /// Resolves and creates, or returns the already-resolved, Conversation
   /// with peerAddress -- a full Freizone address (`id*server`, `id*local`,
   /// or just a bare id/prefix, see lib/util/freizone_address.dart), so a
@@ -421,43 +460,49 @@ class AppSession extends ChangeNotifier {
   /// same as the canonical form, and may be just the first
   /// [accountIdPrefixLength] characters (unique per server, see
   /// docs/PROTOCOL.md), in which case an already-known conversation
-  /// resolves purely locally, with no network round trip. There's no
-  /// federation yet, so an explicit `*server` that isn't this session's
-  /// own server (or `local`) throws rather than silently either failing
-  /// confusingly or -- worse -- resolving against the wrong account,
-  /// since a prefix is only unique per server, not globally. If
-  /// displayName is given and this is a new conversation, it's set as
-  /// the initial local alias.
+  /// resolves purely locally, with no network round trip. An explicit
+  /// `*server` that isn't this session's own (or `local`) is a federated
+  /// address (docs/PROTOCOL.md §9): resolved and messaged directly
+  /// against that server, not this session's own. If displayName is
+  /// given and this is a new conversation, it's set as the initial local
+  /// alias.
   Future<Conversation> startConversation(
     String peerAddress, {
     String? displayName,
   }) async {
     final parsed = parseFreizoneAddress(peerAddress);
     if (parsed == null) throw StateError('Not a valid Freizone address');
-    if (parsed.server != null && !sameServer(parsed.server!, state.server)) {
-      throw StateError(
-        'This address is on a different server (${parsed.server}) -- not supported yet, no federation.',
-      );
-    }
     final normalized = parsed.idOrPrefix;
 
     final existing = state.conversations[normalized];
-    if (existing != null && existing.peerDeviceId != null) return existing;
+    if (existing != null &&
+        existing.peerDeviceId != null &&
+        _samePeerServer(existing.peerServer, parsed.server)) {
+      return existing;
+    }
 
     if (normalized.length == accountIdPrefixLength) {
       for (final convo in state.conversations.values) {
         if (convo.peerDeviceId != null &&
-            convo.peerAccountId.startsWith(normalized))
+            convo.peerAccountId.startsWith(normalized) &&
+            _samePeerServer(convo.peerServer, parsed.server))
           return convo;
       }
     }
 
-    final (resolvedId, verified) = await _resolvePeerDevice(normalized);
+    final peerApi = _clientFor(parsed.server);
+    final (resolvedId, verified) = await _resolvePeerDevice(
+      normalized,
+      peerApi,
+    );
 
     final convo = state.conversations.putIfAbsent(
       resolvedId,
       () => Conversation(peerAccountId: resolvedId),
     );
+    convo.peerServer = sameServer(parsed.server ?? state.server, state.server)
+        ? null
+        : parsed.server;
     convo.peerDeviceId = verified.deviceId;
     convo.peerDevicePubKey = verified.devicePubKey;
     if (convo.displayName == null &&
@@ -523,7 +568,9 @@ class AppSession extends ChangeNotifier {
     final existing = state.sessions[convo.peerAccountId];
     if (existing != null) return (existing, null);
 
-    final bundle = await api.claimPrekeyBundle(convo.peerDeviceId!);
+    final bundle = await _clientFor(
+      convo.peerServer,
+    ).claimPrekeyBundle(convo.peerDeviceId!);
 
     final dhCert = DHIdentityCertificate(
       accountId: convo.peerAccountId,
@@ -599,7 +646,10 @@ class AppSession extends ChangeNotifier {
       // A conversation that only ever received messages (never started
       // via startConversation) has no resolved peer device yet -- resolve
       // it now, lazily, so replying to whoever messaged first works.
-      final (_, verified) = await _resolvePeerDevice(peerAccountId);
+      final (_, verified) = await _resolvePeerDevice(
+        peerAccountId,
+        _clientFor(convo.peerServer),
+      );
       convo.peerDeviceId = verified.deviceId;
       convo.peerDevicePubKey = verified.devicePubKey;
       await LocalStateStore.saveProfile(state);
@@ -618,6 +668,11 @@ class AppSession extends ChangeNotifier {
       text: text,
       replyToId: quoted?.id,
       replyPreview: wirePreview,
+      // Sent on every cross-server message (not just the first), so the
+      // recipient's knowledge of where to reach us for a reply
+      // self-heals even if their local state is ever lost -- see
+      // message_content.dart.
+      senderServer: convo.peerServer != null ? state.server : null,
     );
 
     final (session, initial) = await _getOrCreateCryptoSession(convo);
@@ -629,12 +684,34 @@ class AppSession extends ChangeNotifier {
       header: enc.header,
       ciphertext: enc.ciphertext,
     );
-    await api.sendMessage(
-      creds: state.credentials,
-      messageId: _randomHex(16),
-      recipientDeviceId: convo.peerDeviceId!,
-      payload: payload,
-    );
+    if (convo.peerServer == null) {
+      await api.sendMessage(
+        creds: state.credentials,
+        messageId: _randomHex(16),
+        recipientDeviceId: convo.peerDeviceId!,
+        payload: payload,
+      );
+    } else {
+      // The recipient's server has no local row for this device, so the
+      // request carries a freshly-signed certificate instead of relying
+      // on one cached at registration time -- see docs/PROTOCOL.md §9.
+      final cert = core.signDeviceCertificate(
+        accountId: state.accountId,
+        deviceId: state.deviceId,
+        devicePub: state.devicePub,
+        issuedAt: DateTime.now().toUtc(),
+        rootPriv: state.rootPriv,
+      );
+      await _clientFor(convo.peerServer).sendFederatedMessage(
+        devicePriv: state.devicePriv,
+        rootPub: state.rootPub,
+        senderAccountId: state.accountId,
+        cert: cert,
+        messageId: _randomHex(16),
+        recipientDeviceId: convo.peerDeviceId!,
+        payload: payload,
+      );
+    }
 
     final now = DateTime.now().toUtc();
     convo.messages.add(
@@ -700,6 +777,9 @@ class AppSession extends ChangeNotifier {
   void dispose() {
     _sse?.close();
     api.close();
+    for (final client in _peerApiClients.values) {
+      client.close();
+    }
     super.dispose();
   }
 }

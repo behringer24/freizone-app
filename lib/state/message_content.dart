@@ -57,12 +57,23 @@ class MessageContent {
     required this.text,
     this.replyToId,
     this.replyPreview,
+    this.senderServer,
   });
 
   final String id;
   final String text;
   final String? replyToId;
   final ReplyPreview? replyPreview;
+
+  /// The sender's own home server, if they're sending cross-server --
+  /// null for an ordinary same-server message. This is how a recipient
+  /// learns where to reach the sender for a reply, since nothing else
+  /// ties an account to a particular hostname (see docs/PROTOCOL.md §9)
+  /// -- deliberately carried here, inside the encrypted content, rather
+  /// than as delivery-layer metadata the server would ever see. Sent on
+  /// *every* cross-server message, not just the first, so a recipient's
+  /// knowledge of it self-heals if local state is ever lost.
+  final String? senderServer;
 
   static const currentVersion = 1;
 
@@ -74,6 +85,7 @@ class MessageContent {
       'attachments': const [],
       if (replyToId != null) 'reply_to': replyToId,
       if (replyPreview != null) 'reply_preview': replyPreview!.toJson(),
+      if (senderServer != null) 'sender_server': senderServer,
     };
     return Uint8List.fromList(utf8.encode(jsonEncode(json)));
   }
@@ -101,6 +113,7 @@ class MessageContent {
             replyPreview: replyPreviewJson == null
                 ? null
                 : ReplyPreview.fromJson(replyPreviewJson as Map<String, dynamic>),
+            senderServer: decoded['sender_server'] as String?,
           );
         }
         if (v is int && v > currentVersion) {

@@ -273,6 +273,57 @@ class ApiClient {
     _checkStatus(resp, {202});
   }
 
+  /// Posts an encrypted message directly to a peer's home server (which
+  /// isn't this ApiClient's own [baseUrl] -- callers construct a second
+  /// instance pointed at the peer's server for this), rather than the
+  /// ordinary same-server [sendMessage] path. See docs/PROTOCOL.md §9:
+  /// the peer's server has no local row for this device, so instead of
+  /// [creds]/a device id it verifies a self-certifying bundle carried
+  /// inline -- [rootPub], [senderAccountId], and a device certificate --
+  /// and the request is signed with Signature-Key-Id set to this
+  /// device's own base64 public key (from [cert]) rather than a
+  /// registered device id, the same self-describing-key convention
+  /// [freizone-gateway](https://github.com/behringer24/freizone-gateway)
+  /// already uses.
+  Future<void> sendFederatedMessage({
+    required Uint8List devicePriv,
+    required Uint8List rootPub,
+    required String senderAccountId,
+    required DeviceCertificate cert,
+    required String messageId,
+    required String recipientDeviceId,
+    required Map<String, dynamic> payload,
+  }) async {
+    final body = {
+      'sender_account_id': senderAccountId,
+      'sender_root_pub_key': encodeB64(rootPub),
+      'sender_device_cert': {
+        'device_id': cert.deviceId,
+        'device_pub_key': encodeB64(cert.devicePubKey),
+        'issued_at': encodeTime(cert.issuedAt),
+        'signature': encodeB64(cert.signature),
+      },
+      'recipient_device_id': recipientDeviceId,
+      'message_id': messageId,
+      'payload': payload,
+    };
+    final bodyBytes = Uint8List.fromList(utf8.encode(json.encode(body)));
+    final keyId = encodeB64(cert.devicePubKey);
+    final headers = core.signHTTPRequest(
+      method: 'POST',
+      path: '/v1/federation/messages',
+      body: bodyBytes,
+      deviceId: keyId,
+      devicePriv: devicePriv,
+    );
+    final req = http.Request('POST', _uri('/v1/federation/messages'));
+    req.headers['Content-Type'] = 'application/json';
+    headers.forEach((key, value) => req.headers[key] = value);
+    req.bodyBytes = bodyBytes;
+    final resp = await http.Response.fromStream(await _http.send(req));
+    _checkStatus(resp, {202});
+  }
+
   Future<List<MessageResponse>> listMessages(DeviceCredentials creds) async {
     final resp = await _signedRequest('GET', '/v1/messages', null, creds);
     _checkStatus(resp, {200});
