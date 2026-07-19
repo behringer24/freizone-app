@@ -56,3 +56,8 @@ native/*_android
 # Firebase config -- operator-specific, not committed. See README.md's
 # "Setting up FCM" section for where to get it.
 /android/app/google-services.json
+
+# Browser "Save As" clutter from viewing design references, not itself
+# a design asset -- keep only the actual gfx/*.png source layers.
+gfx/*.html
+gfx/*_files/
