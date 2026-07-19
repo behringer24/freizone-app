@@ -41,15 +41,22 @@ FreizoneAddress? parseFreizoneAddress(String input) {
 
   final starIndex = trimmed.indexOf('*');
   final idPart = starIndex == -1 ? trimmed : trimmed.substring(0, starIndex);
-  final serverPart = starIndex == -1 ? null : trimmed.substring(starIndex + 1).trim();
+  final serverPart = starIndex == -1
+      ? null
+      : trimmed.substring(starIndex + 1).trim();
 
   final normalizedId = normalizeAccountId(idPart);
   if (normalizedId.isEmpty) return null;
 
-  if (serverPart == null || serverPart.isEmpty || serverPart.toLowerCase() == 'local') {
+  if (serverPart == null ||
+      serverPart.isEmpty ||
+      serverPart.toLowerCase() == 'local') {
     return FreizoneAddress(idOrPrefix: normalizedId);
   }
-  return FreizoneAddress(idOrPrefix: normalizedId, server: normalizeServerUrl(serverPart));
+  return FreizoneAddress(
+    idOrPrefix: normalizedId,
+    server: normalizeServerUrl(serverPart),
+  );
 }
 
 /// Builds the portable address for id@server, e.g.
@@ -74,7 +81,8 @@ const _defaultScheme = 'https://';
 
 String _withoutDefaultScheme(String server) {
   if (server.length > _defaultScheme.length &&
-      server.substring(0, _defaultScheme.length).toLowerCase() == _defaultScheme) {
+      server.substring(0, _defaultScheme.length).toLowerCase() ==
+          _defaultScheme) {
     return server.substring(_defaultScheme.length);
   }
   return server;

@@ -63,7 +63,9 @@ class _InviteScreenState extends State<InviteScreen> {
   Future<void> _share() async {
     setState(() => _sharing = true);
     try {
-      final boundary = _captureKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+      final boundary =
+          _captureKey.currentContext!.findRenderObject()!
+              as RenderRepaintBoundary;
       final image = await boundary.toImage(pixelRatio: 3.0);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
       final dir = await getTemporaryDirectory();
@@ -75,10 +77,14 @@ class _InviteScreenState extends State<InviteScreen> {
           ? 'Join me on Freizone: $server'
           : 'Join me on Freizone: $server (invite code: $_code)';
 
-      await SharePlus.instance.share(ShareParams(text: text, files: [XFile(file.path)]));
+      await SharePlus.instance.share(
+        ShareParams(text: text, files: [XFile(file.path)]),
+      );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: ${describeError(e)}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Share failed: ${describeError(e)}')),
+        );
       }
     } finally {
       if (mounted) setState(() => _sharing = false);
@@ -94,7 +100,12 @@ class _InviteScreenState extends State<InviteScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-          ? Center(child: Padding(padding: const EdgeInsets.all(16), child: Text(_error!)))
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(_error!),
+              ),
+            )
           : SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: Column(
@@ -107,7 +118,10 @@ class _InviteScreenState extends State<InviteScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text('Freizone Invite', style: Theme.of(context).textTheme.headlineSmall),
+                          Text(
+                            'Freizone Invite',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
                           const SizedBox(height: 8),
                           const Text(
                             'Scan this with the Freizone app to join automatically.',
@@ -115,7 +129,10 @@ class _InviteScreenState extends State<InviteScreen> {
                           ),
                           const SizedBox(height: 24),
                           QrImageView(
-                            data: buildInviteUri(server: server, code: _code).toString(),
+                            data: buildInviteUri(
+                              server: server,
+                              code: _code,
+                            ).toString(),
                             size: 260,
                             backgroundColor: Colors.white,
                           ),
@@ -123,7 +140,10 @@ class _InviteScreenState extends State<InviteScreen> {
                           SelectableText(server, textAlign: TextAlign.center),
                           if (_code != null) ...[
                             const SizedBox(height: 4),
-                            SelectableText('Invite code: $_code', textAlign: TextAlign.center),
+                            SelectableText(
+                              'Invite code: $_code',
+                              textAlign: TextAlign.center,
+                            ),
                           ],
                         ],
                       ),
@@ -133,7 +153,11 @@ class _InviteScreenState extends State<InviteScreen> {
                   FilledButton.icon(
                     onPressed: _sharing ? null : _share,
                     icon: _sharing
-                        ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        ? const SizedBox(
+                            height: 16,
+                            width: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : const Icon(Icons.share),
                     label: const Text('Share'),
                   ),

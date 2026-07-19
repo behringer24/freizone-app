@@ -35,8 +35,18 @@ class FreizoneApp extends StatelessWidget {
         final seed = settings.accentPreset.color;
         return MaterialApp(
           title: 'Freizone',
-          theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light)),
-          darkTheme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark)),
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: seed,
+              brightness: Brightness.light,
+            ),
+          ),
+          darkTheme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: seed,
+              brightness: Brightness.dark,
+            ),
+          ),
           themeMode: settings.themeMode,
           home: AppRoot(settings: settings),
         );

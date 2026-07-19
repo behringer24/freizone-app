@@ -32,7 +32,8 @@ class FreizoneCore {
 
   // --- Identity -------------------------------------------------------
 
-  Identity generateIdentity() => Identity.fromJson(_callNoArg(_bindings.generateIdentity));
+  Identity generateIdentity() =>
+      Identity.fromJson(_callNoArg(_bindings.generateIdentity));
 
   bool verifyAddressId(String id, Uint8List rootPub) {
     final data = _call(_bindings.verifyAddressId, {
@@ -71,7 +72,8 @@ class FreizoneCore {
 
   // --- X3DH key material --------------------------------------------------
 
-  X25519KeyPair generateX25519KeyPair() => X25519KeyPair.fromJson(_callNoArg(_bindings.generateX25519KeyPair));
+  X25519KeyPair generateX25519KeyPair() =>
+      X25519KeyPair.fromJson(_callNoArg(_bindings.generateX25519KeyPair));
 
   DHIdentityCertificate signDHIdentityCertificate({
     required String accountId,
@@ -90,7 +92,10 @@ class FreizoneCore {
     return DHIdentityCertificate.fromJson(data);
   }
 
-  bool verifyDHIdentityCertificate(DHIdentityCertificate cert, Uint8List devicePub) {
+  bool verifyDHIdentityCertificate(
+    DHIdentityCertificate cert,
+    Uint8List devicePub,
+  ) {
     final data = _call(_bindings.verifyDHIdentityCertificate, {
       'cert': cert.toJson(),
       'device_pub': encodeB64(devicePub),
@@ -119,7 +124,10 @@ class FreizoneCore {
     return SignedPrekeyCertificate.fromJson(data);
   }
 
-  bool verifySignedPrekeyCertificate(SignedPrekeyCertificate cert, Uint8List devicePub) {
+  bool verifySignedPrekeyCertificate(
+    SignedPrekeyCertificate cert,
+    Uint8List devicePub,
+  ) {
     final data = _call(_bindings.verifySignedPrekeyCertificate, {
       'cert': cert.toJson(),
       'device_pub': encodeB64(devicePub),
@@ -149,7 +157,8 @@ class FreizoneCore {
     final data = _call(_bindings.respondToSession, {
       'local_dh_identity_priv': encodeB64(localDhIdentityPriv),
       'signed_prekey_priv': encodeB64(signedPrekeyPriv),
-      if (oneTimePrekeyPriv != null) 'one_time_prekey_priv': encodeB64(oneTimePrekeyPriv),
+      if (oneTimePrekeyPriv != null)
+        'one_time_prekey_priv': encodeB64(oneTimePrekeyPriv),
       'initial': initial.toJson(),
     });
     return data['session'] as Map<String, dynamic>;
@@ -228,14 +237,20 @@ class FreizoneCore {
       'device_id': deviceId,
       'device_priv': encodeB64(devicePriv),
     });
-    return (data['headers'] as Map<String, dynamic>).map((k, v) => MapEntry(k, v as String));
+    return (data['headers'] as Map<String, dynamic>).map(
+      (k, v) => MapEntry(k, v as String),
+    );
   }
 
   // --- boilerplate ---------------------------------------------------------
 
-  Map<String, dynamic> _callNoArg(Pointer<Utf8> Function() fn) => _decodeEnvelope(fn());
+  Map<String, dynamic> _callNoArg(Pointer<Utf8> Function() fn) =>
+      _decodeEnvelope(fn());
 
-  Map<String, dynamic> _call(Pointer<Utf8> Function(Pointer<Utf8>) fn, Map<String, dynamic> request) {
+  Map<String, dynamic> _call(
+    Pointer<Utf8> Function(Pointer<Utf8>) fn,
+    Map<String, dynamic> request,
+  ) {
     final reqPtr = json.encode(request).toNativeUtf8();
     try {
       return _decodeEnvelope(fn(reqPtr));
@@ -248,7 +263,9 @@ class FreizoneCore {
     try {
       final env = json.decode(resultPtr.toDartString()) as Map<String, dynamic>;
       if (env['ok'] != true) {
-        throw FreizoneCoreException(env['error'] as String? ?? 'unknown native core error');
+        throw FreizoneCoreException(
+          env['error'] as String? ?? 'unknown native core error',
+        );
       }
       return (env['data'] as Map<String, dynamic>?) ?? const {};
     } finally {

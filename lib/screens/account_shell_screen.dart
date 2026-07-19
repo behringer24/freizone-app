@@ -18,12 +18,17 @@ import 'chat_list_screen.dart';
 import 'setup_screen.dart';
 
 class AccountShellScreen extends StatelessWidget {
-  const AccountShellScreen({super.key, required this.manager, required this.settings});
+  const AccountShellScreen({
+    super.key,
+    required this.manager,
+    required this.settings,
+  });
 
   final AccountManager manager;
   final AppSettings settings;
 
-  Color _avatarColor(String seed) => Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
+  Color _avatarColor(String seed) =>
+      Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
   Future<void> _addAccount(BuildContext context) async {
     await Navigator.of(context).push(
@@ -48,8 +53,14 @@ class AccountShellScreen extends StatelessWidget {
           'undone without a recovery seed.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Remove')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -86,8 +97,13 @@ class AccountShellScreen extends StatelessWidget {
                       children: [
                         Center(
                           child: Text(
-                            session.state.accountId.substring(0, 2).toUpperCase(),
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            session.state.accountId
+                                .substring(0, 2)
+                                .toUpperCase(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                         if (session == active)
@@ -95,7 +111,10 @@ class AccountShellScreen extends StatelessWidget {
                             bottom: -4,
                             left: 16,
                             right: 16,
-                            child: Container(height: 3, color: Theme.of(context).colorScheme.primary),
+                            child: Container(
+                              height: 3,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
                           ),
                         if (roleBadgeIcon(session.myRole) case final icon?)
                           Positioned(
@@ -104,10 +123,19 @@ class AccountShellScreen extends StatelessWidget {
                             child: CircleAvatar(
                               radius: 12,
                               backgroundColor: Colors.white,
-                              child: Icon(icon, size: 16, color: Colors.black87),
+                              child: Icon(
+                                icon,
+                                size: 16,
+                                color: Colors.black87,
+                              ),
                             ),
                           ),
-                        if (session.hasAnyUnread) const Positioned(top: -2, right: -2, child: UnreadDot()),
+                        if (session.hasAnyUnread)
+                          const Positioned(
+                            top: -2,
+                            right: -2,
+                            child: UnreadDot(),
+                          ),
                       ],
                     ),
                   ),
@@ -125,9 +153,14 @@ class AccountShellScreen extends StatelessWidget {
                     height: 48,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      border: Border.all(color: Theme.of(context).colorScheme.outline),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
                     ),
-                    child: Icon(Icons.add, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    child: Icon(
+                      Icons.add,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ),
@@ -145,11 +178,14 @@ class AccountShellScreen extends StatelessWidget {
       builder: (context, _) {
         final active = manager.active;
         if (active == null) {
-          return const Scaffold(body: Center(child: Text('No account selected')));
+          return const Scaffold(
+            body: Center(child: Text('No account selected')),
+          );
         }
         return ChatListScreen(
           session: active,
           settings: settings,
+          manager: manager,
           appBarBottom: PreferredSize(
             preferredSize: const Size.fromHeight(72),
             child: _buildSwitcher(context, active),

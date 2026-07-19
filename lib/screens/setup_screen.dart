@@ -118,8 +118,14 @@ class _SetupScreenState extends State<SetupScreen> {
           'separate account -- it does not reconnect to the existing one.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Continue anyway')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Continue anyway'),
+          ),
         ],
       ),
     );
@@ -219,7 +225,10 @@ class _SetupScreenState extends State<SetupScreen> {
                 inviteCode: _tokenController.text.trim(),
               );
             case _WizardStep.openRegister:
-              await api.registerAccount(identity: candidateIdentity, cert: candidateCert);
+              await api.registerAccount(
+                identity: candidateIdentity,
+                cert: candidateCert,
+              );
             case _WizardStep.address:
             case _WizardStep.closed:
               return;
@@ -227,7 +236,8 @@ class _SetupScreenState extends State<SetupScreen> {
           identity = candidateIdentity;
           break;
         } on ApiException catch (e) {
-          if (e.code == 'id_prefix_taken' && attempt < maxIdentityAttempts) continue;
+          if (e.code == 'id_prefix_taken' && attempt < maxIdentityAttempts)
+            continue;
           rethrow;
         }
       }
@@ -270,20 +280,28 @@ class _SetupScreenState extends State<SetupScreen> {
           decoration: const InputDecoration(
             labelText: 'Server address',
             hintText: 'chat.example.org',
-            helperText: 'No https:// or port needed if the server uses the standard ones',
+            helperText:
+                'No https:// or port needed if the server uses the standard ones',
           ),
           enabled: !_submitting,
           onSubmitted: (_) => _checkServer(),
         ),
         const SizedBox(height: 24),
         if (_error != null) ...[
-          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          Text(
+            _error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
           const SizedBox(height: 16),
         ],
         ElevatedButton(
           onPressed: _submitting ? null : _checkServer,
           child: _submitting
-              ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
               : const Text('Continue'),
         ),
         const SizedBox(height: 12),
@@ -302,7 +320,8 @@ class _SetupScreenState extends State<SetupScreen> {
     final String buttonLabel;
     switch (_step) {
       case _WizardStep.bootstrap:
-        description = 'Nobody has set this server up yet. Enter the one-time setup token '
+        description =
+            'Nobody has set this server up yet. Enter the one-time setup token '
             'printed in its logs to become its first admin.';
         tokenLabel = 'Setup token';
         buttonLabel = 'Bootstrap';
@@ -311,11 +330,13 @@ class _SetupScreenState extends State<SetupScreen> {
         tokenLabel = 'Invite code';
         buttonLabel = 'Register';
       case _WizardStep.openRegister:
-        description = 'This server is open for registration -- no invite needed.';
+        description =
+            'This server is open for registration -- no invite needed.';
         tokenLabel = null;
         buttonLabel = 'Create account';
       case _WizardStep.closed:
-        description = 'This server has registration blocked -- no new accounts can be created '
+        description =
+            'This server has registration blocked -- no new accounts can be created '
             'right now, not even with an invite code. Ask its admin to open registration, or try '
             'a different server.';
         tokenLabel = null;
@@ -339,14 +360,21 @@ class _SetupScreenState extends State<SetupScreen> {
         ],
         const SizedBox(height: 24),
         if (_error != null) ...[
-          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          Text(
+            _error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
           const SizedBox(height: 16),
         ],
         if (_step != _WizardStep.closed)
           ElevatedButton(
             onPressed: _submitting ? null : _submit,
             child: _submitting
-                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : Text(buttonLabel),
           ),
       ],
@@ -363,10 +391,15 @@ class _SetupScreenState extends State<SetupScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(widget.isAddingAccount ? 'Add Account' : 'Freizone -- Setup'),
+          title: Text(
+            widget.isAddingAccount ? 'Add Account' : 'Freizone -- Setup',
+          ),
           leading: onAddressStep
               ? null
-              : IconButton(icon: const Icon(Icons.arrow_back), onPressed: _goToAddressStep),
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: _goToAddressStep,
+                ),
         ),
         body: Padding(
           padding: const EdgeInsets.all(16),

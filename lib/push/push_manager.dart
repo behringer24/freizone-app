@@ -1,18 +1,27 @@
-// Wires UnifiedPush (Android-only for this milestone -- see README) to a
-// generic "you have mail" system notification. Deliberately minimal: the
-// wake payload the server sends carries no content or metadata (see
+// Wires two independent, non-interfering push-wake mechanisms to a
+// generic "you have mail" system notification: UnifiedPush (self-hosted,
+// no Google dependency) and Firebase Cloud Messaging (via
+// freizone-gateway, see ../../../freizone-gateway). Which one a given
+// account registers is controlled by AppSettings.pushPreference, not by
+// which one(s) happen to be installed/available on the device -- see
+// registerForPush. Deliberately minimal either way: the wake payload the
+// server/gateway sends carries no content or metadata (see
 // docs/PROTOCOL.md in freizone-server), so there's nothing to decrypt or
 // preview here -- tapping the notification just opens the app, which
 // syncs over the normal authenticated API exactly as if it had just
 // reconnected.
 //
-// The UnifiedPush plugin may relaunch this app's Dart entrypoint in a
-// background isolate (`--unifiedpush-bg`) purely to deliver a wake while
-// the app isn't otherwise running, so every callback below is a
-// top-level function with no captured app/UI state -- each one loads
-// whatever it needs directly from LocalStateStore.
+// Both mechanisms can relaunch this app's Dart entrypoint in a
+// background isolate to deliver a wake while the app isn't otherwise
+// running (UnifiedPush via `--unifiedpush-bg`, FCM via its own
+// plugin-internal background dispatch -- these are two distinct
+// mechanisms, not the same one), so every callback below is a top-level
+// function with no captured app/UI state -- each one loads whatever it
+// needs directly from LocalStateStore/AppSettings.
 import 'dart:developer' as developer;
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
@@ -24,7 +33,15 @@ import '../util/address_format.dart';
 
 const _messagesChannelId = 'freizone_messages';
 
-final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+/// Fixed id for the generic FCM wake notification -- unlike UnifiedPush's
+/// per-account notifications (see _notificationIdFor), FCM issues one
+/// token per app install, not per account, so a wake can't be attributed
+/// to a specific account (see registerForPush's doc comment). One shared
+/// notification for "something needs syncing" is the honest UI for that.
+const _fcmNotificationId = 0x46434d; // 'FCM' in hex, arbitrary but stable
+
+final FlutterLocalNotificationsPlugin _notifications =
+    FlutterLocalNotificationsPlugin();
 
 /// One id per account, shared between showing and clearing its
 /// notification so they always refer to the same one.
@@ -37,12 +54,14 @@ int _notificationIdFor(String instance) => instance.hashCode & 0x7fffffff;
 Future<void> clearMessageNotification(String instance) =>
     _notifications.cancel(id: _notificationIdFor(instance));
 
-/// Sets up UnifiedPush + local-notification plumbing. Call once, as early
-/// as possible (before runApp), so it also runs correctly when the
-/// background isolate variant starts up.
+/// Sets up UnifiedPush + Firebase + local-notification plumbing. Call
+/// once, as early as possible (before runApp), so it also runs correctly
+/// when either background-isolate variant starts up.
 Future<void> initPush() async {
   await _notifications.initialize(
-    settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')),
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    ),
   );
   await UnifiedPush.initialize(
     onNewEndpoint: _onNewEndpoint,
@@ -51,26 +70,62 @@ Future<void> initPush() async {
     onMessage: _onMessage,
     onTempUnavailable: _onTempUnavailable,
   );
+
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_firebaseBackgroundHandler);
+  FirebaseMessaging.onMessage.listen(_onFcmMessage);
+  FirebaseMessaging.instance.onTokenRefresh.listen(_onFcmTokenRefresh);
 }
 
 /// Requests the Android 13+ notification permission. Only ever called
-/// from the foreground app (never the `--unifiedpush-bg` headless run,
-/// which never builds the UI that calls this) -- call once per app
-/// launch, not once per account, since the permission is app-wide.
+/// from the foreground app (never a background isolate, which never
+/// builds the UI that calls this) -- call once per app launch, not once
+/// per account, since the permission is app-wide.
 Future<void> requestNotificationPermission() async {
   await _notifications
-      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >()
       ?.requestNotificationsPermission();
 }
 
-/// Registers one account's device for push using the user's current or
-/// default UnifiedPush distributor, under a UnifiedPush "instance" named
-/// after its account id -- one app can hold several such instances at
-/// once, one per connected account, each getting its own wake endpoint.
-/// Safe to call on every app start. Returns false if no distributor is
-/// installed -- the caller can use that to show a one-time hint; chat
-/// keeps working via SSE either way.
-Future<bool> registerForPush(ApiClient api, String instance) async {
+/// Registers one account's device for push, per the current
+/// [PushPreference] (see lib/state/app_settings.dart):
+///
+/// - `automatic` (default): prefer UnifiedPush if a distributor is
+///   installed -- no Google dependency needed when the user already has
+///   one. Falls back to FCM only if none is found, which is the whole
+///   reason the FCM path exists at all.
+/// - `forceFcm` / `forceUnifiedPush`: pin to one mechanism regardless of
+///   what's installed, mainly so the other can be tested deliberately
+///   (e.g. verifying the FCM path without uninstalling UnifiedPush/ntfy).
+///   `forceUnifiedPush` does not silently fall back to FCM if no
+///   distributor is found -- an explicit force shouldn't quietly do the
+///   other thing.
+///
+/// Safe to call on every app start and again whenever the preference
+/// changes (see AppSession.reregisterPush). Returns false only if no
+/// mechanism could be registered at all -- the caller uses that to show
+/// a one-time hint; chat keeps working via SSE either way.
+Future<bool> registerForPush(
+  ApiClient api,
+  String instance,
+  DeviceCredentials creds,
+) async {
+  final settings = await AppSettings.load();
+
+  switch (settings.pushPreference) {
+    case PushPreference.forceUnifiedPush:
+      return _registerUnifiedPush(api, instance);
+    case PushPreference.forceFcm:
+      return _registerFcm(api, creds);
+    case PushPreference.automatic:
+      if (await _registerUnifiedPush(api, instance)) return true;
+      return _registerFcm(api, creds);
+  }
+}
+
+Future<bool> _registerUnifiedPush(ApiClient api, String instance) async {
   final hasDistributor = await UnifiedPush.tryUseCurrentOrDefaultDistributor();
   if (!hasDistributor) return false;
 
@@ -82,6 +137,18 @@ Future<bool> registerForPush(ApiClient api, String instance) async {
   }
   await UnifiedPush.register(instance: instance, vapid: vapidKey);
   return true;
+}
+
+Future<bool> _registerFcm(ApiClient api, DeviceCredentials creds) async {
+  try {
+    final token = await FirebaseMessaging.instance.getToken();
+    if (token == null) return false;
+    await api.setPushTarget(creds: creds, platform: 'fcm', token: token);
+    return true;
+  } catch (e) {
+    developer.log('registering fcm push target failed: $e', name: 'push');
+    return false;
+  }
 }
 
 Future<void> _onNewEndpoint(PushEndpoint endpoint, String instance) async {
@@ -130,6 +197,51 @@ Future<void> _onMessage(PushMessage message, String instance) async {
   await showMessageNotification(instance);
 }
 
+/// FCM's background-dispatch entrypoint: the plugin invokes this in its
+/// own background isolate/Flutter engine, entirely separate from
+/// UnifiedPush's `--unifiedpush-bg` relaunch of this app's own main() --
+/// so Firebase needs its own initializeApp() call here too, since
+/// nothing from a normal app start can be assumed to have run first.
+@pragma('vm:entry-point')
+Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  await showGenericWakeNotification();
+}
+
+Future<void> _onFcmMessage(RemoteMessage message) async {
+  await showGenericWakeNotification();
+}
+
+/// FCM tokens rotate occasionally; re-push the fresh one to every
+/// account currently relying on FCM for its wake -- there's no
+/// per-account FCM token to update individually (see registerForPush's
+/// doc comment), so this re-derives "is this account using FCM right
+/// now" the same way registerForPush decides it in the first place,
+/// rather than tracking that separately.
+Future<void> _onFcmTokenRefresh(String newToken) async {
+  final settings = await AppSettings.load();
+  if (settings.pushPreference == PushPreference.forceUnifiedPush) return;
+
+  for (final state in await LocalStateStore.listProfiles()) {
+    if (settings.pushPreference == PushPreference.automatic &&
+        await UnifiedPush.tryUseCurrentOrDefaultDistributor()) {
+      continue; // this account would register UnifiedPush, not FCM
+    }
+    final api = ApiClient(baseUrl: state.server, core: FreizoneCore());
+    try {
+      await api.setPushTarget(
+        creds: state.credentials,
+        platform: 'fcm',
+        token: newToken,
+      );
+    } catch (e) {
+      developer.log('updating fcm push target failed: $e', name: 'push');
+    } finally {
+      api.close();
+    }
+  }
+}
+
 /// Shows (or updates, if one's already up) instance's "new message(s)"
 /// notification -- which is also what makes Android show a badge on the
 /// launcher icon, since that's derived from active notifications, not
@@ -149,21 +261,32 @@ Future<void> showMessageNotification(String instance) async {
   // one update, not a stack of duplicates, and so clearMessageNotification
   // cancels the right one.
   final body = 'New message(s) for ${formatAccountIdForDisplay(instance)}';
+  await _show(id: _notificationIdFor(instance), body: body);
+}
 
-  // Loaded fresh each time, same reasoning as above: this can run in the
-  // background-isolate case, so nothing from a live AppSettings instance
-  // can be captured/injected here.
+/// The FCM counterpart to [showMessageNotification]: shown when a wake
+/// arrives with no way to know which account it was for (see
+/// registerForPush's doc comment on FCM's one-token-per-install model),
+/// so the text can't name a specific account the way UnifiedPush's can.
+Future<void> showGenericWakeNotification() =>
+    _show(id: _fcmNotificationId, body: 'New message(s)');
+
+Future<void> _show({required int id, required String body}) async {
+  // Loaded fresh each time, same reasoning as above: this can run in a
+  // background isolate, so nothing from a live AppSettings instance can
+  // be captured/injected here.
   final settings = await AppSettings.load();
 
   await _notifications.show(
-    id: _notificationIdFor(instance),
+    id: id,
     title: 'Freizone',
     body: body,
     notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         _messagesChannelId,
         'Messages',
-        channelDescription: 'Notifies about new messages while the app is closed',
+        channelDescription:
+            'Notifies about new messages while the app is closed',
         importance: Importance.high,
         priority: Priority.high,
         playSound: settings.notificationSound,

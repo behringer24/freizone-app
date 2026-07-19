@@ -55,14 +55,18 @@ class SseClient {
       throw ApiException(streamed.statusCode, null, body);
     }
 
-    final lines = streamed.stream.transform(utf8.decoder).transform(const LineSplitter());
+    final lines = streamed.stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter());
     final completer = Completer<void>();
     _lineSub = lines.listen(
       (line) {
         if (!line.startsWith('data: ')) return;
         final data = line.substring('data: '.length);
         try {
-          onMessage(MessageResponse.fromJson(json.decode(data) as Map<String, dynamic>));
+          onMessage(
+            MessageResponse.fromJson(json.decode(data) as Map<String, dynamic>),
+          );
         } catch (_) {
           // Malformed line; ignore and keep the connection open.
         }

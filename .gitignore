@@ -52,3 +52,7 @@ native/native
 native/native.exe
 native/*.test
 native/*_android
+
+# Firebase config -- operator-specific, not committed. See README.md's
+# "Setting up FCM" section for where to get it.
+/android/app/google-services.json

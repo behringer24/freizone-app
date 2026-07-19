@@ -43,7 +43,8 @@ class AccountManager extends ChangeNotifier {
       sessions[profile.accountId] = session;
     }
     final remembered = settings.lastActiveAccountId;
-    final initialActiveId = (remembered != null && sessions.containsKey(remembered))
+    final initialActiveId =
+        (remembered != null && sessions.containsKey(remembered))
         ? remembered
         : (profiles.isEmpty ? null : profiles.first.accountId);
     return AccountManager._(sessions, initialActiveId, settings);
@@ -94,7 +95,8 @@ class AccountManager extends ChangeNotifier {
   }
 
   void setActive(String accountId) {
-    if (!_sessions.containsKey(accountId) || _activeAccountId == accountId) return;
+    if (!_sessions.containsKey(accountId) || _activeAccountId == accountId)
+      return;
     _activeAccountId = accountId;
     unawaited(_settings.setLastActiveAccountId(accountId));
     // registrationPolicy (and myRole) are only fetched once at session

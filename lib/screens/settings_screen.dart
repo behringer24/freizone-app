@@ -3,17 +3,40 @@
 // vibration. See lib/state/app_settings.dart for persistence.
 import 'package:flutter/material.dart';
 
+import '../state/account_manager.dart';
 import '../state/app_settings.dart';
 
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, required this.settings});
+  const SettingsScreen({
+    super.key,
+    required this.settings,
+    required this.manager,
+  });
 
   final AppSettings settings;
 
+  /// Needed only to re-trigger push registration on every live account
+  /// immediately after the user changes [PushPreference] below, rather
+  /// than waiting for the next app start.
+  final AccountManager manager;
+
+  Future<void> _setPushPreference(PushPreference value) async {
+    await settings.setPushPreference(value);
+    for (final session in manager.sessions) {
+      await session.reregisterPush();
+    }
+  }
+
   Widget _sectionTitle(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
-        child: Text(text, style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary)),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
+    child: Text(
+      text,
+      style: TextStyle(
+        fontWeight: FontWeight.bold,
+        color: Theme.of(context).colorScheme.primary,
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -32,9 +55,18 @@ class SettingsScreen extends StatelessWidget {
                 },
                 child: Column(
                   children: const [
-                    RadioListTile<ThemeMode>(value: ThemeMode.system, title: Text('Follow system')),
-                    RadioListTile<ThemeMode>(value: ThemeMode.light, title: Text('Light')),
-                    RadioListTile<ThemeMode>(value: ThemeMode.dark, title: Text('Dark')),
+                    RadioListTile<ThemeMode>(
+                      value: ThemeMode.system,
+                      title: Text('Follow system'),
+                    ),
+                    RadioListTile<ThemeMode>(
+                      value: ThemeMode.light,
+                      title: Text('Light'),
+                    ),
+                    RadioListTile<ThemeMode>(
+                      value: ThemeMode.dark,
+                      title: Text('Dark'),
+                    ),
                   ],
                 ),
               ),
@@ -61,9 +93,28 @@ class SettingsScreen extends StatelessWidget {
               _sectionTitle(context, 'Addresses'),
               SwitchListTile(
                 title: const Text('Copy short address by default'),
-                subtitle: const Text('Use the 5-character id prefix instead of the full id for "Copy my address"'),
+                subtitle: const Text(
+                  'Use the 5-character id prefix instead of the full id for "Copy my address"',
+                ),
                 value: settings.copyIdShort,
                 onChanged: settings.setCopyIdShort,
+              ),
+              const Divider(height: 32),
+              _sectionTitle(context, 'Push delivery'),
+              RadioGroup<PushPreference>(
+                groupValue: settings.pushPreference,
+                onChanged: (pref) {
+                  if (pref != null) _setPushPreference(pref);
+                },
+                child: Column(
+                  children: [
+                    for (final pref in PushPreference.values)
+                      RadioListTile<PushPreference>(
+                        value: pref,
+                        title: Text(pref.label),
+                      ),
+                  ],
+                ),
               ),
               const Divider(height: 32),
               _sectionTitle(context, 'Notifications'),
@@ -86,7 +137,11 @@ class SettingsScreen extends StatelessWidget {
 }
 
 class _AccentSwatch extends StatelessWidget {
-  const _AccentSwatch({required this.preset, required this.selected, required this.onTap});
+  const _AccentSwatch({
+    required this.preset,
+    required this.selected,
+    required this.onTap,
+  });
 
   final AccentPreset preset;
   final bool selected;
@@ -105,7 +160,12 @@ class _AccentSwatch extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: preset.color,
-            border: selected ? Border.all(color: Theme.of(context).colorScheme.onSurface, width: 3) : null,
+            border: selected
+                ? Border.all(
+                    color: Theme.of(context).colorScheme.onSurface,
+                    width: 3,
+                  )
+                : null,
           ),
           child: selected ? const Icon(Icons.check, color: Colors.white) : null,
         ),

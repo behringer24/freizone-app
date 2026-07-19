@@ -1,4 +1,4 @@
-package com.behringer24.freizone
+package de.behringer24.freizone
 
 import io.flutter.embedding.android.FlutterActivity
 

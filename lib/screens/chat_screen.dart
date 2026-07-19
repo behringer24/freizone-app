@@ -49,9 +49,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _messageController.clear();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Send failed: ${describeError(e)}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Send failed: ${describeError(e)}')),
+        );
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -97,13 +97,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Sets, changes, or removes this conversation's local alias -- purely
   /// local, never sent to the peer or the server.
-  Future<void> _showRenameDialog(BuildContext context, Conversation convo) async {
+  Future<void> _showRenameDialog(
+    BuildContext context,
+    Conversation convo,
+  ) async {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => _RenameDialog(initialName: convo.displayName ?? ''),
     );
     if (result == null) return; // cancelled
-    await widget.session.setDisplayName(widget.peerAccountId, result.isEmpty ? null : result);
+    await widget.session.setDisplayName(
+      widget.peerAccountId,
+      result.isEmpty ? null : result,
+    );
   }
 
   @override
@@ -286,9 +292,18 @@ class _RenameDialogState extends State<_RenameDialog> {
         decoration: const InputDecoration(labelText: 'Name'),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
-        TextButton(onPressed: () => Navigator.of(context).pop(''), child: const Text('Remove')),
-        FilledButton(onPressed: () => Navigator.of(context).pop(_controller.text), child: const Text('Save')),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(''),
+          child: const Text('Remove'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text('Save'),
+        ),
       ],
     );
   }

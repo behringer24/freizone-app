@@ -62,9 +62,9 @@ class _AdminScreenState extends State<AdminScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _policy = previous);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to change policy: ${describeError(e)}')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to change policy: ${describeError(e)}')),
+      );
     }
   }
 
@@ -79,7 +79,12 @@ class _AdminScreenState extends State<AdminScreen> {
               onPressed: () => Navigator.of(context).pop(r),
               child: Row(
                 children: [
-                  SizedBox(width: 24, child: r == account.role ? const Icon(Icons.check, size: 18) : null),
+                  SizedBox(
+                    width: 24,
+                    child: r == account.role
+                        ? const Icon(Icons.check, size: 18)
+                        : null,
+                  ),
                   Text(r[0].toUpperCase() + r.substring(1)),
                 ],
               ),
@@ -92,7 +97,9 @@ class _AdminScreenState extends State<AdminScreen> {
       await widget.session.setAccountRole(account.id, role);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to set role: ${describeError(e)}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to set role: ${describeError(e)}')),
+        );
       }
     }
   }
@@ -106,7 +113,9 @@ class _AdminScreenState extends State<AdminScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: ${describeError(e)}')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed: ${describeError(e)}')));
       }
     }
   }
@@ -120,8 +129,14 @@ class _AdminScreenState extends State<AdminScreen> {
           'This permanently removes ${formatAccountIdForDisplay(account.id)} and its message queue -- this cannot be undone.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Delete')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
         ],
       ),
     );
@@ -130,9 +145,9 @@ class _AdminScreenState extends State<AdminScreen> {
       await widget.session.deleteAccount(account.id);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to delete: ${describeError(e)}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete: ${describeError(e)}')),
+        );
       }
     }
   }
@@ -158,10 +173,18 @@ class _AdminScreenState extends State<AdminScreen> {
         children: [
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-            child: Text('Registration policy', style: TextStyle(fontWeight: FontWeight.bold)),
+            child: Text(
+              'Registration policy',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
           for (final (value, title, subtitle) in options)
-            RadioListTile<String>(value: value, title: Text(title), subtitle: Text(subtitle), enabled: _isAdmin),
+            RadioListTile<String>(
+              value: value,
+              title: Text(title),
+              subtitle: Text(subtitle),
+              enabled: _isAdmin,
+            ),
         ],
       ),
     );
@@ -198,7 +221,10 @@ class _AdminScreenState extends State<AdminScreen> {
               },
               itemBuilder: (context) => [
                 const PopupMenuItem(value: 'set_role', child: Text('Set role')),
-                PopupMenuItem(value: 'toggle_block', child: Text(blocked ? 'Unblock' : 'Block')),
+                PopupMenuItem(
+                  value: 'toggle_block',
+                  child: Text(blocked ? 'Unblock' : 'Block'),
+                ),
                 const PopupMenuItem(value: 'delete', child: Text('Delete')),
               ],
             )
@@ -213,7 +239,12 @@ class _AdminScreenState extends State<AdminScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-          ? Center(child: Padding(padding: const EdgeInsets.all(16), child: Text(_error!)))
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(_error!),
+              ),
+            )
           : ListenableBuilder(
               listenable: widget.session,
               builder: (context, _) {
@@ -224,9 +255,13 @@ class _AdminScreenState extends State<AdminScreen> {
                     const Divider(height: 32),
                     const Padding(
                       padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
-                      child: Text('Users', style: TextStyle(fontWeight: FontWeight.bold)),
+                      child: Text(
+                        'Users',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
-                    for (final account in accounts) _buildAccountRow(context, account),
+                    for (final account in accounts)
+                      _buildAccountRow(context, account),
                   ],
                 );
               },
