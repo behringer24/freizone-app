@@ -11,10 +11,11 @@ import 'package:flutter/material.dart';
 import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
-import '../util/address_format.dart';
+import '../util/avatar_color.dart';
 import '../util/role_icon.dart';
 import '../util/unread_dot.dart';
 import 'chat_list_screen.dart';
+import 'profile_screen.dart';
 import 'setup_screen.dart';
 
 class AccountShellScreen extends StatelessWidget {
@@ -26,9 +27,6 @@ class AccountShellScreen extends StatelessWidget {
 
   final AccountManager manager;
   final AppSettings settings;
-
-  Color _avatarColor(String seed) =>
-      Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
   Future<void> _addAccount(BuildContext context) async {
     await Navigator.of(context).push(
@@ -42,31 +40,12 @@ class AccountShellScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _confirmRemove(BuildContext context, AppSession session) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Remove account?'),
-        content: Text(
-          'This removes ${formatAccountIdForDisplay(session.state.accountId)} from this device -- its message '
-          'history and keys are deleted locally. The account itself still exists on the server. This cannot be '
-          'undone without a recovery seed.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Remove'),
-          ),
-        ],
+  void _openProfile(BuildContext context, AppSession session) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(session: session, manager: manager),
       ),
     );
-    if (confirmed == true) {
-      await manager.removeProfile(session.state.accountId);
-    }
   }
 
   Widget _buildSwitcher(BuildContext context, AppSession? active) {
@@ -88,10 +67,10 @@ class AccountShellScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 child: GestureDetector(
                   onTap: () => manager.setActive(session.state.accountId),
-                  onLongPress: () => _confirmRemove(context, session),
+                  onLongPress: () => _openProfile(context, session),
                   child: CircleAvatar(
                     radius: 24,
-                    backgroundColor: _avatarColor(session.state.accountId),
+                    backgroundColor: avatarColorFor(session.state.accountId),
                     child: Stack(
                       clipBehavior: Clip.none,
                       children: [

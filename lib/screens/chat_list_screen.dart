@@ -12,6 +12,7 @@ import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../util/address_format.dart';
+import '../util/avatar_color.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/unread_dot.dart';
@@ -44,9 +45,6 @@ class ChatListScreen extends StatelessWidget {
   /// derives from the topmost AppBar) correct and avoids a seam/gap
   /// between the two.
   final PreferredSizeWidget? appBarBottom;
-
-  Color _avatarColor(String seed) =>
-      Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
   String _initials(Conversation c) {
     final source = c.title;
@@ -312,7 +310,7 @@ class ChatListScreen extends StatelessWidget {
                   clipBehavior: Clip.none,
                   children: [
                     CircleAvatar(
-                      backgroundColor: _avatarColor(convo.peerAccountId),
+                      backgroundColor: avatarColorFor(convo.peerAccountId),
                       child: Text(
                         _initials(convo),
                         style: const TextStyle(color: Colors.white),
