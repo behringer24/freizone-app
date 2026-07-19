@@ -30,6 +30,24 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
   bool _sending = false;
 
+  /// Set while composing a reply -- shown as a preview bar above the
+  /// input, cleared once the reply is sent or dismissed.
+  StoredMessage? _replyingTo;
+
+  /// Index into a conversation's pinned ids *reversed* (so 0 is always
+  /// the most recently pinned) -- clamped against the current list on
+  /// every build, so it never needs resetting when pins are added or
+  /// removed elsewhere.
+  int _pinnedIndex = 0;
+
+  /// Stable per-message keys, reused across rebuilds, so a quote tap or
+  /// the pinned bar can scroll to a message that isn't necessarily near
+  /// the bottom of the list.
+  final _messageKeys = <String, GlobalKey>{};
+
+  GlobalKey _keyFor(String messageId) =>
+      _messageKeys.putIfAbsent(messageId, () => GlobalKey());
+
   Color _avatarColor(String seed) =>
       Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
@@ -45,8 +63,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
     setState(() => _sending = true);
     try {
-      await widget.session.sendMessage(widget.peerAccountId, text);
+      await widget.session.sendMessage(
+        widget.peerAccountId,
+        text,
+        replyToId: _replyingTo?.id,
+      );
       _messageController.clear();
+      setState(() => _replyingTo = null);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -63,6 +86,98 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!_scrollController.hasClients) return;
       _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
     });
+  }
+
+  void _scrollToMessage(String messageId) {
+    final ctx = _messageKeys[messageId]?.currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+      alignment: 0.5,
+    );
+  }
+
+  /// Long-press menu for a single message bubble: reply, pin/unpin (both
+  /// purely local except reply, whose reference rides along inside the
+  /// next message sent), or delete from this device only.
+  Future<void> _showMessageActions(
+    BuildContext context,
+    Conversation convo,
+    StoredMessage message,
+  ) async {
+    final isPinned = convo.pinnedMessageIds.contains(message.id);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.reply),
+              title: const Text('Reply'),
+              onTap: () => Navigator.of(context).pop('reply'),
+            ),
+            ListTile(
+              leading: Icon(
+                isPinned ? Icons.push_pin_outlined : Icons.push_pin,
+              ),
+              title: Text(isPinned ? 'Unpin' : 'Pin'),
+              onTap: () => Navigator.of(context).pop(isPinned ? 'unpin' : 'pin'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete for me'),
+              onTap: () => Navigator.of(context).pop('delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == null || !context.mounted) return;
+
+    switch (action) {
+      case 'reply':
+        setState(() => _replyingTo = message);
+        break;
+      case 'pin':
+        await widget.session.pinMessage(widget.peerAccountId, message.id);
+        break;
+      case 'unpin':
+        await widget.session.unpinMessage(widget.peerAccountId, message.id);
+        break;
+      case 'delete':
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Delete message?'),
+            content: const Text(
+              'This removes the message from this device only -- it stays '
+              'for the other person, and this cannot be undone.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                ),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed == true) {
+          await widget.session.deleteMessageLocally(
+            widget.peerAccountId,
+            message.id,
+          );
+        }
+        break;
+    }
   }
 
   String _dayLabel(DateTime day) {
@@ -90,7 +205,19 @@ class _ChatScreenState extends State<ChatScreen> {
         items.add(_DateDivider(label: _dayLabel(day)));
         lastDay = day;
       }
-      items.add(_MessageBubble(message: m, timeLabel: _timeLabel(m.timestamp)));
+      items.add(
+        _MessageBubble(
+          key: _keyFor(m.id),
+          message: m,
+          timeLabel: _timeLabel(m.timestamp),
+          peerTitle: convo.title,
+          isPinned: convo.pinnedMessageIds.contains(m.id),
+          onLongPress: () => _showMessageActions(context, convo, m),
+          onTapQuote: m.replyToId == null
+              ? null
+              : () => _scrollToMessage(m.replyToId!),
+        ),
+      );
     }
     return items;
   }
@@ -184,74 +311,189 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListenableBuilder(
-              listenable: widget.session,
-              builder: (context, _) {
-                final convo = widget.session.conversation(
-                  widget.peerAccountId,
-                )!;
-                final items = _buildItems(context, convo);
-                _scrollToBottom();
-                return ListView(
+      body: ListenableBuilder(
+        listenable: widget.session,
+        builder: (context, _) {
+          final convo = widget.session.conversation(widget.peerAccountId)!;
+          final items = _buildItems(context, convo);
+          _scrollToBottom();
+          return Column(
+            children: [
+              if (convo.pinnedMessageIds.isNotEmpty)
+                _buildPinnedBar(context, convo),
+              Expanded(
+                child: ListView(
                   controller: _scrollController,
                   padding: const EdgeInsets.all(8),
                   children: items,
-                );
-              },
+                ),
+              ),
+              if (_replyingTo != null)
+                _buildReplyComposerBar(context, convo, _replyingTo!),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _messageController,
+                          decoration: InputDecoration(
+                            hintText: 'Message',
+                            filled: true,
+                            fillColor: colorScheme.surfaceContainerHighest,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                              borderSide: BorderSide.none,
+                            ),
+                          ),
+                          minLines: 1,
+                          maxLines: 5,
+                          textCapitalization: TextCapitalization.sentences,
+                          onChanged: (_) => setState(() {}),
+                          onSubmitted: (_) => _send(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      CircleAvatar(
+                        radius: 24,
+                        backgroundColor:
+                            _messageController.text.trim().isEmpty
+                            ? colorScheme.surfaceContainerHighest
+                            : colorScheme.primary,
+                        child: IconButton(
+                          icon: Icon(
+                            Icons.send,
+                            color: _messageController.text.trim().isEmpty
+                                ? colorScheme.onSurfaceVariant
+                                : colorScheme.onPrimary,
+                          ),
+                          onPressed: _sending ? null : _send,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// The sticky "pinned message(s)" bar -- not part of the scrollable
+  /// message list, so it stays put while the list scrolls beneath it.
+  /// Shows the most recently pinned message by default (index 0 of the
+  /// reversed list), with </> to browse the rest when there's more than
+  /// one.
+  Widget _buildPinnedBar(BuildContext context, Conversation convo) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final ids = convo.pinnedMessageIds.reversed.toList();
+    final idx = _pinnedIndex.clamp(0, ids.length - 1);
+    final pinned = convo.messageById(ids[idx]);
+
+    return Material(
+      color: colorScheme.surfaceContainerHigh,
+      child: InkWell(
+        onTap: pinned == null ? null : () => _scrollToMessage(pinned.id),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            children: [
+              Icon(Icons.push_pin, size: 16, color: colorScheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  pinned?.text ?? 'Pinned message no longer available',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              if (ids.length > 1) ...[
+                IconButton(
+                  icon: const Icon(Icons.chevron_left, size: 20),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () =>
+                      setState(() => _pinnedIndex = (idx - 1) % ids.length),
+                ),
+                Text(
+                  '${idx + 1}/${ids.length}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right, size: 20),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () =>
+                      setState(() => _pinnedIndex = (idx + 1) % ids.length),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The "replying to ..." preview shown above the input while composing
+  /// a reply -- tapping the close icon cancels it without sending.
+  Widget _buildReplyComposerBar(
+    BuildContext context,
+    Conversation convo,
+    StoredMessage replyingTo,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 3,
+            height: 32,
+            color: colorScheme.primary,
+            margin: const EdgeInsets.only(right: 8),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  replyingTo.mine ? 'Replying to yourself' : 'Replying to ${convo.title}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: colorScheme.primary,
+                  ),
+                ),
+                Text(
+                  replyingTo.text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
             ),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: InputDecoration(
-                        hintText: 'Message',
-                        filled: true,
-                        fillColor: colorScheme.surfaceContainerHighest,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide.none,
-                        ),
-                      ),
-                      minLines: 1,
-                      maxLines: 5,
-                      textCapitalization: TextCapitalization.sentences,
-                      onChanged: (_) => setState(() {}),
-                      onSubmitted: (_) => _send(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  CircleAvatar(
-                    radius: 24,
-                    backgroundColor: _messageController.text.trim().isEmpty
-                        ? colorScheme.surfaceContainerHighest
-                        : colorScheme.primary,
-                    child: IconButton(
-                      icon: Icon(
-                        Icons.send,
-                        color: _messageController.text.trim().isEmpty
-                            ? colorScheme.onSurfaceVariant
-                            : colorScheme.onPrimary,
-                      ),
-                      onPressed: _sending ? null : _send,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            onPressed: () => setState(() => _replyingTo = null),
           ),
         ],
       ),
@@ -333,54 +575,134 @@ class _DateDivider extends StatelessWidget {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message, required this.timeLabel});
+  const _MessageBubble({
+    super.key,
+    required this.message,
+    required this.timeLabel,
+    required this.peerTitle,
+    required this.isPinned,
+    required this.onLongPress,
+    this.onTapQuote,
+  });
 
   final StoredMessage message;
   final String timeLabel;
+
+  /// The peer's display title, used to label a quoted message that was
+  /// theirs ("Replying to X" reads the same way the composer bar does).
+  final String peerTitle;
+  final bool isPinned;
+  final VoidCallback onLongPress;
+
+  /// Scrolls to the quoted original, if this message is a reply and its
+  /// target is still in local history -- null (and the quote becomes
+  /// untappable) otherwise.
+  final VoidCallback? onTapQuote;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final mine = message.mine;
+    final onBubble = mine ? colorScheme.onPrimary : colorScheme.onSurface;
 
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
-        margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: mine
-              ? colorScheme.primary
-              : colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(mine ? 16 : 4),
-            bottomRight: Radius.circular(mine ? 4 : 16),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisSize: MainAxisSize.min,
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: Stack(
+          clipBehavior: Clip.none,
           children: [
-            Text(
-              message.text,
-              style: TextStyle(
-                color: mine ? colorScheme.onPrimary : colorScheme.onSurface,
+            Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.75,
+              ),
+              margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+              decoration: BoxDecoration(
+                color: mine
+                    ? colorScheme.primary
+                    : colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(mine ? 16 : 4),
+                  bottomRight: Radius.circular(mine ? 4 : 16),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (message.isReply)
+                    GestureDetector(
+                      onTap: onTapQuote,
+                      child: Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: onBubble.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border(
+                            left: BorderSide(color: onBubble, width: 3),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              message.replyPreviewMine == true
+                                  ? 'You'
+                                  : peerTitle,
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                                color: onBubble,
+                              ),
+                            ),
+                            Text(
+                              message.replyPreviewText ?? '',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: onBubble.withValues(alpha: 0.8),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  Text(message.text, style: TextStyle(color: onBubble)),
+                  const SizedBox(height: 2),
+                  Text(
+                    timeLabel,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: onBubble.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 2),
-            Text(
-              timeLabel,
-              style: TextStyle(
-                fontSize: 11,
-                color: (mine ? colorScheme.onPrimary : colorScheme.onSurface)
-                    .withValues(alpha: 0.7),
+            if (isPinned)
+              Positioned(
+                top: -4,
+                right: mine ? null : -4,
+                left: mine ? -4 : null,
+                child: Icon(
+                  Icons.push_pin,
+                  size: 21,
+                  color: colorScheme.primary,
+                ),
               ),
-            ),
           ],
         ),
       ),
