@@ -9,11 +9,11 @@
 // domain, or an IP[:port] for local/dev servers -- since it's the same
 // grammar either way.
 //
-// No federation yet (see freizone-server's own README), so a parsed
-// address whose server doesn't match the one being resolved against
-// isn't something a caller can act on today -- that's a deliberate
-// FreizoneAddress.server != null check left to the caller (AppSession),
-// not something this purely-cosmetic parsing layer decides.
+// A parsed address whose server doesn't match the one being resolved
+// against is what AppSession.startConversation uses to route the send
+// through a federated (cross-server) path instead of the local one --
+// that decision is deliberately left to the caller, not something this
+// purely-cosmetic parsing layer makes itself.
 import 'address_format.dart';
 import 'server_url.dart';
 
@@ -74,12 +74,20 @@ FreizoneAddress? parseFreizoneAddress(String input) {
 /// scheme like "http://" stays visible, since that's the one case
 /// actually worth flagging.
 String buildFreizoneAddress({required String id, required String server}) {
-  return '${formatAccountIdForDisplay(id)}*${_withoutDefaultScheme(server)}';
+  return '${formatAccountIdForDisplay(id)}*${withoutDefaultScheme(server)}';
 }
 
 const _defaultScheme = 'https://';
 
-String _withoutDefaultScheme(String server) {
+/// Strips a leading "https://" -- the assumed-by-default scheme
+/// everywhere a server address is entered or displayed (normalizeServerUrl
+/// adds it right back if missing). A non-default scheme like "http://",
+/// used by local/dev/test servers, is left visible, since that's the one
+/// case actually worth flagging. Shared by [buildFreizoneAddress] and the
+/// QR invite URIs (lib/util/invite_uri.dart), so a scanned/typed address
+/// never shows a redundant "https://" any more than an email address
+/// shows its protocol.
+String withoutDefaultScheme(String server) {
   if (server.length > _defaultScheme.length &&
       server.substring(0, _defaultScheme.length).toLowerCase() ==
           _defaultScheme) {

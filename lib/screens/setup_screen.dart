@@ -21,6 +21,7 @@ import '../state/local_state.dart';
 import '../util/errors.dart';
 import '../util/invite_uri.dart';
 import '../util/server_url.dart';
+import '../widgets/qr_scan_button.dart';
 import 'qr_scan_screen.dart';
 
 enum _WizardStep { address, bootstrap, invite, openRegister, closed }
@@ -275,16 +276,30 @@ class _SetupScreenState extends State<SetupScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(
-          controller: _serverController,
-          decoration: const InputDecoration(
-            labelText: 'Server address',
-            hintText: 'chat.example.org',
-            helperText:
-                'No https:// or port needed if the server uses the standard ones',
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _serverController,
+                decoration: const InputDecoration(
+                  labelText: 'Server address',
+                  hintText: 'chat.example.org',
+                ),
+                enabled: !_submitting,
+                onSubmitted: (_) => _checkServer(),
+              ),
+            ),
+            const SizedBox(width: 12),
+            QrScanButton(onPressed: _submitting ? null : _scanQr),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'No https:// or port needed if the server uses the standard ones',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
-          enabled: !_submitting,
-          onSubmitted: (_) => _checkServer(),
         ),
         const SizedBox(height: 24),
         if (_error != null) ...[
@@ -303,12 +318,6 @@ class _SetupScreenState extends State<SetupScreen> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Continue'),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: _submitting ? null : _scanQr,
-          icon: const Icon(Icons.qr_code_scanner),
-          label: const Text('Scan QR code'),
         ),
       ],
     );
