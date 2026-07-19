@@ -13,7 +13,10 @@ import '../net/api_client.dart';
 
 String describeError(Object e) {
   if (e is ApiException) return e.message;
-  if (e is SocketException || e is http.ClientException || e is HandshakeException || e is TimeoutException) {
+  if (e is SocketException ||
+      e is http.ClientException ||
+      e is HandshakeException ||
+      e is TimeoutException) {
     return 'Server not reachable. Check the server address and your connection.';
   }
   return '$e';

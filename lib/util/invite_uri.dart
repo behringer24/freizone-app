@@ -17,16 +17,23 @@ Uri buildInviteUri({required String server, String? code}) {
   return Uri(
     scheme: 'freizone',
     host: 'join',
-    queryParameters: {'server': server, if (code != null && code.isNotEmpty) 'code': code},
+    queryParameters: {
+      'server': server,
+      if (code != null && code.isNotEmpty) 'code': code,
+    },
   );
 }
 
 /// Returns null if raw isn't a recognizable `freizone://join` invite URI.
 InviteUri? parseInviteUri(String raw) {
   final uri = Uri.tryParse(raw.trim());
-  if (uri == null || uri.scheme != 'freizone' || uri.host != 'join') return null;
+  if (uri == null || uri.scheme != 'freizone' || uri.host != 'join')
+    return null;
   final server = uri.queryParameters['server'];
   if (server == null || server.isEmpty) return null;
   final code = uri.queryParameters['code'];
-  return InviteUri(server: server, code: (code == null || code.isEmpty) ? null : code);
+  return InviteUri(
+    server: server,
+    code: (code == null || code.isEmpty) ? null : code,
+  );
 }

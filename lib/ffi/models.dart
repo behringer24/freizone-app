@@ -27,13 +27,13 @@ class Identity {
   });
 
   factory Identity.fromJson(Map<String, dynamic> j) => Identity(
-        accountId: j['account_id'] as String,
-        rootPub: decodeB64(j['root_pub'] as String),
-        rootPriv: decodeB64(j['root_priv'] as String),
-        deviceId: j['device_id'] as String,
-        devicePub: decodeB64(j['device_pub'] as String),
-        devicePriv: decodeB64(j['device_priv'] as String),
-      );
+    accountId: j['account_id'] as String,
+    rootPub: decodeB64(j['root_pub'] as String),
+    rootPriv: decodeB64(j['root_priv'] as String),
+    deviceId: j['device_id'] as String,
+    devicePub: decodeB64(j['device_pub'] as String),
+    devicePriv: decodeB64(j['device_priv'] as String),
+  );
 
   final String accountId;
   final Uint8List rootPub;
@@ -54,7 +54,8 @@ class DeviceCertificate {
     required this.signature,
   });
 
-  factory DeviceCertificate.fromJson(Map<String, dynamic> j) => DeviceCertificate(
+  factory DeviceCertificate.fromJson(Map<String, dynamic> j) =>
+      DeviceCertificate(
         accountId: j['account_id'] as String,
         deviceId: j['device_id'] as String,
         devicePubKey: decodeB64(j['device_pub_key'] as String),
@@ -63,12 +64,12 @@ class DeviceCertificate {
       );
 
   Map<String, dynamic> toJson() => {
-        'account_id': accountId,
-        'device_id': deviceId,
-        'device_pub_key': encodeB64(devicePubKey),
-        'issued_at': encodeTime(issuedAt),
-        'signature': encodeB64(signature),
-      };
+    'account_id': accountId,
+    'device_id': deviceId,
+    'device_pub_key': encodeB64(devicePubKey),
+    'issued_at': encodeTime(issuedAt),
+    'signature': encodeB64(signature),
+  };
 
   final String accountId;
   final String deviceId;
@@ -88,7 +89,8 @@ class DHIdentityCertificate {
     required this.signature,
   });
 
-  factory DHIdentityCertificate.fromJson(Map<String, dynamic> j) => DHIdentityCertificate(
+  factory DHIdentityCertificate.fromJson(Map<String, dynamic> j) =>
+      DHIdentityCertificate(
         accountId: j['account_id'] as String,
         deviceId: j['device_id'] as String,
         dhPubKey: decodeB64(j['dh_pub_key'] as String),
@@ -97,12 +99,12 @@ class DHIdentityCertificate {
       );
 
   Map<String, dynamic> toJson() => {
-        'account_id': accountId,
-        'device_id': deviceId,
-        'dh_pub_key': encodeB64(dhPubKey),
-        'issued_at': encodeTime(issuedAt),
-        'signature': encodeB64(signature),
-      };
+    'account_id': accountId,
+    'device_id': deviceId,
+    'dh_pub_key': encodeB64(dhPubKey),
+    'issued_at': encodeTime(issuedAt),
+    'signature': encodeB64(signature),
+  };
 
   final String accountId;
   final String deviceId;
@@ -124,7 +126,8 @@ class SignedPrekeyCertificate {
     required this.signature,
   });
 
-  factory SignedPrekeyCertificate.fromJson(Map<String, dynamic> j) => SignedPrekeyCertificate(
+  factory SignedPrekeyCertificate.fromJson(Map<String, dynamic> j) =>
+      SignedPrekeyCertificate(
         accountId: j['account_id'] as String,
         deviceId: j['device_id'] as String,
         keyId: j['key_id'] as int,
@@ -135,14 +138,14 @@ class SignedPrekeyCertificate {
       );
 
   Map<String, dynamic> toJson() => {
-        'account_id': accountId,
-        'device_id': deviceId,
-        'key_id': keyId,
-        'dh_identity_pub_key': encodeB64(dhIdentityPubKey),
-        'prekey_pub_key': encodeB64(prekeyPubKey),
-        'issued_at': encodeTime(issuedAt),
-        'signature': encodeB64(signature),
-      };
+    'account_id': accountId,
+    'device_id': deviceId,
+    'key_id': keyId,
+    'dh_identity_pub_key': encodeB64(dhIdentityPubKey),
+    'prekey_pub_key': encodeB64(prekeyPubKey),
+    'issued_at': encodeTime(issuedAt),
+    'signature': encodeB64(signature),
+  };
 
   final String accountId;
   final String deviceId;
@@ -159,9 +162,9 @@ class X25519KeyPair {
   X25519KeyPair({required this.pub, required this.priv});
 
   factory X25519KeyPair.fromJson(Map<String, dynamic> j) => X25519KeyPair(
-        pub: decodeB64(j['pub'] as String),
-        priv: decodeB64(j['priv'] as String),
-      );
+    pub: decodeB64(j['pub'] as String),
+    priv: decodeB64(j['priv'] as String),
+  );
 
   final Uint8List pub;
   final Uint8List priv;
@@ -179,12 +182,13 @@ class RemoteBundle {
   });
 
   Map<String, dynamic> toJson() => {
-        'dh_identity_pub': encodeB64(dhIdentityPub),
-        'signed_prekey_id': signedPrekeyId,
-        'signed_prekey_pub': encodeB64(signedPrekeyPub),
-        if (oneTimePrekeyId != null) 'one_time_prekey_id': oneTimePrekeyId,
-        if (oneTimePrekeyPub != null) 'one_time_prekey_pub': encodeB64(oneTimePrekeyPub!),
-      };
+    'dh_identity_pub': encodeB64(dhIdentityPub),
+    'signed_prekey_id': signedPrekeyId,
+    'signed_prekey_pub': encodeB64(signedPrekeyPub),
+    if (oneTimePrekeyId != null) 'one_time_prekey_id': oneTimePrekeyId,
+    if (oneTimePrekeyPub != null)
+      'one_time_prekey_pub': encodeB64(oneTimePrekeyPub!),
+  };
 
   final Uint8List dhIdentityPub;
   final int signedPrekeyId;
@@ -205,18 +209,18 @@ class InitialMessage {
   });
 
   factory InitialMessage.fromJson(Map<String, dynamic> j) => InitialMessage(
-        senderDhIdentityPub: decodeB64(j['sender_dh_identity_pub'] as String),
-        senderEphemeralPub: decodeB64(j['sender_ephemeral_pub'] as String),
-        signedPrekeyId: j['signed_prekey_id'] as int,
-        oneTimePrekeyId: j['one_time_prekey_id'] as int?,
-      );
+    senderDhIdentityPub: decodeB64(j['sender_dh_identity_pub'] as String),
+    senderEphemeralPub: decodeB64(j['sender_ephemeral_pub'] as String),
+    signedPrekeyId: j['signed_prekey_id'] as int,
+    oneTimePrekeyId: j['one_time_prekey_id'] as int?,
+  );
 
   Map<String, dynamic> toJson() => {
-        'sender_dh_identity_pub': encodeB64(senderDhIdentityPub),
-        'sender_ephemeral_pub': encodeB64(senderEphemeralPub),
-        'signed_prekey_id': signedPrekeyId,
-        if (oneTimePrekeyId != null) 'one_time_prekey_id': oneTimePrekeyId,
-      };
+    'sender_dh_identity_pub': encodeB64(senderDhIdentityPub),
+    'sender_ephemeral_pub': encodeB64(senderEphemeralPub),
+    'signed_prekey_id': signedPrekeyId,
+    if (oneTimePrekeyId != null) 'one_time_prekey_id': oneTimePrekeyId,
+  };
 
   final Uint8List senderDhIdentityPub;
   final Uint8List senderEphemeralPub;
@@ -229,16 +233,16 @@ class RatchetHeader {
   RatchetHeader({required this.dhPub, required this.pn, required this.n});
 
   factory RatchetHeader.fromJson(Map<String, dynamic> j) => RatchetHeader(
-        dhPub: decodeB64(j['dh_pub'] as String),
-        pn: j['pn'] as int,
-        n: j['n'] as int,
-      );
+    dhPub: decodeB64(j['dh_pub'] as String),
+    pn: j['pn'] as int,
+    n: j['n'] as int,
+  );
 
   Map<String, dynamic> toJson() => {
-        'dh_pub': encodeB64(dhPub),
-        'pn': pn,
-        'n': n,
-      };
+    'dh_pub': encodeB64(dhPub),
+    'pn': pn,
+    'n': n,
+  };
 
   final Uint8List dhPub;
   final int pn;
@@ -256,7 +260,8 @@ typedef RatchetSessionJson = Map<String, dynamic>;
 class InitiateSessionResult {
   InitiateSessionResult({required this.session, required this.initial});
 
-  factory InitiateSessionResult.fromJson(Map<String, dynamic> j) => InitiateSessionResult(
+  factory InitiateSessionResult.fromJson(Map<String, dynamic> j) =>
+      InitiateSessionResult(
         session: j['session'] as Map<String, dynamic>,
         initial: InitialMessage.fromJson(j['initial'] as Map<String, dynamic>),
       );
@@ -268,13 +273,17 @@ class InitiateSessionResult {
 /// Result of FreizoneCore.sessionEncrypt: the updated session (to
 /// persist) plus the header/ciphertext to send.
 class EncryptResult {
-  EncryptResult({required this.session, required this.header, required this.ciphertext});
+  EncryptResult({
+    required this.session,
+    required this.header,
+    required this.ciphertext,
+  });
 
   factory EncryptResult.fromJson(Map<String, dynamic> j) => EncryptResult(
-        session: j['session'] as Map<String, dynamic>,
-        header: RatchetHeader.fromJson(j['header'] as Map<String, dynamic>),
-        ciphertext: decodeB64(j['ciphertext'] as String),
-      );
+    session: j['session'] as Map<String, dynamic>,
+    header: RatchetHeader.fromJson(j['header'] as Map<String, dynamic>),
+    ciphertext: decodeB64(j['ciphertext'] as String),
+  );
 
   final RatchetSessionJson session;
   final RatchetHeader header;
@@ -287,9 +296,9 @@ class DecryptResult {
   DecryptResult({required this.session, required this.plaintext});
 
   factory DecryptResult.fromJson(Map<String, dynamic> j) => DecryptResult(
-        session: j['session'] as Map<String, dynamic>,
-        plaintext: decodeB64(j['plaintext'] as String),
-      );
+    session: j['session'] as Map<String, dynamic>,
+    plaintext: decodeB64(j['plaintext'] as String),
+  );
 
   final RatchetSessionJson session;
   final Uint8List plaintext;
@@ -298,13 +307,19 @@ class DecryptResult {
 /// Result of FreizoneCore.parseEnvelope: a message's header/ciphertext,
 /// plus X3DH InitialMessage fields if this was a session's first message.
 class ParsedEnvelope {
-  ParsedEnvelope({required this.header, required this.ciphertext, this.initial});
+  ParsedEnvelope({
+    required this.header,
+    required this.ciphertext,
+    this.initial,
+  });
 
   factory ParsedEnvelope.fromJson(Map<String, dynamic> j) => ParsedEnvelope(
-        header: RatchetHeader.fromJson(j['header'] as Map<String, dynamic>),
-        ciphertext: decodeB64(j['ciphertext'] as String),
-        initial: j['initial'] == null ? null : InitialMessage.fromJson(j['initial'] as Map<String, dynamic>),
-      );
+    header: RatchetHeader.fromJson(j['header'] as Map<String, dynamic>),
+    ciphertext: decodeB64(j['ciphertext'] as String),
+    initial: j['initial'] == null
+        ? null
+        : InitialMessage.fromJson(j['initial'] as Map<String, dynamic>),
+  );
 
   final RatchetHeader header;
   final Uint8List ciphertext;

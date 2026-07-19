@@ -31,12 +31,16 @@ class ApiException implements Exception {
   final String message;
 
   @override
-  String toString() => 'ApiException($statusCode${code != null ? ', $code' : ''}): $message';
+  String toString() =>
+      'ApiException($statusCode${code != null ? ', $code' : ''}): $message';
 }
 
 class ApiClient {
-  ApiClient({required this.baseUrl, required this.core, http.Client? httpClient})
-      : _http = httpClient ?? http.Client();
+  ApiClient({
+    required this.baseUrl,
+    required this.core,
+    http.Client? httpClient,
+  }) : _http = httpClient ?? http.Client();
 
   final String baseUrl;
   final FreizoneCore core;
@@ -48,7 +52,11 @@ class ApiClient {
     try {
       final body = json.decode(resp.body) as Map<String, dynamic>;
       final err = body['error'] as Map<String, dynamic>?;
-      throw ApiException(resp.statusCode, err?['code'] as String?, err?['message'] as String? ?? resp.body);
+      throw ApiException(
+        resp.statusCode,
+        err?['code'] as String?,
+        err?['message'] as String? ?? resp.body,
+      );
     } on ApiException {
       rethrow;
     } catch (_) {
@@ -66,7 +74,11 @@ class ApiClient {
     if (!okStatuses.contains(resp.statusCode)) _throwError(resp);
   }
 
-  Future<http.Response> _unauthedRequest(String method, String path, Map<String, dynamic>? body) async {
+  Future<http.Response> _unauthedRequest(
+    String method,
+    String path,
+    Map<String, dynamic>? body,
+  ) async {
     final req = http.Request(method, _uri(path));
     req.headers['Content-Type'] = 'application/json';
     if (body != null) req.body = json.encode(body);
@@ -79,7 +91,9 @@ class ApiClient {
     Map<String, dynamic>? body,
     DeviceCredentials creds,
   ) async {
-    final bodyBytes = body == null ? Uint8List(0) : Uint8List.fromList(utf8.encode(json.encode(body)));
+    final bodyBytes = body == null
+        ? Uint8List(0)
+        : Uint8List.fromList(utf8.encode(json.encode(body)));
     final headers = core.signHTTPRequest(
       method: method,
       path: path,
@@ -171,7 +185,41 @@ class ApiClient {
   /// Clears this device's push subscription (e.g. the distributor
   /// unregistered it).
   Future<void> clearPushEndpoint(DeviceCredentials creds) async {
-    final resp = await _signedRequest('PUT', '/v1/devices/${creds.deviceId}/push-endpoint', {}, creds);
+    final resp = await _signedRequest(
+      'PUT',
+      '/v1/devices/${creds.deviceId}/push-endpoint',
+      {},
+      creds,
+    );
+    _checkStatus(resp, {200});
+  }
+
+  /// Registers this device's FCM/APNs push target -- the counterpart to
+  /// [setPushEndpoint] for delivery through a freizone-gateway instead of
+  /// UnifiedPush. Registering one clears the other server-side; a device
+  /// uses exactly one wake mechanism at a time.
+  Future<void> setPushTarget({
+    required DeviceCredentials creds,
+    required String platform,
+    required String token,
+  }) async {
+    final resp = await _signedRequest(
+      'PUT',
+      '/v1/devices/${creds.deviceId}/push-target',
+      {'platform': platform, 'token': token},
+      creds,
+    );
+    _checkStatus(resp, {200});
+  }
+
+  /// Clears this device's push target.
+  Future<void> clearPushTarget(DeviceCredentials creds) async {
+    final resp = await _signedRequest(
+      'PUT',
+      '/v1/devices/${creds.deviceId}/push-target',
+      {},
+      creds,
+    );
     _checkStatus(resp, {200});
   }
 
@@ -189,7 +237,8 @@ class ApiClient {
       {
         if (dhIdentityCert != null) 'dh_identity_cert': dhIdentityCert.toJson(),
         'signed_prekey': signedPrekey.toJson(),
-        if (oneTimePrekeys.isNotEmpty) 'one_time_prekeys': oneTimePrekeys.map((k) => k.toJson()).toList(),
+        if (oneTimePrekeys.isNotEmpty)
+          'one_time_prekeys': oneTimePrekeys.map((k) => k.toJson()).toList(),
       },
       creds,
     );
@@ -200,7 +249,11 @@ class ApiClient {
   /// from deviceId's bundle. Unauthenticated -- see docs/PROTOCOL.md's
   /// note on this endpoint's trust model.
   Future<PrekeyBundleResponse> claimPrekeyBundle(String deviceId) async {
-    final resp = await _unauthedRequest('POST', '/v1/devices/$deviceId/prekey-bundle', null);
+    final resp = await _unauthedRequest(
+      'POST',
+      '/v1/devices/$deviceId/prekey-bundle',
+      null,
+    );
     return PrekeyBundleResponse.fromJson(_decodeObject(resp, {200}));
   }
 
@@ -212,12 +265,11 @@ class ApiClient {
     required String recipientDeviceId,
     required Map<String, dynamic> payload,
   }) async {
-    final resp = await _signedRequest(
-      'POST',
-      '/v1/messages',
-      {'message_id': messageId, 'recipient_device_id': recipientDeviceId, 'payload': payload},
-      creds,
-    );
+    final resp = await _signedRequest('POST', '/v1/messages', {
+      'message_id': messageId,
+      'recipient_device_id': recipientDeviceId,
+      'payload': payload,
+    }, creds);
     _checkStatus(resp, {202});
   }
 
@@ -225,11 +277,18 @@ class ApiClient {
     final resp = await _signedRequest('GET', '/v1/messages', null, creds);
     _checkStatus(resp, {200});
     final list = json.decode(resp.body) as List<dynamic>;
-    return list.map((e) => MessageResponse.fromJson(e as Map<String, dynamic>)).toList();
+    return list
+        .map((e) => MessageResponse.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<void> deleteMessage(String messageId, DeviceCredentials creds) async {
-    final resp = await _signedRequest('DELETE', '/v1/messages/$messageId', null, creds);
+    final resp = await _signedRequest(
+      'DELETE',
+      '/v1/messages/$messageId',
+      null,
+      creds,
+    );
     _checkStatus(resp, {200});
   }
 
@@ -238,49 +297,87 @@ class ApiClient {
   /// Lists every registered account. Admin or moderator only -- a 403
   /// (surfaced as an [ApiException] with statusCode 403) means the caller
   /// has neither role, which is also how the app discovers this.
-  Future<List<AdminAccountSummary>> listAccounts(DeviceCredentials creds) async {
+  Future<List<AdminAccountSummary>> listAccounts(
+    DeviceCredentials creds,
+  ) async {
     final resp = await _signedRequest('GET', '/v1/admin/accounts', null, creds);
     _checkStatus(resp, {200});
     final list = json.decode(resp.body) as List<dynamic>;
-    return list.map((e) => AdminAccountSummary.fromJson(e as Map<String, dynamic>)).toList();
+    return list
+        .map((e) => AdminAccountSummary.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   /// Grants or revokes admin/moderator status. Admin only.
-  Future<void> setAccountRole(DeviceCredentials creds, String accountId, String role) async {
-    final resp = await _signedRequest('POST', '/v1/admin/accounts/$accountId/role', {'role': role}, creds);
+  Future<void> setAccountRole(
+    DeviceCredentials creds,
+    String accountId,
+    String role,
+  ) async {
+    final resp = await _signedRequest(
+      'POST',
+      '/v1/admin/accounts/$accountId/role',
+      {'role': role},
+      creds,
+    );
     _checkStatus(resp, {200});
   }
 
   /// Temporarily disables an account -- it can no longer authenticate.
   /// Admin only.
   Future<void> blockAccount(DeviceCredentials creds, String accountId) async {
-    final resp = await _signedRequest('POST', '/v1/admin/accounts/$accountId/block', null, creds);
+    final resp = await _signedRequest(
+      'POST',
+      '/v1/admin/accounts/$accountId/block',
+      null,
+      creds,
+    );
     _checkStatus(resp, {200});
   }
 
   /// Restores a previously blocked account. Admin only.
   Future<void> unblockAccount(DeviceCredentials creds, String accountId) async {
-    final resp = await _signedRequest('POST', '/v1/admin/accounts/$accountId/unblock', null, creds);
+    final resp = await _signedRequest(
+      'POST',
+      '/v1/admin/accounts/$accountId/unblock',
+      null,
+      creds,
+    );
     _checkStatus(resp, {200});
   }
 
   /// Permanently deletes an account. Admin only, irreversible.
   Future<void> deleteAccount(DeviceCredentials creds, String accountId) async {
-    final resp = await _signedRequest('DELETE', '/v1/admin/accounts/$accountId', null, creds);
+    final resp = await _signedRequest(
+      'DELETE',
+      '/v1/admin/accounts/$accountId',
+      null,
+      creds,
+    );
     _checkStatus(resp, {200});
   }
 
   /// Returns the current registration policy ("open", "invite", or
   /// "closed"). Admin or moderator.
   Future<String> getRegistrationPolicy(DeviceCredentials creds) async {
-    final resp = await _signedRequest('GET', '/v1/admin/registration-policy', null, creds);
+    final resp = await _signedRequest(
+      'GET',
+      '/v1/admin/registration-policy',
+      null,
+      creds,
+    );
     return _decodeObject(resp, {200})['policy'] as String;
   }
 
   /// Changes the registration policy (persisted -- survives a restart).
   /// Admin only.
-  Future<void> setRegistrationPolicy(DeviceCredentials creds, String policy) async {
-    final resp = await _signedRequest('PUT', '/v1/admin/registration-policy', {'policy': policy}, creds);
+  Future<void> setRegistrationPolicy(
+    DeviceCredentials creds,
+    String policy,
+  ) async {
+    final resp = await _signedRequest('PUT', '/v1/admin/registration-policy', {
+      'policy': policy,
+    }, creds);
     _checkStatus(resp, {200});
   }
 

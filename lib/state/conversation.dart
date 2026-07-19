@@ -10,19 +10,23 @@ import '../util/address_format.dart';
 /// One decrypted (or about-to-be-sent) chat line, persisted locally --
 /// the server never stores plaintext or keeps history.
 class StoredMessage {
-  StoredMessage({required this.text, required this.mine, required this.timestamp});
+  StoredMessage({
+    required this.text,
+    required this.mine,
+    required this.timestamp,
+  });
 
   factory StoredMessage.fromJson(Map<String, dynamic> j) => StoredMessage(
-        text: j['text'] as String,
-        mine: j['mine'] as bool,
-        timestamp: decodeTime(j['timestamp'] as String),
-      );
+    text: j['text'] as String,
+    mine: j['mine'] as bool,
+    timestamp: decodeTime(j['timestamp'] as String),
+  );
 
   Map<String, dynamic> toJson() => {
-        'text': text,
-        'mine': mine,
-        'timestamp': encodeTime(timestamp),
-      };
+    'text': text,
+    'mine': mine,
+    'timestamp': encodeTime(timestamp),
+  };
 
   final String text;
   final bool mine;
@@ -40,21 +44,22 @@ class Conversation {
     List<StoredMessage>? messages,
     DateTime? lastActivityAt,
     this.hasUnread = false,
-  })  : messages = messages ?? [],
-        lastActivityAt = lastActivityAt ?? DateTime.now().toUtc();
+  }) : messages = messages ?? [],
+       lastActivityAt = lastActivityAt ?? DateTime.now().toUtc();
 
   factory Conversation.fromJson(Map<String, dynamic> j) => Conversation(
-        peerAccountId: j['peer_account_id'] as String,
-        displayName: j['display_name'] as String?,
-        peerDeviceId: j['peer_device_id'] as String?,
-        peerDevicePubKey:
-            j['peer_device_pub_key'] == null ? null : decodeB64(j['peer_device_pub_key'] as String),
-        messages: (j['messages'] as List<dynamic>?)
-            ?.map((m) => StoredMessage.fromJson(m as Map<String, dynamic>))
-            .toList(),
-        lastActivityAt: decodeTime(j['last_activity_at'] as String),
-        hasUnread: j['has_unread'] as bool? ?? false,
-      );
+    peerAccountId: j['peer_account_id'] as String,
+    displayName: j['display_name'] as String?,
+    peerDeviceId: j['peer_device_id'] as String?,
+    peerDevicePubKey: j['peer_device_pub_key'] == null
+        ? null
+        : decodeB64(j['peer_device_pub_key'] as String),
+    messages: (j['messages'] as List<dynamic>?)
+        ?.map((m) => StoredMessage.fromJson(m as Map<String, dynamic>))
+        .toList(),
+    lastActivityAt: decodeTime(j['last_activity_at'] as String),
+    hasUnread: j['has_unread'] as bool? ?? false,
+  );
 
   final String peerAccountId;
   String? displayName;
@@ -75,12 +80,13 @@ class Conversation {
   String get lastMessagePreview => messages.isEmpty ? '' : messages.last.text;
 
   Map<String, dynamic> toJson() => {
-        'peer_account_id': peerAccountId,
-        if (displayName != null) 'display_name': displayName,
-        if (peerDeviceId != null) 'peer_device_id': peerDeviceId,
-        if (peerDevicePubKey != null) 'peer_device_pub_key': encodeB64(peerDevicePubKey!),
-        'messages': messages.map((m) => m.toJson()).toList(),
-        'last_activity_at': encodeTime(lastActivityAt),
-        'has_unread': hasUnread,
-      };
+    'peer_account_id': peerAccountId,
+    if (displayName != null) 'display_name': displayName,
+    if (peerDeviceId != null) 'peer_device_id': peerDeviceId,
+    if (peerDevicePubKey != null)
+      'peer_device_pub_key': encodeB64(peerDevicePubKey!),
+    'messages': messages.map((m) => m.toJson()).toList(),
+    'last_activity_at': encodeTime(lastActivityAt),
+    'has_unread': hasUnread,
+  };
 }

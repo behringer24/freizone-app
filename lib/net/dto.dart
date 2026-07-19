@@ -13,24 +13,28 @@ class ServerStatus {
   ServerStatus({required this.claimed, required this.registrationPolicy});
 
   factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
-        claimed: j['claimed'] as bool,
-        registrationPolicy: j['registration_policy'] as String,
-      );
+    claimed: j['claimed'] as bool,
+    registrationPolicy: j['registration_policy'] as String,
+  );
 
   final bool claimed;
   final String registrationPolicy;
 }
 
 class AccountResponse {
-  AccountResponse({required this.id, required this.rootPubKey, required this.devices});
+  AccountResponse({
+    required this.id,
+    required this.rootPubKey,
+    required this.devices,
+  });
 
   factory AccountResponse.fromJson(Map<String, dynamic> j) => AccountResponse(
-        id: j['id'] as String,
-        rootPubKey: decodeB64(j['root_pubkey'] as String),
-        devices: (j['devices'] as List<dynamic>)
-            .map((e) => DeviceResponse.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
+    id: j['id'] as String,
+    rootPubKey: decodeB64(j['root_pubkey'] as String),
+    devices: (j['devices'] as List<dynamic>)
+        .map((e) => DeviceResponse.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
   final String id;
   final Uint8List rootPubKey;
@@ -48,13 +52,15 @@ class DeviceResponse {
   });
 
   factory DeviceResponse.fromJson(Map<String, dynamic> j) => DeviceResponse(
-        deviceId: j['device_id'] as String,
-        devicePubKey: decodeB64(j['device_pubkey'] as String),
-        issuedAt: decodeTime(j['issued_at'] as String),
-        signature: decodeB64(j['signature'] as String),
-        status: j['status'] as String,
-        revokedAt: j['revoked_at'] == null ? null : decodeTime(j['revoked_at'] as String),
-      );
+    deviceId: j['device_id'] as String,
+    devicePubKey: decodeB64(j['device_pubkey'] as String),
+    issuedAt: decodeTime(j['issued_at'] as String),
+    signature: decodeB64(j['signature'] as String),
+    status: j['status'] as String,
+    revokedAt: j['revoked_at'] == null
+        ? null
+        : decodeTime(j['revoked_at'] as String),
+  );
 
   final String deviceId;
   final Uint8List devicePubKey;
@@ -65,19 +71,24 @@ class DeviceResponse {
 }
 
 class DHIdentityCertDTO {
-  DHIdentityCertDTO({required this.dhPubKey, required this.issuedAt, required this.signature});
+  DHIdentityCertDTO({
+    required this.dhPubKey,
+    required this.issuedAt,
+    required this.signature,
+  });
 
-  factory DHIdentityCertDTO.fromJson(Map<String, dynamic> j) => DHIdentityCertDTO(
+  factory DHIdentityCertDTO.fromJson(Map<String, dynamic> j) =>
+      DHIdentityCertDTO(
         dhPubKey: decodeB64(j['dh_pubkey'] as String),
         issuedAt: decodeTime(j['issued_at'] as String),
         signature: decodeB64(j['signature'] as String),
       );
 
   Map<String, dynamic> toJson() => {
-        'dh_pubkey': encodeB64(dhPubKey),
-        'issued_at': encodeTime(issuedAt),
-        'signature': encodeB64(signature),
-      };
+    'dh_pubkey': encodeB64(dhPubKey),
+    'issued_at': encodeTime(issuedAt),
+    'signature': encodeB64(signature),
+  };
 
   final Uint8List dhPubKey;
   final DateTime issuedAt;
@@ -94,20 +105,20 @@ class SignedPrekeyDTO {
   });
 
   factory SignedPrekeyDTO.fromJson(Map<String, dynamic> j) => SignedPrekeyDTO(
-        keyId: j['key_id'] as int,
-        dhIdentityPubKey: decodeB64(j['dh_identity_pubkey'] as String),
-        pubKey: decodeB64(j['pubkey'] as String),
-        issuedAt: decodeTime(j['issued_at'] as String),
-        signature: decodeB64(j['signature'] as String),
-      );
+    keyId: j['key_id'] as int,
+    dhIdentityPubKey: decodeB64(j['dh_identity_pubkey'] as String),
+    pubKey: decodeB64(j['pubkey'] as String),
+    issuedAt: decodeTime(j['issued_at'] as String),
+    signature: decodeB64(j['signature'] as String),
+  );
 
   Map<String, dynamic> toJson() => {
-        'key_id': keyId,
-        'dh_identity_pubkey': encodeB64(dhIdentityPubKey),
-        'pubkey': encodeB64(pubKey),
-        'issued_at': encodeTime(issuedAt),
-        'signature': encodeB64(signature),
-      };
+    'key_id': keyId,
+    'dh_identity_pubkey': encodeB64(dhIdentityPubKey),
+    'pubkey': encodeB64(pubKey),
+    'issued_at': encodeTime(issuedAt),
+    'signature': encodeB64(signature),
+  };
 
   final int keyId;
   final Uint8List dhIdentityPubKey;
@@ -120,11 +131,14 @@ class OneTimePrekeyDTO {
   OneTimePrekeyDTO({required this.keyId, required this.pubKey});
 
   factory OneTimePrekeyDTO.fromJson(Map<String, dynamic> j) => OneTimePrekeyDTO(
-        keyId: j['key_id'] as int,
-        pubKey: decodeB64(j['pubkey'] as String),
-      );
+    keyId: j['key_id'] as int,
+    pubKey: decodeB64(j['pubkey'] as String),
+  );
 
-  Map<String, dynamic> toJson() => {'key_id': keyId, 'pubkey': encodeB64(pubKey)};
+  Map<String, dynamic> toJson() => {
+    'key_id': keyId,
+    'pubkey': encodeB64(pubKey),
+  };
 
   final int keyId;
   final Uint8List pubKey;
@@ -139,14 +153,21 @@ class PrekeyBundleResponse {
     this.oneTimePrekey,
   });
 
-  factory PrekeyBundleResponse.fromJson(Map<String, dynamic> j) => PrekeyBundleResponse(
+  factory PrekeyBundleResponse.fromJson(Map<String, dynamic> j) =>
+      PrekeyBundleResponse(
         deviceId: j['device_id'] as String,
         dhIdentityPubKey: decodeB64(j['dh_identity_pubkey'] as String),
-        dhIdentityCert: DHIdentityCertDTO.fromJson(j['dh_identity_cert'] as Map<String, dynamic>),
-        signedPrekey: SignedPrekeyDTO.fromJson(j['signed_prekey'] as Map<String, dynamic>),
+        dhIdentityCert: DHIdentityCertDTO.fromJson(
+          j['dh_identity_cert'] as Map<String, dynamic>,
+        ),
+        signedPrekey: SignedPrekeyDTO.fromJson(
+          j['signed_prekey'] as Map<String, dynamic>,
+        ),
         oneTimePrekey: j['one_time_prekey'] == null
             ? null
-            : OneTimePrekeyDTO.fromJson(j['one_time_prekey'] as Map<String, dynamic>),
+            : OneTimePrekeyDTO.fromJson(
+                j['one_time_prekey'] as Map<String, dynamic>,
+              ),
       );
 
   final String deviceId;
@@ -160,9 +181,12 @@ class PrekeyBundleResponse {
 class CreateInviteResponse {
   CreateInviteResponse({required this.code, this.expiresAt});
 
-  factory CreateInviteResponse.fromJson(Map<String, dynamic> j) => CreateInviteResponse(
+  factory CreateInviteResponse.fromJson(Map<String, dynamic> j) =>
+      CreateInviteResponse(
         code: j['code'] as String,
-        expiresAt: j['expires_at'] == null ? null : decodeTime(j['expires_at'] as String),
+        expiresAt: j['expires_at'] == null
+            ? null
+            : decodeTime(j['expires_at'] as String),
       );
 
   final String code;
@@ -170,9 +194,15 @@ class CreateInviteResponse {
 }
 
 class AdminAccountSummary {
-  AdminAccountSummary({required this.id, required this.role, required this.status, required this.createdAt});
+  AdminAccountSummary({
+    required this.id,
+    required this.role,
+    required this.status,
+    required this.createdAt,
+  });
 
-  factory AdminAccountSummary.fromJson(Map<String, dynamic> j) => AdminAccountSummary(
+  factory AdminAccountSummary.fromJson(Map<String, dynamic> j) =>
+      AdminAccountSummary(
         id: j['id'] as String,
         role: j['role'] as String,
         status: j['status'] as String,
@@ -195,12 +225,12 @@ class MessageResponse {
   });
 
   factory MessageResponse.fromJson(Map<String, dynamic> j) => MessageResponse(
-        messageId: j['message_id'] as String,
-        senderAccountId: j['sender_account_id'] as String,
-        senderDeviceId: j['sender_device_id'] as String,
-        sentAt: decodeTime(j['sent_at'] as String),
-        payload: j['payload'] as Map<String, dynamic>,
-      );
+    messageId: j['message_id'] as String,
+    senderAccountId: j['sender_account_id'] as String,
+    senderDeviceId: j['sender_device_id'] as String,
+    sentAt: decodeTime(j['sent_at'] as String),
+    payload: j['payload'] as Map<String, dynamic>,
+  );
 
   final String messageId;
   final String senderAccountId;

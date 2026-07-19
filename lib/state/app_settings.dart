@@ -27,6 +27,32 @@ enum AccentPreset {
   final String label;
 }
 
+/// Which push-wake mechanism to register, see lib/push/push_manager.dart's
+/// registerForPush. UnifiedPush and FCM are independent, non-interfering
+/// mechanisms -- this only controls which one *this app* asks the server
+/// to use, not which one(s) happen to be installed/available.
+enum PushPreference {
+  /// Prefer UnifiedPush when a distributor is installed (no Google
+  /// dependency); fall back to FCM only if none is found. The default --
+  /// FCM exists specifically to cover people without a distributor, not
+  /// to replace UnifiedPush for people who already have one.
+  automatic('Automatic (prefer UnifiedPush)'),
+
+  /// Always register via Firebase Cloud Messaging, even if a UnifiedPush
+  /// distributor is installed. Mainly useful for testing the FCM path
+  /// without uninstalling anything.
+  forceFcm('Always use Firebase (FCM)'),
+
+  /// Always register via UnifiedPush; if no distributor is installed,
+  /// this surfaces the existing "no distributor" hint rather than
+  /// silently falling back to FCM.
+  forceUnifiedPush('Always use UnifiedPush');
+
+  const PushPreference(this.label);
+
+  final String label;
+}
+
 class AppSettings extends ChangeNotifier {
   AppSettings._({
     required ThemeMode themeMode,
@@ -34,19 +60,22 @@ class AppSettings extends ChangeNotifier {
     required bool copyIdShort,
     required bool notificationSound,
     required bool notificationVibration,
+    required PushPreference pushPreference,
     String? lastActiveAccountId,
-  })  : _themeMode = themeMode,
-        _accentPreset = accentPreset,
-        _copyIdShort = copyIdShort,
-        _notificationSound = notificationSound,
-        _notificationVibration = notificationVibration,
-        _lastActiveAccountId = lastActiveAccountId;
+  }) : _themeMode = themeMode,
+       _accentPreset = accentPreset,
+       _copyIdShort = copyIdShort,
+       _notificationSound = notificationSound,
+       _notificationVibration = notificationVibration,
+       _pushPreference = pushPreference,
+       _lastActiveAccountId = lastActiveAccountId;
 
   ThemeMode _themeMode;
   AccentPreset _accentPreset;
   bool _copyIdShort;
   bool _notificationSound;
   bool _notificationVibration;
+  PushPreference _pushPreference;
   String? _lastActiveAccountId;
 
   ThemeMode get themeMode => _themeMode;
@@ -57,6 +86,7 @@ class AppSettings extends ChangeNotifier {
   bool get copyIdShort => _copyIdShort;
   bool get notificationSound => _notificationSound;
   bool get notificationVibration => _notificationVibration;
+  PushPreference get pushPreference => _pushPreference;
 
   /// The account id AccountManager should activate on the next app
   /// start, so a multi-account setup doesn't fall back to an
@@ -81,6 +111,7 @@ class AppSettings extends ChangeNotifier {
         copyIdShort: false,
         notificationSound: true,
         notificationVibration: true,
+        pushPreference: PushPreference.automatic,
       );
     }
     final j = json.decode(await file.readAsString()) as Map<String, dynamic>;
@@ -96,6 +127,10 @@ class AppSettings extends ChangeNotifier {
       copyIdShort: j['copy_id_short'] as bool? ?? false,
       notificationSound: j['notification_sound'] as bool? ?? true,
       notificationVibration: j['notification_vibration'] as bool? ?? true,
+      pushPreference: PushPreference.values.firstWhere(
+        (p) => p.name == j['push_preference'],
+        orElse: () => PushPreference.automatic,
+      ),
       lastActiveAccountId: j['last_active_account_id'] as String?,
     );
   }
@@ -109,7 +144,9 @@ class AppSettings extends ChangeNotifier {
         'copy_id_short': _copyIdShort,
         'notification_sound': _notificationSound,
         'notification_vibration': _notificationVibration,
-        if (_lastActiveAccountId != null) 'last_active_account_id': _lastActiveAccountId,
+        'push_preference': _pushPreference.name,
+        if (_lastActiveAccountId != null)
+          'last_active_account_id': _lastActiveAccountId,
       }),
     );
   }
@@ -145,6 +182,13 @@ class AppSettings extends ChangeNotifier {
   Future<void> setNotificationVibration(bool value) async {
     if (_notificationVibration == value) return;
     _notificationVibration = value;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setPushPreference(PushPreference value) async {
+    if (_pushPreference == value) return;
+    _pushPreference = value;
     await _save();
     notifyListeners();
   }

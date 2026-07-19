@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
@@ -20,10 +21,21 @@ import 'invite_screen.dart';
 import 'settings_screen.dart';
 
 class ChatListScreen extends StatelessWidget {
-  const ChatListScreen({super.key, required this.session, required this.settings, this.appBarBottom});
+  const ChatListScreen({
+    super.key,
+    required this.session,
+    required this.settings,
+    required this.manager,
+    this.appBarBottom,
+  });
 
   final AppSession session;
   final AppSettings settings;
+
+  /// Needed only to forward into SettingsScreen, so changing the push
+  /// delivery preference there can re-register push on every live
+  /// session immediately (see SettingsScreen._setPushPreference).
+  final AccountManager manager;
 
   /// Rendered directly below the "Freizone" title bar, as part of the
   /// same AppBar -- e.g. the account switcher strip (AccountShellScreen).
@@ -33,11 +45,14 @@ class ChatListScreen extends StatelessWidget {
   /// between the two.
   final PreferredSizeWidget? appBarBottom;
 
-  Color _avatarColor(String seed) => Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
+  Color _avatarColor(String seed) =>
+      Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
   String _initials(Conversation c) {
     final source = c.title;
-    return source.isEmpty ? '?' : source.substring(0, source.length >= 2 ? 2 : 1).toUpperCase();
+    return source.isEmpty
+        ? '?'
+        : source.substring(0, source.length >= 2 ? 2 : 1).toUpperCase();
   }
 
   String _formatTimestamp(DateTime utc) {
@@ -49,7 +64,9 @@ class ChatListScreen extends StatelessWidget {
       return '${two(dt.hour)}:${two(dt.minute)}';
     }
     final yesterday = now.subtract(const Duration(days: 1));
-    if (dt.year == yesterday.year && dt.month == yesterday.month && dt.day == yesterday.day) {
+    if (dt.year == yesterday.year &&
+        dt.month == yesterday.month &&
+        dt.day == yesterday.day) {
       return 'Yesterday';
     }
     return '${two(dt.day)}.${two(dt.month)}.${dt.year}';
@@ -74,7 +91,10 @@ class ChatListScreen extends StatelessWidget {
   /// entirely, both purely local (the server never stored the history
   /// in the first place). Either action asks for confirmation first,
   /// since there's no undo.
-  Future<void> _showChatOptions(BuildContext context, Conversation convo) async {
+  Future<void> _showChatOptions(
+    BuildContext context,
+    Conversation convo,
+  ) async {
     final action = await showDialog<String>(
       context: context,
       builder: (context) => SimpleDialog(
@@ -98,30 +118,48 @@ class ChatListScreen extends StatelessWidget {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Clear chat?'),
-          content: Text('This permanently deletes the message history with ${convo.title} on this device. '
-              'The conversation itself stays -- this cannot be undone.'),
+          content: Text(
+            'This permanently deletes the message history with ${convo.title} on this device. '
+            'The conversation itself stays -- this cannot be undone.',
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Clear')),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Clear'),
+            ),
           ],
         ),
       );
-      if (confirmed == true) await session.clearConversation(convo.peerAccountId);
+      if (confirmed == true)
+        await session.clearConversation(convo.peerAccountId);
     } else if (action == 'delete') {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Delete chat?'),
-          content: Text('This permanently removes the conversation with ${convo.title} and its message history from '
-              'this device -- this cannot be undone. ${convo.title} still exists; you can start a new chat with '
-              'them again any time.'),
+          content: Text(
+            'This permanently removes the conversation with ${convo.title} and its message history from '
+            'this device -- this cannot be undone. ${convo.title} still exists; you can start a new chat with '
+            'them again any time.',
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Delete')),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete'),
+            ),
           ],
         ),
       );
-      if (confirmed == true) await session.deleteConversation(convo.peerAccountId);
+      if (confirmed == true)
+        await session.deleteConversation(convo.peerAccountId);
     }
   }
 
@@ -133,7 +171,10 @@ class ChatListScreen extends StatelessWidget {
     );
     if (peerAccountId == null || !context.mounted) return;
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ChatScreen(session: session, peerAccountId: peerAccountId)),
+      MaterialPageRoute(
+        builder: (_) =>
+            ChatScreen(session: session, peerAccountId: peerAccountId),
+      ),
     );
   }
 
@@ -149,10 +190,18 @@ class ChatListScreen extends StatelessWidget {
             onSelected: (value) {
               if (value == 'copy_id') {
                 final id = settings.copyIdShort
-                    ? session.state.accountId.substring(0, accountIdPrefixLength)
+                    ? session.state.accountId.substring(
+                        0,
+                        accountIdPrefixLength,
+                      )
                     : session.state.accountId;
                 Clipboard.setData(
-                  ClipboardData(text: buildFreizoneAddress(id: id, server: session.state.server)),
+                  ClipboardData(
+                    text: buildFreizoneAddress(
+                      id: id,
+                      server: session.state.server,
+                    ),
+                  ),
                 );
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Address copied to clipboard')),
@@ -160,14 +209,27 @@ class ChatListScreen extends StatelessWidget {
               }
               if (value == 'admin') {
                 Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => AdminScreen(session: session)))
+                    .push(
+                      MaterialPageRoute(
+                        builder: (_) => AdminScreen(session: session),
+                      ),
+                    )
                     .then((_) => session.refreshRegistrationPolicy());
               }
               if (value == 'invite') {
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => InviteScreen(session: session)));
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => InviteScreen(session: session),
+                  ),
+                );
               }
               if (value == 'settings') {
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => SettingsScreen(settings: settings)));
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        SettingsScreen(settings: settings, manager: manager),
+                  ),
+                );
               }
             },
             itemBuilder: (context) => [
@@ -180,16 +242,20 @@ class ChatListScreen extends StatelessWidget {
                     const Text('Copy my address'),
                     Text(
                       session.state.server,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
               ),
-              if (_canInvite(session)) const PopupMenuItem(value: 'invite', child: Text('Invite')),
+              if (_canInvite(session))
+                const PopupMenuItem(value: 'invite', child: Text('Invite')),
               if (session.myRole == 'admin' || session.myRole == 'moderator')
-                const PopupMenuItem(value: 'admin', child: Text('Server Admin')),
+                const PopupMenuItem(
+                  value: 'admin',
+                  child: Text('Server Admin'),
+                ),
               const PopupMenuItem(value: 'settings', child: Text('Settings')),
             ],
           ),
@@ -198,14 +264,15 @@ class ChatListScreen extends StatelessWidget {
       body: ListenableBuilder(
         listenable: session,
         builder: (context, _) {
-          if (session.pushDistributorMissing) {
-            session.pushDistributorMissing = false; // one-time hint, consume it
+          if (session.pushUnavailable) {
+            session.pushUnavailable = false; // one-time hint, consume it
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!context.mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text(
-                    'No push notification app found -- install one (e.g. ntfy) to get notified while Freizone is closed.',
+                    'No push notifications available on this device -- install a UnifiedPush app (e.g. ntfy) or check '
+                    'the push delivery setting. Chat still works while Freizone is open.',
                   ),
                   duration: Duration(seconds: 6),
                 ),
@@ -219,9 +286,16 @@ class ChatListScreen extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.chat_bubble_outline, size: 64, color: Theme.of(context).colorScheme.outline),
+                  Icon(
+                    Icons.chat_bubble_outline,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
                   const SizedBox(height: 16),
-                  Text('No conversations yet', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'No conversations yet',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 8),
                   const Text('Tap the button below to start one'),
                 ],
@@ -239,20 +313,35 @@ class ChatListScreen extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       backgroundColor: _avatarColor(convo.peerAccountId),
-                      child: Text(_initials(convo), style: const TextStyle(color: Colors.white)),
+                      child: Text(
+                        _initials(convo),
+                        style: const TextStyle(color: Colors.white),
+                      ),
                     ),
-                    if (convo.hasUnread) const Positioned(top: -2, right: -2, child: UnreadDot()),
+                    if (convo.hasUnread)
+                      const Positioned(top: -2, right: -2, child: UnreadDot()),
                   ],
                 ),
-                title: Text(convo.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(convo.lastMessagePreview, maxLines: 1, overflow: TextOverflow.ellipsis),
+                title: Text(
+                  convo.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  convo.lastMessagePreview,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 trailing: Text(
                   _formatTimestamp(convo.lastActivityAt),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => ChatScreen(session: session, peerAccountId: convo.peerAccountId),
+                    builder: (_) => ChatScreen(
+                      session: session,
+                      peerAccountId: convo.peerAccountId,
+                    ),
                   ),
                 ),
                 onLongPress: () => _showChatOptions(context, convo),
@@ -308,7 +397,10 @@ class _NewChatSheetState extends State<_NewChatSheet> {
       _error = null;
     });
     try {
-      final convo = await widget.session.startConversation(peerAccountId, displayName: _nameController.text);
+      final convo = await widget.session.startConversation(
+        peerAccountId,
+        displayName: _nameController.text,
+      );
       if (!mounted) return;
       Navigator.of(context).pop(convo.peerAccountId);
     } catch (e) {
@@ -332,14 +424,18 @@ class _NewChatSheetState extends State<_NewChatSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Start a new chat', style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            'Start a new chat',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 16),
           TextField(
             controller: _idController,
             autofocus: true,
             decoration: const InputDecoration(
               labelText: 'Peer account id',
-              helperText: 'Full id, first 5 characters, or a full address like id*server',
+              helperText:
+                  'Full id, first 5 characters, or a full address like id*server',
             ),
             enabled: !_loading,
           ),
@@ -352,13 +448,20 @@ class _NewChatSheetState extends State<_NewChatSheet> {
           ),
           if (_error != null) ...[
             const SizedBox(height: 8),
-            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ],
           const SizedBox(height: 16),
           ElevatedButton(
             onPressed: _loading ? null : _start,
             child: _loading
-                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Text('Start chat'),
           ),
         ],

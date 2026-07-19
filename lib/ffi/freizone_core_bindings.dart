@@ -21,24 +21,36 @@ typedef FreeFn = void Function(Pointer<Utf8>);
 /// Dart function values.
 class FreizoneCoreBindings {
   FreizoneCoreBindings._(DynamicLibrary lib)
-      : free = _lookupFree(lib, 'FreizoneFree'),
-        version = _lookupNoArg(lib, 'FreizoneVersion'),
-        generateIdentity = _lookupNoArg(lib, 'GenerateIdentity'),
-        verifyAddressId = _lookupWithReq(lib, 'VerifyAddressID'),
-        signDeviceCertificate = _lookupWithReq(lib, 'SignDeviceCertificate'),
-        verifyDeviceCertificate = _lookupWithReq(lib, 'VerifyDeviceCertificate'),
-        generateX25519KeyPair = _lookupNoArg(lib, 'GenerateX25519KeyPair'),
-        signDHIdentityCertificate = _lookupWithReq(lib, 'SignDHIdentityCertificate'),
-        verifyDHIdentityCertificate = _lookupWithReq(lib, 'VerifyDHIdentityCertificate'),
-        signSignedPrekeyCertificate = _lookupWithReq(lib, 'SignSignedPrekeyCertificate'),
-        verifySignedPrekeyCertificate = _lookupWithReq(lib, 'VerifySignedPrekeyCertificate'),
-        initiateSession = _lookupWithReq(lib, 'InitiateSession'),
-        respondToSession = _lookupWithReq(lib, 'RespondToSession'),
-        sessionEncrypt = _lookupWithReq(lib, 'SessionEncrypt'),
-        sessionDecrypt = _lookupWithReq(lib, 'SessionDecrypt'),
-        buildEnvelope = _lookupWithReq(lib, 'BuildEnvelope'),
-        parseEnvelope = _lookupWithReq(lib, 'ParseEnvelope'),
-        signHTTPRequest = _lookupWithReq(lib, 'SignHTTPRequest');
+    : free = _lookupFree(lib, 'FreizoneFree'),
+      version = _lookupNoArg(lib, 'FreizoneVersion'),
+      generateIdentity = _lookupNoArg(lib, 'GenerateIdentity'),
+      verifyAddressId = _lookupWithReq(lib, 'VerifyAddressID'),
+      signDeviceCertificate = _lookupWithReq(lib, 'SignDeviceCertificate'),
+      verifyDeviceCertificate = _lookupWithReq(lib, 'VerifyDeviceCertificate'),
+      generateX25519KeyPair = _lookupNoArg(lib, 'GenerateX25519KeyPair'),
+      signDHIdentityCertificate = _lookupWithReq(
+        lib,
+        'SignDHIdentityCertificate',
+      ),
+      verifyDHIdentityCertificate = _lookupWithReq(
+        lib,
+        'VerifyDHIdentityCertificate',
+      ),
+      signSignedPrekeyCertificate = _lookupWithReq(
+        lib,
+        'SignSignedPrekeyCertificate',
+      ),
+      verifySignedPrekeyCertificate = _lookupWithReq(
+        lib,
+        'VerifySignedPrekeyCertificate',
+      ),
+      initiateSession = _lookupWithReq(lib, 'InitiateSession'),
+      respondToSession = _lookupWithReq(lib, 'RespondToSession'),
+      sessionEncrypt = _lookupWithReq(lib, 'SessionEncrypt'),
+      sessionDecrypt = _lookupWithReq(lib, 'SessionDecrypt'),
+      buildEnvelope = _lookupWithReq(lib, 'BuildEnvelope'),
+      parseEnvelope = _lookupWithReq(lib, 'ParseEnvelope'),
+      signHTTPRequest = _lookupWithReq(lib, 'SignHTTPRequest');
 
   factory FreizoneCoreBindings.open() {
     final lib = Platform.isAndroid

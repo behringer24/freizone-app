@@ -43,11 +43,13 @@ class AppSession extends ChangeNotifier {
   bool prekeysReady = false;
   String? lastError;
 
-  /// True once a push-registration attempt has found no UnifiedPush
-  /// distributor installed. Consumed (reset to false) by whichever
-  /// screen shows the one-time hint about it -- chat keeps working via
-  /// SSE regardless.
-  bool pushDistributorMissing = false;
+  /// True once a push-registration attempt found no way to deliver a
+  /// background wake at all under the current PushPreference (no
+  /// UnifiedPush distributor for automatic/forceUnifiedPush, or no FCM
+  /// token obtainable for forceFcm/automatic's fallback). Consumed (reset
+  /// to false) by whichever screen shows the one-time hint about it --
+  /// chat keeps working via SSE regardless.
+  bool pushUnavailable = false;
 
   /// This device's own server role ("admin"/"moderator"), or null if it
   /// has neither -- in which case the admin area should be hidden
@@ -136,13 +138,16 @@ class AppSession extends ChangeNotifier {
   }
 
   /// Returns the current registration policy ("open"/"invite"/"closed").
-  Future<String> getRegistrationPolicy() => api.getRegistrationPolicy(state.credentials);
+  Future<String> getRegistrationPolicy() =>
+      api.getRegistrationPolicy(state.credentials);
 
   /// Changes the registration policy (persisted server-side). Admin only.
-  Future<void> setRegistrationPolicy(String policy) => api.setRegistrationPolicy(state.credentials, policy);
+  Future<void> setRegistrationPolicy(String policy) =>
+      api.setRegistrationPolicy(state.credentials, policy);
 
   /// Mints a single-use invite code. Admin or moderator only.
-  Future<CreateInviteResponse> createInvite() => api.createInvite(state.credentials);
+  Future<CreateInviteResponse> createInvite() =>
+      api.createInvite(state.credentials);
 
   /// Conversations sorted newest-activity-first, for the chat list.
   List<Conversation> get conversations {
@@ -151,7 +156,8 @@ class AppSession extends ChangeNotifier {
     return list;
   }
 
-  Conversation? conversation(String peerAccountId) => state.conversations[peerAccountId];
+  Conversation? conversation(String peerAccountId) =>
+      state.conversations[peerAccountId];
 
   /// True if any conversation in this account has an unread message --
   /// drives the account switcher's notification dot.
@@ -180,7 +186,8 @@ class AppSession extends ChangeNotifier {
 
   /// Call when that ChatScreen closes.
   void leaveConversation(String peerAccountId) {
-    if (_openConversationPeerId == peerAccountId) _openConversationPeerId = null;
+    if (_openConversationPeerId == peerAccountId)
+      _openConversationPeerId = null;
   }
 
   /// Uploads prekeys if this is the first run, then opens the live
@@ -204,16 +211,23 @@ class AppSession extends ChangeNotifier {
 
   Future<void> _registerPush() async {
     try {
-      final hasDistributor = await registerForPush(api, state.accountId);
-      if (!hasDistributor) {
-        pushDistributorMissing = true;
-        notifyListeners();
-      }
+      final delivered = await registerForPush(
+        api,
+        state.accountId,
+        state.credentials,
+      );
+      pushUnavailable = !delivered;
+      notifyListeners();
     } catch (e) {
       lastError = 'push registration failed: $e';
       notifyListeners();
     }
   }
+
+  /// Re-runs push registration for this account, e.g. right after the
+  /// user changes PushPreference in Settings, so the switch takes effect
+  /// immediately instead of waiting for the next app start.
+  Future<void> reregisterPush() => _registerPush();
 
   Future<void> _uploadPrekeys() async {
     final now = DateTime.now().toUtc();
@@ -230,7 +244,11 @@ class AppSession extends ChangeNotifier {
       );
       state.dhIdentityPub = dh.pub;
       state.dhIdentityPriv = dh.priv;
-      dhCertDto = DHIdentityCertDTO(dhPubKey: cert.dhPubKey, issuedAt: cert.issuedAt, signature: cert.signature);
+      dhCertDto = DHIdentityCertDTO(
+        dhPubKey: cert.dhPubKey,
+        issuedAt: cert.issuedAt,
+        signature: cert.signature,
+      );
     }
 
     final spk = core.generateX25519KeyPair();
@@ -254,7 +272,10 @@ class AppSession extends ChangeNotifier {
       final kp = core.generateX25519KeyPair();
       final keyId = state.nextOtpkKeyId;
       state.nextOtpkKeyId++;
-      state.oneTimePrekeys[keyId] = OneTimePrekeyState(pub: kp.pub, priv: kp.priv);
+      state.oneTimePrekeys[keyId] = OneTimePrekeyState(
+        pub: kp.pub,
+        priv: kp.priv,
+      );
       otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
     }
 
@@ -275,13 +296,15 @@ class AppSession extends ChangeNotifier {
 
   void _startStream() {
     _sse = SseClient(apiClient: api, creds: state.credentials);
-    unawaited(_sse!.connect(
-      onMessage: _handleIncoming,
-      onError: (e) {
-        lastError = 'stream error: $e';
-        notifyListeners();
-      },
-    ));
+    unawaited(
+      _sse!.connect(
+        onMessage: _handleIncoming,
+        onError: (e) {
+          lastError = 'stream error: $e';
+          notifyListeners();
+        },
+      ),
+    );
   }
 
   Future<void> _handleIncoming(MessageResponse msg) async {
@@ -291,7 +314,8 @@ class AppSession extends ChangeNotifier {
       var session = state.sessions[msg.senderAccountId];
       if (session == null) {
         final initial = parsed.initial;
-        if (initial == null) return; // no session and no X3DH material to start one -- drop.
+        if (initial == null)
+          return; // no session and no X3DH material to start one -- drop.
 
         Uint8List? otpkPriv;
         final otpkId = initial.oneTimePrekeyId;
@@ -307,7 +331,11 @@ class AppSession extends ChangeNotifier {
         );
       }
 
-      final dec = core.sessionDecrypt(session: session, header: parsed.header, ciphertext: parsed.ciphertext);
+      final dec = core.sessionDecrypt(
+        session: session,
+        header: parsed.header,
+        ciphertext: parsed.ciphertext,
+      );
       state.sessions[msg.senderAccountId] = dec.session;
       final text = utf8.decode(dec.plaintext);
       final now = DateTime.now().toUtc();
@@ -316,7 +344,9 @@ class AppSession extends ChangeNotifier {
         msg.senderAccountId,
         () => Conversation(peerAccountId: msg.senderAccountId),
       );
-      convo.messages.add(StoredMessage(text: text, mine: false, timestamp: now));
+      convo.messages.add(
+        StoredMessage(text: text, mine: false, timestamp: now),
+      );
       convo.lastActivityAt = now;
       if (msg.senderAccountId != _openConversationPeerId) {
         convo.hasUnread = true;
@@ -348,7 +378,9 @@ class AppSession extends ChangeNotifier {
   /// uniqueness note) -- either way, the returned id is always the true
   /// full one, verified against the returned device's key chain, never
   /// just echoed back from whatever shorthand was looked up with.
-  Future<(String accountId, DeviceResponse device)> _resolvePeerDevice(String peerIdOrPrefix) async {
+  Future<(String accountId, DeviceResponse device)> _resolvePeerDevice(
+    String peerIdOrPrefix,
+  ) async {
     final acc = await api.getAccount(peerIdOrPrefix);
     if (!core.verifyAddressId(acc.id, acc.rootPubKey)) {
       throw StateError('peer account id does not match its root key');
@@ -384,7 +416,10 @@ class AppSession extends ChangeNotifier {
   /// since a prefix is only unique per server, not globally. If
   /// displayName is given and this is a new conversation, it's set as
   /// the initial local alias.
-  Future<Conversation> startConversation(String peerAddress, {String? displayName}) async {
+  Future<Conversation> startConversation(
+    String peerAddress, {
+    String? displayName,
+  }) async {
     final parsed = parseFreizoneAddress(peerAddress);
     if (parsed == null) throw StateError('Not a valid Freizone address');
     if (parsed.server != null && parsed.server != state.server) {
@@ -399,16 +434,23 @@ class AppSession extends ChangeNotifier {
 
     if (normalized.length == accountIdPrefixLength) {
       for (final convo in state.conversations.values) {
-        if (convo.peerDeviceId != null && convo.peerAccountId.startsWith(normalized)) return convo;
+        if (convo.peerDeviceId != null &&
+            convo.peerAccountId.startsWith(normalized))
+          return convo;
       }
     }
 
     final (resolvedId, verified) = await _resolvePeerDevice(normalized);
 
-    final convo = state.conversations.putIfAbsent(resolvedId, () => Conversation(peerAccountId: resolvedId));
+    final convo = state.conversations.putIfAbsent(
+      resolvedId,
+      () => Conversation(peerAccountId: resolvedId),
+    );
     convo.peerDeviceId = verified.deviceId;
     convo.peerDevicePubKey = verified.devicePubKey;
-    if (convo.displayName == null && displayName != null && displayName.trim().isNotEmpty) {
+    if (convo.displayName == null &&
+        displayName != null &&
+        displayName.trim().isNotEmpty) {
       convo.displayName = displayName.trim();
     }
     await LocalStateStore.saveProfile(state);
@@ -421,7 +463,9 @@ class AppSession extends ChangeNotifier {
   Future<void> setDisplayName(String peerAccountId, String? name) async {
     final convo = state.conversations[peerAccountId];
     if (convo == null) return;
-    convo.displayName = (name == null || name.trim().isEmpty) ? null : name.trim();
+    convo.displayName = (name == null || name.trim().isEmpty)
+        ? null
+        : name.trim();
     await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
@@ -436,7 +480,8 @@ class AppSession extends ChangeNotifier {
     final hadUnread = convo.hasUnread;
     convo.hasUnread = false;
     await LocalStateStore.saveProfile(state);
-    if (hadUnread && !hasAnyUnread) unawaited(clearMessageNotification(state.accountId));
+    if (hadUnread && !hasAnyUnread)
+      unawaited(clearMessageNotification(state.accountId));
     notifyListeners();
   }
 
@@ -449,16 +494,20 @@ class AppSession extends ChangeNotifier {
     final removed = state.conversations.remove(peerAccountId);
     if (removed == null) return;
     state.sessions.remove(peerAccountId);
-    if (_openConversationPeerId == peerAccountId) _openConversationPeerId = null;
+    if (_openConversationPeerId == peerAccountId)
+      _openConversationPeerId = null;
     await LocalStateStore.saveProfile(state);
-    if (removed.hasUnread && !hasAnyUnread) unawaited(clearMessageNotification(state.accountId));
+    if (removed.hasUnread && !hasAnyUnread)
+      unawaited(clearMessageNotification(state.accountId));
     notifyListeners();
   }
 
   /// Returns the existing session with a conversation's peer, or
   /// establishes a new one as X3DH initiator by claiming their prekey
   /// bundle.
-  Future<(RatchetSessionJson, InitialMessage?)> _getOrCreateCryptoSession(Conversation convo) async {
+  Future<(RatchetSessionJson, InitialMessage?)> _getOrCreateCryptoSession(
+    Conversation convo,
+  ) async {
     final existing = state.sessions[convo.peerAccountId];
     if (existing != null) return (existing, null);
 
@@ -487,8 +536,13 @@ class AppSession extends ChangeNotifier {
     if (!core.verifySignedPrekeyCertificate(spkCert, convo.peerDevicePubKey!)) {
       throw StateError('invalid signed prekey certificate');
     }
-    if (!listEquals(bundle.signedPrekey.dhIdentityPubKey, bundle.dhIdentityPubKey)) {
-      throw StateError('signed prekey is not bound to the claimed dh identity key');
+    if (!listEquals(
+      bundle.signedPrekey.dhIdentityPubKey,
+      bundle.dhIdentityPubKey,
+    )) {
+      throw StateError(
+        'signed prekey is not bound to the claimed dh identity key',
+      );
     }
 
     final remote = RemoteBundle(
@@ -498,7 +552,10 @@ class AppSession extends ChangeNotifier {
       oneTimePrekeyId: bundle.oneTimePrekey?.keyId,
       oneTimePrekeyPub: bundle.oneTimePrekey?.pubKey,
     );
-    final result = core.initiateSession(localDhIdentityPriv: state.dhIdentityPriv!, remote: remote);
+    final result = core.initiateSession(
+      localDhIdentityPriv: state.dhIdentityPriv!,
+      remote: remote,
+    );
     state.sessions[convo.peerAccountId] = result.session;
     return (result.session, result.initial);
   }
@@ -522,10 +579,17 @@ class AppSession extends ChangeNotifier {
     }
 
     final (session, initial) = await _getOrCreateCryptoSession(convo);
-    final enc = core.sessionEncrypt(session: session, plaintext: Uint8List.fromList(utf8.encode(text)));
+    final enc = core.sessionEncrypt(
+      session: session,
+      plaintext: Uint8List.fromList(utf8.encode(text)),
+    );
     state.sessions[peerAccountId] = enc.session;
 
-    final payload = core.buildEnvelope(initial: initial, header: enc.header, ciphertext: enc.ciphertext);
+    final payload = core.buildEnvelope(
+      initial: initial,
+      header: enc.header,
+      ciphertext: enc.ciphertext,
+    );
     await api.sendMessage(
       creds: state.credentials,
       messageId: _randomHex(16),
