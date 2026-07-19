@@ -5,20 +5,21 @@
 // the whole app lifetime, not just while a chat screen happens to be
 // open.
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
-import '../util/address_format.dart';
 import '../util/avatar_color.dart';
 import '../util/errors.dart';
-import '../util/freizone_address.dart';
+import '../util/invite_uri.dart';
 import '../util/unread_dot.dart';
+import '../widgets/qr_scan_button.dart';
 import 'admin_screen.dart';
 import 'chat_screen.dart';
 import 'invite_screen.dart';
+import 'my_address_screen.dart';
+import 'qr_scan_screen.dart';
 import 'settings_screen.dart';
 
 class ChatListScreen extends StatelessWidget {
@@ -200,23 +201,11 @@ class ChatListScreen extends StatelessWidget {
         actions: [
           PopupMenuButton<String>(
             onSelected: (value) {
-              if (value == 'copy_id') {
-                final id = settings.copyIdShort
-                    ? session.state.accountId.substring(
-                        0,
-                        accountIdPrefixLength,
-                      )
-                    : session.state.accountId;
-                Clipboard.setData(
-                  ClipboardData(
-                    text: buildFreizoneAddress(
-                      id: id,
-                      server: session.state.server,
-                    ),
+              if (value == 'my_address') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => MyAddressScreen(session: session),
                   ),
-                );
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Address copied to clipboard')),
                 );
               }
               if (value == 'admin') {
@@ -246,12 +235,12 @@ class ChatListScreen extends StatelessWidget {
             },
             itemBuilder: (context) => [
               PopupMenuItem(
-                value: 'copy_id',
+                value: 'my_address',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('Copy my address'),
+                    const Text('My address'),
                     Text(
                       session.state.server,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -423,6 +412,28 @@ class _NewChatSheetState extends State<_NewChatSheet> {
     }
   }
 
+  /// Pushes the QR scanner and, on a recognizable freizone://chat result
+  /// (lib/util/invite_uri.dart), fills the address and name fields --
+  /// same pre-fill pattern as the setup wizard's own invite scan.
+  Future<void> _scanQr() async {
+    final raw = await Navigator.of(
+      context,
+    ).push<String>(MaterialPageRoute(builder: (_) => const QrScanScreen()));
+    if (raw == null || !mounted) return;
+
+    final invite = parseChatInviteUri(raw);
+    if (invite == null) {
+      setState(() => _error = 'That QR code is not a Freizone chat invite');
+      return;
+    }
+
+    setState(() {
+      _idController.text = '${invite.id}*${invite.server}';
+      if (invite.name != null) _nameController.text = invite.name!;
+      _error = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -441,15 +452,32 @@ class _NewChatSheetState extends State<_NewChatSheet> {
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 16),
-          TextField(
-            controller: _idController,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Peer account id',
-              helperText:
-                  'Full id, first 5 characters, or a full address like id*server',
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _idController,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Peer account id',
+                  ),
+                  enabled: !_loading,
+                ),
+              ),
+              const SizedBox(width: 12),
+              QrScanButton(
+                onPressed: _loading ? null : _scanQr,
+                tooltip: 'Scan a chat invite QR code',
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Full id, first 5 characters, or a full address like id*server',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
-            enabled: !_loading,
           ),
           const SizedBox(height: 8),
           TextField(

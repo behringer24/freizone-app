@@ -10,12 +10,12 @@ import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../state/app_session.dart';
 import '../util/errors.dart';
 import '../util/invite_uri.dart';
+import '../widgets/qr_invite_card.dart';
 
 class InviteScreen extends StatefulWidget {
   const InviteScreen({super.key, required this.session});
@@ -110,44 +110,25 @@ class _InviteScreenState extends State<InviteScreen> {
               padding: const EdgeInsets.all(24),
               child: Column(
                 children: [
-                  RepaintBoundary(
-                    key: _captureKey,
-                    child: Container(
-                      color: Theme.of(context).scaffoldBackgroundColor,
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            'Freizone Invite',
-                            style: Theme.of(context).textTheme.headlineSmall,
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'Scan this with the Freizone app to join automatically.',
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 24),
-                          QrImageView(
-                            data: buildInviteUri(
-                              server: server,
-                              code: _code,
-                            ).toString(),
-                            size: 260,
-                            backgroundColor: Colors.white,
-                          ),
-                          const SizedBox(height: 24),
-                          SelectableText(server, textAlign: TextAlign.center),
-                          if (_code != null) ...[
-                            const SizedBox(height: 4),
-                            SelectableText(
-                              'Invite code: $_code',
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
+                  QrInviteCard(
+                    captureKey: _captureKey,
+                    title: 'Freizone Invite',
+                    subtitle:
+                        'Scan this with the Freizone app to join automatically.',
+                    qrData: buildInviteUri(
+                      server: server,
+                      code: _code,
+                    ).toString(),
+                    addressLines: [
+                      SelectableText(server, textAlign: TextAlign.center),
+                      if (_code != null) ...[
+                        const SizedBox(height: 4),
+                        SelectableText(
+                          'Invite code: $_code',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 24),
                   FilledButton.icon(
