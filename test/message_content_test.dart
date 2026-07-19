@@ -34,6 +34,25 @@ void main() {
       expect(decoded.replyPreview?.mine, isTrue);
     });
 
+    test('round-trips a federated sender_server', () {
+      final content = MessageContent(
+        id: 'fed-id',
+        text: 'hi from another server',
+        senderServer: 'https://chat.example.org',
+      );
+      final decoded = MessageContent.decode(
+        content.encode(),
+        fallbackId: 'unused',
+      );
+      expect(decoded.senderServer, 'https://chat.example.org');
+    });
+
+    test('omits sender_server entirely for a same-server message', () {
+      final content = MessageContent(id: 'local-id', text: 'hi');
+      final raw = jsonDecode(utf8.decode(content.encode())) as Map;
+      expect(raw.containsKey('sender_server'), isFalse);
+    });
+
     test('legacy (pre-envelope) bare-text plaintext falls back cleanly', () {
       final bytes = Uint8List.fromList(utf8.encode('just plain old text'));
       final decoded = MessageContent.decode(bytes, fallbackId: 'fallback-1');

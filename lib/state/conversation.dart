@@ -68,6 +68,7 @@ class Conversation {
   Conversation({
     required this.peerAccountId,
     this.displayName,
+    this.peerServer,
     this.peerDeviceId,
     this.peerDevicePubKey,
     List<StoredMessage>? messages,
@@ -81,6 +82,7 @@ class Conversation {
   factory Conversation.fromJson(Map<String, dynamic> j) => Conversation(
     peerAccountId: j['peer_account_id'] as String,
     displayName: j['display_name'] as String?,
+    peerServer: j['peer_server'] as String?,
     peerDeviceId: j['peer_device_id'] as String?,
     peerDevicePubKey: j['peer_device_pub_key'] == null
         ? null
@@ -97,6 +99,14 @@ class Conversation {
 
   final String peerAccountId;
   String? displayName;
+
+  /// This peer's home server, normalized (see server_url.dart), if it's
+  /// on a DIFFERENT server than this session's own -- null means "same
+  /// server," the common case. Set explicitly when starting a federated
+  /// conversation, and kept fresh on every incoming message that carries
+  /// one (see AppSession._handleIncoming and message_content.dart's
+  /// senderServer) so it self-heals if local state is ever lost.
+  String? peerServer;
   String? peerDeviceId;
   Uint8List? peerDevicePubKey;
   List<StoredMessage> messages;
@@ -132,6 +142,7 @@ class Conversation {
   Map<String, dynamic> toJson() => {
     'peer_account_id': peerAccountId,
     if (displayName != null) 'display_name': displayName,
+    if (peerServer != null) 'peer_server': peerServer,
     if (peerDeviceId != null) 'peer_device_id': peerDeviceId,
     if (peerDevicePubKey != null)
       'peer_device_pub_key': encodeB64(peerDevicePubKey!),
