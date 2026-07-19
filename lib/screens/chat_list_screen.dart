@@ -178,10 +178,24 @@ class ChatListScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Freizone'),
-        backgroundColor: Colors.grey.shade100,
+        title: Text(
+          'Freizone',
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            color: isDark ? Colors.white : Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        // A pure-light background (as used in light mode) would glare at
+        // night, so dark mode swaps it for a themed dark grey -- the
+        // admin/moderator role badges keep their own white circle behind
+        // the glyph (see role_icon.dart usage below), so they stay legible
+        // either way.
+        backgroundColor: isDark
+            ? Theme.of(context).colorScheme.surfaceContainerHigh
+            : Colors.grey.shade100,
         bottom: appBarBottom,
         actions: [
           PopupMenuButton<String>(

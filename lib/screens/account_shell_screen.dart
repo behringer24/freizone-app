@@ -49,8 +49,13 @@ class AccountShellScreen extends StatelessWidget {
   }
 
   Widget _buildSwitcher(BuildContext context, AppSession? active) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      color: Colors.white,
+      // Same reasoning as ChatListScreen's AppBar: a solid white strip
+      // would glare at night, so dark mode swaps it for a themed dark
+      // grey. The role-badge overlay below keeps its own white circle
+      // behind the glyph, so it stays legible against either background.
+      color: isDark ? Theme.of(context).colorScheme.surfaceContainerHigh : Colors.white,
       height: 72,
       // Listens to every session directly (not just `manager`) so a
       // badge -- an incoming message, a role change picked up by
