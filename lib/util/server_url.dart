@@ -13,3 +13,23 @@ String normalizeServerUrl(String input) {
   }
   return s;
 }
+
+/// Whether [a] and [b] identify the same server, once each is run
+/// through [normalizeServerUrl]. Scheme is ignored when neither side
+/// names an explicit port -- e.g. "chat.example.org" and
+/// "http://chat.example.org" are the same server, since the scheme is
+/// just how this device happens to be reaching it, not part of the
+/// server's identity (see buildFreizoneAddress, which drops the
+/// default https:// for exactly this reason). An explicit port on
+/// either side is still compared exactly, since that usually does
+/// point at a genuinely different endpoint. Host comparison is
+/// case-insensitive, since domain names are.
+bool sameServer(String a, String b) {
+  final ua = Uri.tryParse(normalizeServerUrl(a));
+  final ub = Uri.tryParse(normalizeServerUrl(b));
+  if (ua == null || ub == null) {
+    return normalizeServerUrl(a).toLowerCase() == normalizeServerUrl(b).toLowerCase();
+  }
+  if (ua.host.toLowerCase() != ub.host.toLowerCase()) return false;
+  return (ua.hasPort ? ua.port : null) == (ub.hasPort ? ub.port : null);
+}

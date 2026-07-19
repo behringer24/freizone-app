@@ -140,7 +140,7 @@ class _SetupScreenState extends State<SetupScreen> {
     }
 
     final server = normalizeServerUrl(input);
-    if (widget.existingServers.map(normalizeServerUrl).contains(server)) {
+    if (widget.existingServers.any((s) => sameServer(s, server))) {
       if (!await _confirmDuplicateServer()) return;
       if (!mounted) return;
     }

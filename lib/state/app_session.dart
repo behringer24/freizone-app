@@ -23,6 +23,7 @@ import '../net/sse_client.dart';
 import '../push/push_manager.dart';
 import '../util/address_format.dart';
 import '../util/freizone_address.dart';
+import '../util/server_url.dart';
 import 'conversation.dart';
 import 'local_state.dart';
 
@@ -422,7 +423,7 @@ class AppSession extends ChangeNotifier {
   }) async {
     final parsed = parseFreizoneAddress(peerAddress);
     if (parsed == null) throw StateError('Not a valid Freizone address');
-    if (parsed.server != null && parsed.server != state.server) {
+    if (parsed.server != null && !sameServer(parsed.server!, state.server)) {
       throw StateError(
         'This address is on a different server (${parsed.server}) -- not supported yet, no federation.',
       );
