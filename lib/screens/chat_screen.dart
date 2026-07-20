@@ -11,6 +11,7 @@ import '../state/conversation.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../widgets/pattern_background.dart';
+import '../widgets/rename_dialog.dart';
 import 'peer_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -232,7 +233,7 @@ class _ChatScreenState extends State<ChatScreen> {
   ) async {
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => _RenameDialog(initialName: convo.displayName ?? ''),
+      builder: (context) => RenameDialog(initialName: convo.displayName ?? ''),
     );
     if (result == null) return; // cancelled
     await widget.session.setDisplayName(
@@ -560,56 +561,6 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Dialog content for setting/changing/removing a conversation's local
-/// alias. A dedicated StatefulWidget (rather than a controller created
-/// and manually disposed inline) so the TextEditingController's
-/// lifecycle is tied to this Element's own dispose(), not a
-/// hand-timed call racing the dialog route's exit transition.
-class _RenameDialog extends StatefulWidget {
-  const _RenameDialog({required this.initialName});
-
-  final String initialName;
-
-  @override
-  State<_RenameDialog> createState() => _RenameDialogState();
-}
-
-class _RenameDialogState extends State<_RenameDialog> {
-  late final _controller = TextEditingController(text: widget.initialName);
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Edit name'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        decoration: const InputDecoration(labelText: 'Name'),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(''),
-          child: const Text('Remove'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(_controller.text),
-          child: const Text('Save'),
-        ),
-      ],
     );
   }
 }
