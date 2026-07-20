@@ -75,6 +75,7 @@ class Conversation {
     DateTime? lastActivityAt,
     this.hasUnread = false,
     List<String>? pinnedMessageIds,
+    this.blocked = false,
   }) : messages = messages ?? [],
        pinnedMessageIds = pinnedMessageIds ?? [],
        lastActivityAt = lastActivityAt ?? DateTime.now().toUtc();
@@ -95,6 +96,7 @@ class Conversation {
     pinnedMessageIds: (j['pinned_message_ids'] as List<dynamic>?)
         ?.cast<String>()
         .toList(),
+    blocked: j['blocked'] as bool? ?? false,
   );
 
   final String peerAccountId;
@@ -122,6 +124,13 @@ class Conversation {
   /// shows the most recently pinned one by default, with </> to browse
   /// the rest.
   List<String> pinnedMessageIds;
+
+  /// True once this peer is blocked -- purely local (see
+  /// AppSession.setBlocked): further incoming messages are decrypted
+  /// (so the ratchet session and server-side queue both stay clean) but
+  /// dropped before being stored or notified, and the chat screen
+  /// disables sending. The peer is never told either way.
+  bool blocked;
 
   /// The alias if one is set, otherwise the peer's compact
   /// "shortid*domain" address -- which server they're actually on is
@@ -156,5 +165,6 @@ class Conversation {
     'last_activity_at': encodeTime(lastActivityAt),
     'has_unread': hasUnread,
     if (pinnedMessageIds.isNotEmpty) 'pinned_message_ids': pinnedMessageIds,
+    if (blocked) 'blocked': blocked,
   };
 }

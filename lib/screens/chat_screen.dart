@@ -11,6 +11,7 @@ import '../state/conversation.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../widgets/pattern_background.dart';
+import 'peer_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -248,6 +249,17 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
+  void _openProfile(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PeerProfileScreen(
+          session: widget.session,
+          peerAccountId: widget.peerAccountId,
+        ),
+      ),
+    );
+  }
+
   Widget _buildTitle(BuildContext context, Conversation convo) {
     final colorScheme = Theme.of(context).colorScheme;
     final title = convo.titleFor(widget.session.state.server);
@@ -255,39 +267,47 @@ class _ChatScreenState extends State<ChatScreen> {
       id: convo.peerAccountId,
       server: convo.peerServer ?? widget.session.state.server,
     );
-    return Row(
-      children: [
-        CircleAvatar(
-          radius: 18,
-          backgroundColor: _avatarColor(convo.peerAccountId),
-          child: Text(
-            title.substring(0, title.length >= 2 ? 2 : 1).toUpperCase(),
-            style: const TextStyle(color: Colors.white, fontSize: 14),
+    return InkWell(
+      onTap: () => _openProfile(context),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: _avatarColor(convo.peerAccountId),
+            child: Text(
+              title.substring(0, title.length >= 2 ? 2 : 1).toUpperCase(),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
           ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: convo.displayName != null
-              ? Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(convo.displayName!, overflow: TextOverflow.ellipsis),
-                    // Always shown alongside the alias, smaller and muted,
-                    // so which server this peer is actually on is never
-                    // hidden behind a name someone else could equally claim.
-                    Text(
-                      shortAddress,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
+          const SizedBox(width: 12),
+          Expanded(
+            child: convo.displayName != null
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        convo.displayName!,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                )
-              : Text(title, overflow: TextOverflow.ellipsis),
-        ),
-      ],
+                      // Always shown alongside the alias, smaller and muted,
+                      // so which server this peer is actually on is never
+                      // hidden behind a name someone else could equally claim.
+                      Text(
+                        shortAddress,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  )
+                : Text(title, overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ),
     );
   }
 
@@ -336,63 +356,98 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               if (_replyingTo != null)
                 _buildReplyComposerBar(context, convo, _replyingTo!),
-              SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _messageController,
-                          decoration: InputDecoration(
-                            hintText: 'Message',
-                            filled: true,
-                            fillColor: colorScheme.surfaceContainerHighest,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
+              if (convo.blocked)
+                _buildBlockedBar(context, convo)
+              else
+                SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _messageController,
+                            decoration: InputDecoration(
+                              hintText: 'Message',
+                              filled: true,
+                              fillColor: colorScheme.surfaceContainerHighest,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                borderSide: BorderSide.none,
+                              ),
                             ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(24),
-                              borderSide: BorderSide.none,
+                            minLines: 1,
+                            maxLines: 5,
+                            textCapitalization: TextCapitalization.sentences,
+                            onChanged: (_) => setState(() {}),
+                            onSubmitted: (_) => _send(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        CircleAvatar(
+                          radius: 24,
+                          backgroundColor:
+                              _messageController.text.trim().isEmpty
+                              ? colorScheme.surfaceContainerHighest
+                              : colorScheme.primary,
+                          child: IconButton(
+                            icon: Icon(
+                              Icons.send,
+                              color: _messageController.text.trim().isEmpty
+                                  ? colorScheme.onSurfaceVariant
+                                  : colorScheme.onPrimary,
                             ),
+                            onPressed: _sending ? null : _send,
                           ),
-                          minLines: 1,
-                          maxLines: 5,
-                          textCapitalization: TextCapitalization.sentences,
-                          onChanged: (_) => setState(() {}),
-                          onSubmitted: (_) => _send(),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      CircleAvatar(
-                        radius: 24,
-                        backgroundColor:
-                            _messageController.text.trim().isEmpty
-                            ? colorScheme.surfaceContainerHighest
-                            : colorScheme.primary,
-                        child: IconButton(
-                          icon: Icon(
-                            Icons.send,
-                            color: _messageController.text.trim().isEmpty
-                                ? colorScheme.onSurfaceVariant
-                                : colorScheme.onPrimary,
-                          ),
-                          onPressed: _sending ? null : _send,
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// Replaces the message composer while this peer is blocked -- sending
+  /// (and, per AppSession._handleIncoming, receiving) is disabled until
+  /// unblocked from their profile screen.
+  Widget _buildBlockedBar(BuildContext context, Conversation convo) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        color: colorScheme.errorContainer,
+        child: Row(
+          children: [
+            Icon(Icons.block, size: 18, color: colorScheme.onErrorContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'You have blocked this contact',
+                style: TextStyle(color: colorScheme.onErrorContainer),
+              ),
+            ),
+            TextButton(
+              onPressed: () =>
+                  widget.session.setBlocked(widget.peerAccountId, false),
+              child: const Text('Unblock'),
+            ),
+          ],
+        ),
       ),
     );
   }
