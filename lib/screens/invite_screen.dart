@@ -96,7 +96,7 @@ class _InviteScreenState extends State<InviteScreen> {
     final server = widget.session.state.server;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Invite')),
+      appBar: AppBar(title: const Text('Invite to server')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null

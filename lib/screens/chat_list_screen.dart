@@ -234,24 +234,15 @@ class ChatListScreen extends StatelessWidget {
               }
             },
             itemBuilder: (context) => [
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: 'my_address',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('My address'),
-                    Text(
-                      session.state.server,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
+                child: Text('Invite to chat'),
               ),
               if (_canInvite(session))
-                const PopupMenuItem(value: 'invite', child: Text('Invite')),
+                const PopupMenuItem(
+                  value: 'invite',
+                  child: Text('Invite to server'),
+                ),
               if (session.myRole == 'admin' || session.myRole == 'moderator')
                 const PopupMenuItem(
                   value: 'admin',

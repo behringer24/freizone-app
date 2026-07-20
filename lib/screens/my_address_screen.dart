@@ -86,7 +86,7 @@ class _MyAddressScreenState extends State<MyAddressScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('My Address')),
+      appBar: AppBar(title: const Text('Invite to chat')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
