@@ -10,6 +10,7 @@ import '../state/app_session.dart';
 import '../state/conversation.dart';
 import '../util/address_format.dart';
 import '../util/errors.dart';
+import '../widgets/pattern_background.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -322,17 +323,7 @@ class _ChatScreenState extends State<ChatScreen> {
               if (convo.pinnedMessageIds.isNotEmpty)
                 _buildPinnedBar(context, convo),
               Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    image: DecorationImage(
-                      image: AssetImage(
-                        Theme.of(context).brightness == Brightness.dark
-                            ? 'gfx/chat_background_dark.png'
-                            : 'gfx/chat_background_light.png',
-                      ),
-                      repeat: ImageRepeat.repeat,
-                    ),
-                  ),
+                child: PatternBackground(
                   child: ListView(
                     controller: _scrollController,
                     padding: const EdgeInsets.all(8),

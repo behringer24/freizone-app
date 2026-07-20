@@ -9,6 +9,8 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'pattern_background.dart';
+
 class QrInviteCard extends StatelessWidget {
   const QrInviteCard({
     super.key,
@@ -48,70 +50,79 @@ class QrInviteCard extends StatelessWidget {
     return RepaintBoundary(
       key: captureKey,
       child: Container(
-        padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          // Always the light tile, regardless of the app's own theme
-          // mode -- this card (and its shared image) is its own
-          // self-contained visual, not something that should go dark
-          // just because the rest of the app currently is.
-          image: const DecorationImage(
-            image: AssetImage('gfx/chat_background_light.png'),
-            repeat: ImageRepeat.repeat,
-          ),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: teal, width: 2),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              title,
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                color: teal,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(subtitle, textAlign: TextAlign.center),
-            const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: teal, width: 3),
-              ),
-              child: Stack(
-                alignment: Alignment.center,
+        // An explicit ClipRRect around just the fill+content -- rather
+        // than Container's own clipBehavior, which clips the border's
+        // DecoratedBox paint and the pattern's BlendMode.srcIn layer
+        // through the same path and rendered a faceted, non-smooth
+        // corner on device. Radius is inset by the border width (which
+        // Container's decoration.padding already insets the child by)
+        // so it traces just inside the border stroke.
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: PatternBackground(
+            forceLight: true,
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  QrImageView(
-                    data: qrData,
-                    size: _qrBoxSize,
-                    backgroundColor: Colors.white,
-                    // H-level correction is needed once the center icon
-                    // covers part of the code -- the default L level
-                    // can't reliably recover the obscured modules.
-                    errorCorrectionLevel: QrErrorCorrectLevel.H,
-                    eyeStyle: QrEyeStyle(
-                      eyeShape: QrEyeShape.square,
+                  Text(
+                    title,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.headlineSmall?.copyWith(
                       color: teal,
-                    ),
-                    dataModuleStyle: const QrDataModuleStyle(
-                      dataModuleShape: QrDataModuleShape.square,
-                      color: Colors.black87,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  _QrCenterIcon(
-                    diameter: _iconDiameter,
-                    ringWidth: moduleSize,
+                  const SizedBox(height: 8),
+                  Text(subtitle, textAlign: TextAlign.center),
+                  const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: teal, width: 3),
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        QrImageView(
+                          data: qrData,
+                          size: _qrBoxSize,
+                          backgroundColor: Colors.white,
+                          // H-level correction is needed once the center
+                          // icon covers part of the code -- the default L
+                          // level can't reliably recover the obscured
+                          // modules.
+                          errorCorrectionLevel: QrErrorCorrectLevel.H,
+                          eyeStyle: QrEyeStyle(
+                            eyeShape: QrEyeShape.square,
+                            color: teal,
+                          ),
+                          dataModuleStyle: const QrDataModuleStyle(
+                            dataModuleShape: QrDataModuleShape.square,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        _QrCenterIcon(
+                          diameter: _iconDiameter,
+                          ringWidth: moduleSize,
+                        ),
+                      ],
+                    ),
                   ),
+                  const SizedBox(height: 24),
+                  ...addressLines,
                 ],
               ),
             ),
-            const SizedBox(height: 24),
-            ...addressLines,
-          ],
+          ),
         ),
       ),
     );
