@@ -393,7 +393,12 @@ class AppSession extends ChangeNotifier {
         // (which Android derives from active notifications, not
         // anything drawn in-app) would never appear for a message that
         // happened to arrive while the app was in the foreground.
-        unawaited(showMessageNotification(state.accountId));
+        unawaited(
+          showMessageNotification(
+            state.accountId,
+            peerAccountId: msg.senderAccountId,
+          ),
+        );
       }
 
       await LocalStateStore.saveProfile(state);

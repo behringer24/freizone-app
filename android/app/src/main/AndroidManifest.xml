@@ -38,6 +38,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- FCM's own default status-bar icon for background notifications
+             it delivers natively (before any Dart code runs). Without
+             this, FCM falls back to the application's @mipmap/ic_launcher,
+             showing that icon's silhouette (a plain filled circle) instead
+             of a recognizable shape. See lib/push/push_manager.dart's
+             AndroidInitializationSettings for the equivalent fix on the
+             flutter_local_notifications side. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_notification" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
