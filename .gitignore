@@ -62,3 +62,6 @@ native/*_android
 gfx/*.html
 gfx/*_files/
 /local-gfx
+
+# Personal Claude Code workflow notes -- not part of the public project.
+CLAUDE.md
