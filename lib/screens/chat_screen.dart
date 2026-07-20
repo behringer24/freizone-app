@@ -8,8 +8,8 @@ import 'package:flutter/material.dart';
 
 import '../state/app_session.dart';
 import '../state/conversation.dart';
-import '../util/address_format.dart';
 import '../util/errors.dart';
+import '../util/freizone_address.dart';
 import '../widgets/pattern_background.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -211,7 +211,7 @@ class _ChatScreenState extends State<ChatScreen> {
           key: _keyFor(m.id),
           message: m,
           timeLabel: _timeLabel(m.timestamp),
-          peerTitle: convo.title,
+          peerTitle: convo.titleFor(widget.session.state.server),
           isPinned: convo.pinnedMessageIds.contains(m.id),
           onLongPress: () => _showMessageActions(context, convo, m),
           onTapQuote: m.replyToId == null
@@ -250,15 +250,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildTitle(BuildContext context, Conversation convo) {
     final colorScheme = Theme.of(context).colorScheme;
+    final title = convo.titleFor(widget.session.state.server);
+    final shortAddress = shortFreizoneAddress(
+      id: convo.peerAccountId,
+      server: convo.peerServer ?? widget.session.state.server,
+    );
     return Row(
       children: [
         CircleAvatar(
           radius: 18,
           backgroundColor: _avatarColor(convo.peerAccountId),
           child: Text(
-            convo.title
-                .substring(0, convo.title.length >= 2 ? 2 : 1)
-                .toUpperCase(),
+            title.substring(0, title.length >= 2 ? 2 : 1).toUpperCase(),
             style: const TextStyle(color: Colors.white, fontSize: 14),
           ),
         ),
@@ -271,10 +274,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   children: [
                     Text(convo.displayName!, overflow: TextOverflow.ellipsis),
                     // Always shown alongside the alias, smaller and muted,
-                    // so the verifiable id is never hidden behind a name
-                    // someone else could equally claim.
+                    // so which server this peer is actually on is never
+                    // hidden behind a name someone else could equally claim.
                     Text(
-                      formatAccountIdForDisplay(convo.peerAccountId),
+                      shortAddress,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: colorScheme.onSurfaceVariant,
                       ),
@@ -282,7 +285,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ],
                 )
-              : Text(convo.title, overflow: TextOverflow.ellipsis),
+              : Text(title, overflow: TextOverflow.ellipsis),
         ),
       ],
     );
@@ -478,7 +481,9 @@ class _ChatScreenState extends State<ChatScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  replyingTo.mine ? 'Replying to yourself' : 'Replying to ${convo.title}',
+                  replyingTo.mine
+                      ? 'Replying to yourself'
+                      : 'Replying to ${convo.titleFor(widget.session.state.server)}',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 12,

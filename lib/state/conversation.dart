@@ -5,7 +5,7 @@
 import 'dart:typed_data';
 
 import '../ffi/models.dart';
-import '../util/address_format.dart';
+import '../util/freizone_address.dart';
 import 'message_content.dart';
 
 /// One decrypted (or about-to-be-sent) chat line, persisted locally --
@@ -123,9 +123,15 @@ class Conversation {
   /// the rest.
   List<String> pinnedMessageIds;
 
-  /// The alias if one is set, otherwise the id in its readable,
-  /// dash-grouped form (docs/PROTOCOL.md's cosmetic display format).
-  String get title => displayName ?? formatAccountIdForDisplay(peerAccountId);
+  /// The alias if one is set, otherwise the peer's compact
+  /// "shortid*domain" address -- which server they're actually on is
+  /// worth always keeping visible (especially once federation means
+  /// that isn't always this session's own server), more so than the
+  /// full checksummed id. [localServer] fills in for [peerServer] ==
+  /// null (this peer is on the same server as us).
+  String titleFor(String localServer) =>
+      displayName ??
+      shortFreizoneAddress(id: peerAccountId, server: peerServer ?? localServer);
 
   String get lastMessagePreview => messages.isEmpty ? '' : messages.last.text;
 

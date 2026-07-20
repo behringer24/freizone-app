@@ -48,7 +48,7 @@ class ChatListScreen extends StatelessWidget {
   final PreferredSizeWidget? appBarBottom;
 
   String _initials(Conversation c) {
-    final source = c.title;
+    final source = c.titleFor(session.state.server);
     return source.isEmpty
         ? '?'
         : source.substring(0, source.length >= 2 ? 2 : 1).toUpperCase();
@@ -97,7 +97,7 @@ class ChatListScreen extends StatelessWidget {
     final action = await showDialog<String>(
       context: context,
       builder: (context) => SimpleDialog(
-        title: Text(convo.title),
+        title: Text(convo.titleFor(session.state.server)),
         children: [
           SimpleDialogOption(
             onPressed: () => Navigator.of(context).pop('clear'),
@@ -118,7 +118,7 @@ class ChatListScreen extends StatelessWidget {
         builder: (context) => AlertDialog(
           title: const Text('Clear chat?'),
           content: Text(
-            'This permanently deletes the message history with ${convo.title} on this device. '
+            'This permanently deletes the message history with ${convo.titleFor(session.state.server)} on this device. '
             'The conversation itself stays -- this cannot be undone.',
           ),
           actions: [
@@ -141,8 +141,8 @@ class ChatListScreen extends StatelessWidget {
         builder: (context) => AlertDialog(
           title: const Text('Delete chat?'),
           content: Text(
-            'This permanently removes the conversation with ${convo.title} and its message history from '
-            'this device -- this cannot be undone. ${convo.title} still exists; you can start a new chat with '
+            'This permanently removes the conversation with ${convo.titleFor(session.state.server)} and its message history from '
+            'this device -- this cannot be undone. ${convo.titleFor(session.state.server)} still exists; you can start a new chat with '
             'them again any time.',
           ),
           actions: [
@@ -324,7 +324,7 @@ class ChatListScreen extends StatelessWidget {
                   ],
                 ),
                 title: Text(
-                  convo.title,
+                  convo.titleFor(session.state.server),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
