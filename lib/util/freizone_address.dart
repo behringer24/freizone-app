@@ -77,6 +77,20 @@ String buildFreizoneAddress({required String id, required String server}) {
   return '${formatAccountIdForDisplay(id)}*${withoutDefaultScheme(server)}';
 }
 
+/// Compact "shortid*domain" form for displaying a peer you're already
+/// chatting with (chat list rows, chat screen title/subtitle) -- unlike
+/// [buildFreizoneAddress] (the full checksummed id, needed so someone
+/// else can actually resolve your address), an existing conversation
+/// doesn't need its full id re-verified at a glance every time, but
+/// which server the peer is actually on is always worth keeping visible
+/// -- especially once federation means that isn't always this server.
+String shortFreizoneAddress({required String id, required String server}) {
+  final shortId = id.length > accountIdPrefixLength
+      ? id.substring(0, accountIdPrefixLength)
+      : id;
+  return '$shortId*${withoutDefaultScheme(server)}';
+}
+
 const _defaultScheme = 'https://';
 
 /// Strips a leading "https://" -- the assumed-by-default scheme
