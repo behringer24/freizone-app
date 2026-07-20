@@ -11,8 +11,9 @@ import '../state/conversation.dart';
 import '../util/address_format.dart';
 import '../util/avatar_color.dart';
 import '../util/freizone_address.dart';
+import '../widgets/rename_dialog.dart';
 
-class PeerProfileScreen extends StatefulWidget {
+class PeerProfileScreen extends StatelessWidget {
   const PeerProfileScreen({
     super.key,
     required this.session,
@@ -22,26 +23,6 @@ class PeerProfileScreen extends StatefulWidget {
   final AppSession session;
   final String peerAccountId;
 
-  @override
-  State<PeerProfileScreen> createState() => _PeerProfileScreenState();
-}
-
-class _PeerProfileScreenState extends State<PeerProfileScreen> {
-  late final TextEditingController _nameController;
-
-  @override
-  void initState() {
-    super.initState();
-    final convo = widget.session.conversation(widget.peerAccountId);
-    _nameController = TextEditingController(text: convo?.displayName ?? '');
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    super.dispose();
-  }
-
   Future<void> _copy(BuildContext context, String label, String value) async {
     await Clipboard.setData(ClipboardData(text: value));
     if (!context.mounted) return;
@@ -50,20 +31,27 @@ class _PeerProfileScreenState extends State<PeerProfileScreen> {
     ).showSnackBar(SnackBar(content: Text('$label copied to clipboard')));
   }
 
-  Future<void> _saveName(BuildContext context) async {
-    await widget.session.setDisplayName(
-      widget.peerAccountId,
-      _nameController.text,
+  /// Same dialog used from the chat screen's own "Edit name" icon --
+  /// kept in sync since both are just alternate entry points to the
+  /// same purely-local alias.
+  Future<void> _showRenameDialog(
+    BuildContext context,
+    Conversation convo,
+  ) async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => RenameDialog(initialName: convo.displayName ?? ''),
     );
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Name updated')));
+    if (result == null) return; // cancelled
+    await session.setDisplayName(
+      peerAccountId,
+      result.isEmpty ? null : result,
+    );
   }
 
   Future<void> _toggleBlock(BuildContext context, Conversation convo) async {
     if (convo.blocked) {
-      await widget.session.setBlocked(widget.peerAccountId, false);
+      await session.setBlocked(peerAccountId, false);
       return;
     }
     final confirmed = await showDialog<bool>(
@@ -71,7 +59,7 @@ class _PeerProfileScreenState extends State<PeerProfileScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Block this contact?'),
         content: Text(
-          'You will stop receiving messages from ${convo.titleFor(widget.session.state.server)} on this '
+          'You will stop receiving messages from ${convo.titleFor(session.state.server)} on this '
           'device -- they are not notified, and this cannot be undone remotely. You can unblock them here '
           'again at any time.',
         ),
@@ -91,16 +79,16 @@ class _PeerProfileScreenState extends State<PeerProfileScreen> {
       ),
     );
     if (confirmed == true) {
-      await widget.session.setBlocked(widget.peerAccountId, true);
+      await session.setBlocked(peerAccountId, true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: widget.session,
+      listenable: session,
       builder: (context, _) {
-        final convo = widget.session.conversation(widget.peerAccountId);
+        final convo = session.conversation(peerAccountId);
         if (convo == null) {
           // The conversation was deleted (e.g. from the chat list) while
           // this screen was still open -- nothing left to show.
@@ -116,7 +104,7 @@ class _PeerProfileScreenState extends State<PeerProfileScreen> {
           0,
           accountIdPrefixLength,
         );
-        final peerServer = convo.peerServer ?? widget.session.state.server;
+        final peerServer = convo.peerServer ?? session.state.server;
         final shortAddress = shortFreizoneAddress(
           id: convo.peerAccountId,
           server: peerServer,
@@ -186,25 +174,17 @@ class _PeerProfileScreenState extends State<PeerProfileScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: TextField(
-                  controller: _nameController,
-                  decoration: InputDecoration(
-                    labelText: 'Peer name',
-                    hintText: 'No name set -- shows the address instead',
-                    border: const OutlineInputBorder(),
-                    suffixIcon: IconButton(
-                      icon: const Icon(Icons.check),
-                      tooltip: 'Save name',
-                      onPressed: () => _saveName(context),
-                    ),
-                  ),
-                  textCapitalization: TextCapitalization.words,
-                  onSubmitted: (_) => _saveName(context),
+              ListTile(
+                title: const Text('Peer name'),
+                subtitle: Text(
+                  convo.displayName ?? 'No name set -- shows the address instead',
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.edit_outlined),
+                  tooltip: 'Edit name',
+                  onPressed: () => _showRenameDialog(context, convo),
                 ),
               ),
-              const SizedBox(height: 16),
               ListTile(
                 title: const Text('Short address'),
                 subtitle: Text(shortAddress),
