@@ -99,6 +99,15 @@ class _AppRootState extends State<AppRoot> {
   /// specific peer (see push_manager.dart's showMessageNotification),
   /// pushes straight into that conversation -- otherwise just leaves the
   /// account switched, landing on its chat list.
+  ///
+  /// Always unwinds back to the chat list first (popUntil isFirst) before
+  /// pushing -- a plain push would stack the tapped chat on top of
+  /// whatever screen (often a *different* chat) happened to already be
+  /// open, so back would return there instead of to the chat list. Since
+  /// this always lands on the same single chat screen, whatever was
+  /// previously open (any chat, Settings, ...) is simply gone rather than
+  /// still reachable further back -- the deliberate trade-off for "back
+  /// always goes to the chat list" from a notification tap.
   void _openChatFor(String accountId, String? peerAccountId) {
     final manager = _manager;
     if (manager == null || !mounted) return;
@@ -108,7 +117,9 @@ class _AppRootState extends State<AppRoot> {
     manager.setActive(accountId);
     if (peerAccountId == null) return;
 
-    Navigator.of(context).push(
+    final navigator = Navigator.of(context);
+    navigator.popUntil((route) => route.isFirst);
+    navigator.push(
       MaterialPageRoute(
         builder: (_) =>
             ChatScreen(session: session, peerAccountId: peerAccountId),

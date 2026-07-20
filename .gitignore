@@ -61,3 +61,4 @@ native/*_android
 # a design asset -- keep only the actual gfx/*.png source layers.
 gfx/*.html
 gfx/*_files/
+/local-gfx
