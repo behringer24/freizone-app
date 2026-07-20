@@ -373,32 +373,38 @@ class AppSession extends ChangeNotifier {
       if (content.senderServer != null) {
         convo.peerServer = content.senderServer;
       }
-      convo.messages.add(
-        StoredMessage(
-          id: content.id,
-          text: content.text,
-          mine: false,
-          timestamp: now,
-          replyToId: content.replyToId,
-          replyPreviewText: content.replyPreview?.text,
-          replyPreviewMine: content.replyPreview?.mine,
-        ),
-      );
-      convo.lastActivityAt = now;
-      if (msg.senderAccountId != _openConversationPeerId) {
-        convo.hasUnread = true;
-        // This is the live (app-open) delivery path -- a push wake's
-        // _onMessage already shows this same notification for the
-        // background case. Without this, the launcher icon's badge
-        // (which Android derives from active notifications, not
-        // anything drawn in-app) would never appear for a message that
-        // happened to arrive while the app was in the foreground.
-        unawaited(
-          showMessageNotification(
-            state.accountId,
-            peerAccountId: msg.senderAccountId,
+      // A blocked peer's messages are still decrypted above (so the
+      // ratchet session stays in sync and the server-side queue still
+      // gets drained below) but dropped here rather than stored or
+      // notified -- see setBlocked.
+      if (!convo.blocked) {
+        convo.messages.add(
+          StoredMessage(
+            id: content.id,
+            text: content.text,
+            mine: false,
+            timestamp: now,
+            replyToId: content.replyToId,
+            replyPreviewText: content.replyPreview?.text,
+            replyPreviewMine: content.replyPreview?.mine,
           ),
         );
+        convo.lastActivityAt = now;
+        if (msg.senderAccountId != _openConversationPeerId) {
+          convo.hasUnread = true;
+          // This is the live (app-open) delivery path -- a push wake's
+          // _onMessage already shows this same notification for the
+          // background case. Without this, the launcher icon's badge
+          // (which Android derives from active notifications, not
+          // anything drawn in-app) would never appear for a message that
+          // happened to arrive while the app was in the foreground.
+          unawaited(
+            showMessageNotification(
+              state.accountId,
+              peerAccountId: msg.senderAccountId,
+            ),
+          );
+        }
       }
 
       await LocalStateStore.saveProfile(state);
@@ -528,6 +534,22 @@ class AppSession extends ChangeNotifier {
     convo.displayName = (name == null || name.trim().isEmpty)
         ? null
         : name.trim();
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+  }
+
+  /// Blocks or unblocks a peer -- purely local, since Freizone's open
+  /// registration means an unwanted contact can't be reported or banned
+  /// server-side yet (see peer_profile_screen.dart's "Protection"
+  /// section). Further incoming messages are still decrypted (so the
+  /// ratchet session and the server's per-recipient queue both stay
+  /// clean) but dropped before being stored or notified -- see
+  /// _handleIncoming. Sending is disabled in the UI while blocked. The
+  /// peer is never told either way.
+  Future<void> setBlocked(String peerAccountId, bool blocked) async {
+    final convo = state.conversations[peerAccountId];
+    if (convo == null) return;
+    convo.blocked = blocked;
     await LocalStateStore.saveProfile(state);
     notifyListeners();
   }

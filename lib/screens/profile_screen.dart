@@ -78,7 +78,7 @@ class ProfileScreen extends StatelessWidget {
         };
 
         return Scaffold(
-          appBar: AppBar(title: const Text('Profile')),
+          appBar: AppBar(title: const Text('My Profile')),
           body: ListView(
             padding: const EdgeInsets.symmetric(vertical: 24),
             children: [

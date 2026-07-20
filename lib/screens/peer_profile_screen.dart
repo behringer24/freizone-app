@@ -1,0 +1,276 @@
+// A chat peer's profile -- the peer-facing counterpart to
+// profile_screen.dart (one's own account): avatar, short id and server
+// at a glance, both address forms ready to copy, an editable local
+// alias, and -- since there's no "remove" for someone else's account --
+// a local block/unblock toggle instead of the danger-zone delete button.
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../state/app_session.dart';
+import '../state/conversation.dart';
+import '../util/address_format.dart';
+import '../util/avatar_color.dart';
+import '../util/freizone_address.dart';
+
+class PeerProfileScreen extends StatefulWidget {
+  const PeerProfileScreen({
+    super.key,
+    required this.session,
+    required this.peerAccountId,
+  });
+
+  final AppSession session;
+  final String peerAccountId;
+
+  @override
+  State<PeerProfileScreen> createState() => _PeerProfileScreenState();
+}
+
+class _PeerProfileScreenState extends State<PeerProfileScreen> {
+  late final TextEditingController _nameController;
+
+  @override
+  void initState() {
+    super.initState();
+    final convo = widget.session.conversation(widget.peerAccountId);
+    _nameController = TextEditingController(text: convo?.displayName ?? '');
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _copy(BuildContext context, String label, String value) async {
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('$label copied to clipboard')));
+  }
+
+  Future<void> _saveName(BuildContext context) async {
+    await widget.session.setDisplayName(
+      widget.peerAccountId,
+      _nameController.text,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Name updated')));
+  }
+
+  Future<void> _toggleBlock(BuildContext context, Conversation convo) async {
+    if (convo.blocked) {
+      await widget.session.setBlocked(widget.peerAccountId, false);
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Block this contact?'),
+        content: Text(
+          'You will stop receiving messages from ${convo.titleFor(widget.session.state.server)} on this '
+          'device -- they are not notified, and this cannot be undone remotely. You can unblock them here '
+          'again at any time.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Block'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await widget.session.setBlocked(widget.peerAccountId, true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.session,
+      builder: (context, _) {
+        final convo = widget.session.conversation(widget.peerAccountId);
+        if (convo == null) {
+          // The conversation was deleted (e.g. from the chat list) while
+          // this screen was still open -- nothing left to show.
+          return Scaffold(
+            appBar: AppBar(title: const Text('Profile')),
+            body: const Center(
+              child: Text('This conversation no longer exists'),
+            ),
+          );
+        }
+
+        final shortId = convo.peerAccountId.substring(
+          0,
+          accountIdPrefixLength,
+        );
+        final peerServer = convo.peerServer ?? widget.session.state.server;
+        final shortAddress = shortFreizoneAddress(
+          id: convo.peerAccountId,
+          server: peerServer,
+        );
+        final fullAddress = buildFreizoneAddress(
+          id: convo.peerAccountId,
+          server: peerServer,
+        );
+        final hasAlias = convo.displayName != null;
+        final primaryText = hasAlias ? convo.displayName! : shortId;
+
+        return Scaffold(
+          appBar: AppBar(title: Text('Profile $shortId')),
+          body: ListView(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            children: [
+              Center(
+                child: CircleAvatar(
+                  radius: 48,
+                  backgroundColor: avatarColorFor(convo.peerAccountId),
+                  child: Text(
+                    primaryText
+                        .substring(0, primaryText.length >= 2 ? 2 : 1)
+                        .toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              if (convo.blocked) ...[
+                const SizedBox(height: 12),
+                Center(
+                  child: Chip(
+                    label: const Text('Blocked'),
+                    backgroundColor: Theme.of(context).colorScheme.error,
+                    labelStyle: TextStyle(
+                      color: Theme.of(context).colorScheme.onError,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Center(
+                child: Text(
+                  primaryText,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  hasAlias ? shortAddress : peerServer,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextField(
+                  controller: _nameController,
+                  decoration: InputDecoration(
+                    labelText: 'Peer name',
+                    hintText: 'No name set -- shows the address instead',
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.check),
+                      tooltip: 'Save name',
+                      onPressed: () => _saveName(context),
+                    ),
+                  ),
+                  textCapitalization: TextCapitalization.words,
+                  onSubmitted: (_) => _saveName(context),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                title: const Text('Short address'),
+                subtitle: Text(shortAddress),
+                trailing: IconButton(
+                  icon: const Icon(Icons.copy),
+                  tooltip: 'Copy short address',
+                  onPressed: () =>
+                      _copy(context, 'Short address', shortAddress),
+                ),
+              ),
+              ListTile(
+                title: const Text('Full address'),
+                subtitle: Text(fullAddress),
+                trailing: IconButton(
+                  icon: const Icon(Icons.copy),
+                  tooltip: 'Copy full address',
+                  onPressed: () => _copy(context, 'Full address', fullAddress),
+                ),
+              ),
+              const SizedBox(height: 32),
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Protection',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  'Freizone has open registration, so blocking is currently the only protection against an '
+                  'unwanted contact. It only applies on this device -- the other side is never notified.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: convo.blocked
+                    ? FilledButton.icon(
+                        onPressed: () => _toggleBlock(context, convo),
+                        icon: const Icon(Icons.block_flipped),
+                        label: const Text('Unblock'),
+                      )
+                    : OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Theme.of(context).colorScheme.error,
+                          side: BorderSide(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                        onPressed: () => _toggleBlock(context, convo),
+                        icon: const Icon(Icons.block),
+                        label: const Text('Block this contact'),
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
