@@ -2,7 +2,7 @@
 
 The Android client for [Freizone](https://github.com/behringer24/freizone-server) — a self-hostable, federated, end-to-end encrypted chat server. No central provider: this app talks directly to whichever Freizone server you (or someone you trust) runs, and every message is encrypted on-device before it ever reaches that server.
 
-**Status:** identity, multi-account support, X3DH + Double Ratchet end-to-end encrypted 1:1 messaging, invite QR codes, push notifications (via [UnifiedPush](https://unifiedpush.org/) or Firebase Cloud Messaging, see [Push notifications](#push-notifications) below), and a server admin area are implemented. Android only for now; groups/broadcast and federation are future work, tracked alongside the [server](https://github.com/behringer24/freizone-server)'s own roadmap.
+**Status:** identity, multi-account support, X3DH + Double Ratchet end-to-end encrypted 1:1 messaging, invite QR codes, push notifications (via [UnifiedPush](https://unifiedpush.org/) or Firebase Cloud Messaging, see [Push notifications](#push-notifications) below), a server admin area, and federation are implemented. Federation is client-direct: a message to someone on a different server is sent straight to that server (not relayed through your own), with both sides independently verifying the other's self-certifying identity. Android only for now; groups/broadcast are the remaining future work, tracked alongside the [server](https://github.com/behringer24/freizone-server)'s own roadmap.
 
 ## Features
 
@@ -10,7 +10,10 @@ The Android client for [Freizone](https://github.com/behringer24/freizone-server
 - **Self-certifying addresses**: your account id is derived from your device's own key, not assigned by the server, so no server can silently swap in a different key without it being detectable.
 - **Multi-account**: connect to several servers (or several identities on the same server) at once, all staying live in the background, with a quick account-switcher strip.
 - **Invite QR codes**: generate a scannable QR for your server (± an invite code, depending on its registration policy); the setup wizard can scan one to fill in the whole join flow instead of typing an address by hand.
+- **Federation**: message someone on a different server (`id*that-server`) directly — sent client-to-their-server, never relayed through your own — with both sides independently verifying the other's self-certifying identity.
 - **Push notifications** while the app is closed, via UnifiedPush (no Google dependency, works with any compatible distributor, e.g. [ntfy](https://ntfy.sh/)) or, as a fallback for devices without a distributor, Firebase Cloud Messaging relayed through a [freizone-gateway](https://github.com/behringer24/freizone-gateway) instance — a Settings toggle picks between them, see [Push notifications](#push-notifications) below. Either way, the payload itself carries no content or metadata; it's purely a "go sync" wake-up.
+- **Message actions**: reply with a quoted preview, pin/unpin, and delete-for-me — all via long-press on a message bubble.
+- **Peer profiles**: every conversation has a profile screen (both address forms, an editable local alias, and a per-device block/unblock toggle) — a per-user, on-device-only complement to the admin-side account block below, since Freizone's open registration means blocking is currently the only protection against an unwanted contact.
 - **Server admin area** (for admin/moderator accounts): registration policy, invite codes, and the user list (roles, block/unblock, delete).
 - **Short address alias**: an account can also be looked up by just the first 5 characters of its id (unique per server), instead of always typing the full 21-character form.
 
