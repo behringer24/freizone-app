@@ -322,10 +322,22 @@ class _ChatScreenState extends State<ChatScreen> {
               if (convo.pinnedMessageIds.isNotEmpty)
                 _buildPinnedBar(context, convo),
               Expanded(
-                child: ListView(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.all(8),
-                  children: items,
+                child: Container(
+                  decoration: BoxDecoration(
+                    image: DecorationImage(
+                      image: AssetImage(
+                        Theme.of(context).brightness == Brightness.dark
+                            ? 'gfx/chat_background_dark.png'
+                            : 'gfx/chat_background_light.png',
+                      ),
+                      repeat: ImageRepeat.repeat,
+                    ),
+                  ),
+                  child: ListView(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(8),
+                    children: items,
+                  ),
                 ),
               ),
               if (_replyingTo != null)

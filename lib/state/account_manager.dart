@@ -26,6 +26,11 @@ class AccountManager extends ChangeNotifier {
   AppSession? get active => _sessions[_activeAccountId];
   String? get activeAccountId => _activeAccountId;
 
+  /// The session for a specific account id, e.g. resolving a tapped
+  /// notification's target account (see notification_navigation.dart) --
+  /// null if that account no longer exists on this device.
+  AppSession? sessionFor(String accountId) => _sessions[accountId];
+
   /// Loads every locally stored profile and starts a live session for
   /// each. Call once, at app startup. Reactivates whichever account was
   /// last active (settings.lastActiveAccountId) rather than always

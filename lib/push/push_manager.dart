@@ -30,6 +30,7 @@ import '../net/api_client.dart';
 import '../state/app_settings.dart';
 import '../state/local_state.dart';
 import '../util/address_format.dart';
+import 'notification_navigation.dart';
 
 const _messagesChannelId = 'freizone_messages';
 
@@ -54,14 +55,49 @@ int _notificationIdFor(String instance) => instance.hashCode & 0x7fffffff;
 Future<void> clearMessageNotification(String instance) =>
     _notifications.cancel(id: _notificationIdFor(instance));
 
+/// Checks whether the app's current run was cold-started by tapping a
+/// notification (rather than the launcher icon) -- call once, early,
+/// from AppRoot after its AccountManager and notification-tap handler
+/// (see notification_navigation.dart) are ready, since the normal
+/// onDidReceiveNotificationResponse callback never fires for the launch
+/// itself (there's no method channel yet at that point). Returns the
+/// same payload showMessageNotification encoded, or null if the app
+/// wasn't launched this way.
+Future<String?> consumeLaunchNotificationPayload() async {
+  final details = await _notifications.getNotificationAppLaunchDetails();
+  if (details?.didNotificationLaunchApp ?? false) {
+    return details!.notificationResponse?.payload;
+  }
+  return null;
+}
+
 /// Sets up UnifiedPush + Firebase + local-notification plumbing. Call
 /// once, as early as possible (before runApp), so it also runs correctly
 /// when either background-isolate variant starts up.
 Future<void> initPush() async {
   await _notifications.initialize(
+    // Bare drawable name, no "@mipmap/"/"@drawable/" prefix -- the
+    // plugin's Android side resolves this via
+    // getResources().getIdentifier(name, "drawable", package), which
+    // takes the string literally and only ever looks under the
+    // "drawable" resource type. ic_stat_notification (a monochrome
+    // silhouette in android/app/src/main/res/drawable-*dpi/) is a
+    // dedicated status-bar icon, not the full-color launcher mipmap --
+    // Android extracts only the alpha channel of whatever icon a
+    // notification uses for its small icon, so pointing this at
+    // ic_launcher would (and did) render as a plain filled circle,
+    // the launcher icon's silhouette.
     settings: const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      android: AndroidInitializationSettings('ic_stat_notification'),
     ),
+    // Fires when a notification this plugin showed is tapped while its
+    // Dart isolate is still alive (foreground, or backgrounded but not
+    // killed) -- see notification_navigation.dart for how this reaches
+    // AppRoot. A tap that cold-launches the app instead goes through
+    // consumeLaunchNotificationPayload(), since no method channel exists
+    // yet at that point for this callback to fire over.
+    onDidReceiveNotificationResponse: (response) =>
+        handleNotificationPayload(response.payload),
   );
   await UnifiedPush.initialize(
     onNewEndpoint: _onNewEndpoint,
@@ -194,6 +230,10 @@ Future<void> _onTempUnavailable(String instance) async {
 }
 
 Future<void> _onMessage(PushMessage message, String instance) async {
+  // No peer id: this wake payload carries no content (see file header),
+  // so there's nothing here to attribute the message to a specific
+  // conversation with -- tapping still switches to the right account
+  // (see showMessageNotification), just not a specific chat.
   await showMessageNotification(instance);
 }
 
@@ -250,7 +290,15 @@ Future<void> _onFcmTokenRefresh(String newToken) async {
 /// whenever a message actually becomes unread while the app is in the
 /// foreground -- the badge needs to reflect unread state regardless of
 /// whether the app happened to be open when the message arrived.
-Future<void> showMessageNotification(String instance) async {
+///
+/// [peerAccountId], when known (the live path always knows it; a
+/// background push wake never does, see _onMessage), lets tapping the
+/// notification jump straight to that conversation instead of just
+/// switching to the right account -- see notification_navigation.dart.
+Future<void> showMessageNotification(
+  String instance, {
+  String? peerAccountId,
+}) async {
   // instance is the waking account's own id -- purely local information
   // (never sent anywhere), so it's safe to show in the notification body
   // to say which of the user's own accounts it's for; also used directly
@@ -261,17 +309,29 @@ Future<void> showMessageNotification(String instance) async {
   // one update, not a stack of duplicates, and so clearMessageNotification
   // cancels the right one.
   final body = 'New message(s) for ${formatAccountIdForDisplay(instance)}';
-  await _show(id: _notificationIdFor(instance), body: body);
+  await _show(
+    id: _notificationIdFor(instance),
+    body: body,
+    payload: encodeNotificationPayload(
+      accountId: instance,
+      peerAccountId: peerAccountId,
+    ),
+  );
 }
 
 /// The FCM counterpart to [showMessageNotification]: shown when a wake
 /// arrives with no way to know which account it was for (see
 /// registerForPush's doc comment on FCM's one-token-per-install model),
-/// so the text can't name a specific account the way UnifiedPush's can.
+/// so the text can't name a specific account the way UnifiedPush's can --
+/// nor, therefore, is there anything to encode into a tap payload.
 Future<void> showGenericWakeNotification() =>
     _show(id: _fcmNotificationId, body: 'New message(s)');
 
-Future<void> _show({required int id, required String body}) async {
+Future<void> _show({
+  required int id,
+  required String body,
+  String? payload,
+}) async {
   // Loaded fresh each time, same reasoning as above: this can run in a
   // background isolate, so nothing from a live AppSettings instance can
   // be captured/injected here.
@@ -281,6 +341,7 @@ Future<void> _show({required int id, required String body}) async {
     id: id,
     title: 'Freizone',
     body: body,
+    payload: payload,
     notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         _messagesChannelId,

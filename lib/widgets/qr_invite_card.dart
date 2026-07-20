@@ -51,6 +51,14 @@ class QrInviteCard extends StatelessWidget {
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
+          // Always the light tile, regardless of the app's own theme
+          // mode -- this card (and its shared image) is its own
+          // self-contained visual, not something that should go dark
+          // just because the rest of the app currently is.
+          image: const DecorationImage(
+            image: AssetImage('gfx/chat_background_light.png'),
+            repeat: ImageRepeat.repeat,
+          ),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: teal, width: 2),
         ),

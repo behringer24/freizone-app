@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'push/notification_navigation.dart';
 import 'push/push_manager.dart';
 import 'screens/account_shell_screen.dart';
+import 'screens/chat_screen.dart';
 import 'screens/setup_screen.dart';
 import 'state/account_manager.dart';
 import 'state/app_settings.dart';
@@ -84,6 +86,34 @@ class _AppRootState extends State<AppRoot> {
       _manager = manager;
       _loading = false;
     });
+
+    // Registered only now that _manager is set -- a tap that raced
+    // startup (fired before this point) is a silent no-op there, but is
+    // re-delivered by the cold-launch check right below, which only
+    // runs once this handler already exists.
+    setNotificationTapHandler(_openChatFor);
+    handleNotificationPayload(await consumeLaunchNotificationPayload());
+  }
+
+  /// Switches to the tapped notification's account and, if it named a
+  /// specific peer (see push_manager.dart's showMessageNotification),
+  /// pushes straight into that conversation -- otherwise just leaves the
+  /// account switched, landing on its chat list.
+  void _openChatFor(String accountId, String? peerAccountId) {
+    final manager = _manager;
+    if (manager == null || !mounted) return;
+    final session = manager.sessionFor(accountId);
+    if (session == null) return; // account no longer exists on this device
+
+    manager.setActive(accountId);
+    if (peerAccountId == null) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            ChatScreen(session: session, peerAccountId: peerAccountId),
+      ),
+    );
   }
 
   @override

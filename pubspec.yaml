@@ -75,6 +75,8 @@ flutter:
   assets:
     - gfx/origami_chat_background.png
     - gfx/origami_chat_foreground_android_adaptive.png
+    - gfx/chat_background_light.png
+    - gfx/chat_background_dark.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
