@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../state/app_session.dart';
 import '../state/conversation.dart';
+import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../widgets/pattern_background.dart';
@@ -355,10 +356,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
               ),
-              if (_replyingTo != null)
+              if (_replyingTo != null && !convo.pendingApproval)
                 _buildReplyComposerBar(context, convo, _replyingTo!),
               if (convo.blocked)
                 _buildBlockedBar(context, convo)
+              else if (convo.pendingApproval)
+                _buildPendingRequestBar(context, convo)
               else
                 SafeArea(
                   top: false,
@@ -446,6 +449,43 @@ class _ChatScreenState extends State<ChatScreen> {
               onPressed: () =>
                   widget.session.setBlocked(widget.peerAccountId, false),
               child: const Text('Unblock'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Replaces the message composer for an unactioned "message request" --
+  /// a first contact from someone with no prior conversation (see
+  /// Conversation.pendingApproval). The message history above (including
+  /// whatever greeting they sent) stays fully readable for context;
+  /// sending is disabled until Accept.
+  Widget _buildPendingRequestBar(BuildContext context, Conversation convo) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        color: colorScheme.surfaceContainerHigh,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '${convo.titleFor(widget.session.state.server)} wants to chat with you',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+            TextButton(
+              onPressed: () => confirmAndBlock(context, widget.session, convo),
+              style: TextButton.styleFrom(foregroundColor: colorScheme.error),
+              child: const Text('Block'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  widget.session.acceptConversation(widget.peerAccountId),
+              child: const Text('Accept'),
             ),
           ],
         ),

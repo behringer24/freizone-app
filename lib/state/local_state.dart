@@ -32,6 +32,36 @@ class OneTimePrekeyState {
   final Uint8List priv;
 }
 
+/// A peer blocked purely locally (see AppSession.setBlocked), snapshotted
+/// at block time -- kept independent of Conversation so the block survives
+/// AppSession.deleteConversation (which removes the Conversation but keeps
+/// the ratchet session intact). Without this, deleting a blocked peer's
+/// chat would silently un-block them the moment they wrote again, and
+/// there'd be no conversation left to unblock them *from* either.
+class BlockedPeer {
+  BlockedPeer({required this.peerAccountId, this.peerServer, this.displayName});
+
+  factory BlockedPeer.fromJson(Map<String, dynamic> j) => BlockedPeer(
+    peerAccountId: j['peer_account_id'] as String,
+    peerServer: j['peer_server'] as String?,
+    displayName: j['display_name'] as String?,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'peer_account_id': peerAccountId,
+    if (peerServer != null) 'peer_server': peerServer,
+    if (displayName != null) 'display_name': displayName,
+  };
+
+  final String peerAccountId;
+
+  /// Snapshotted from the conversation at block time -- purely for
+  /// display in the "Blocked contacts" list if the conversation itself
+  /// is later deleted, never re-resolved.
+  final String? peerServer;
+  final String? displayName;
+}
+
 /// The app's entire local identity and conversation state for one
 /// account.
 class AppState {
@@ -53,9 +83,13 @@ class AppState {
     Map<int, OneTimePrekeyState>? oneTimePrekeys,
     Map<String, RatchetSessionJson>? sessions,
     Map<String, Conversation>? conversations,
+    Set<String>? knownPeerIds,
+    Map<String, BlockedPeer>? blockedPeers,
   }) : oneTimePrekeys = oneTimePrekeys ?? {},
        sessions = sessions ?? {},
-       conversations = conversations ?? {};
+       conversations = conversations ?? {},
+       knownPeerIds = knownPeerIds ?? {},
+       blockedPeers = blockedPeers ?? {};
 
   factory AppState.fromJson(Map<String, dynamic> j) => AppState(
     server: j['server'] as String,
@@ -92,6 +126,15 @@ class AppState {
     conversations: (j['conversations'] as Map<String, dynamic>?)?.map(
       (k, v) => MapEntry(k, Conversation.fromJson(v as Map<String, dynamic>)),
     ),
+    knownPeerIds: (j['known_peer_ids'] as List<dynamic>?)
+        ?.cast<String>()
+        .toSet(),
+    blockedPeers: (j['blocked_peers'] as List<dynamic>?)
+        ?.map((v) => BlockedPeer.fromJson(v as Map<String, dynamic>))
+        .fold<Map<String, BlockedPeer>>({}, (m, p) {
+          m[p.peerAccountId] = p;
+          return m;
+        }),
   );
 
   String server;
@@ -123,6 +166,20 @@ class AppState {
   /// [sessions]'s crypto layer.
   Map<String, Conversation> conversations;
 
+  /// Every peer account id ever accepted (message request Accept) or
+  /// reached out to ourselves (AppSession.startConversation) -- i.e. "not
+  /// a stranger," independent of whether a Conversation for them still
+  /// exists. Deliberately outlives AppSession.deleteConversation, so
+  /// clearing a chat's history never regresses an already-known contact
+  /// back to an unactioned "message request" the next time they write.
+  Set<String> knownPeerIds;
+
+  /// Every peer blocked locally, keyed by account id -- see [BlockedPeer].
+  /// Deliberately outlives AppSession.deleteConversation, for the same
+  /// reason: without this, deleting a blocked peer's chat would silently
+  /// un-block them.
+  Map<String, BlockedPeer> blockedPeers;
+
   DeviceCredentials get credentials =>
       DeviceCredentials(deviceId: deviceId, devicePriv: devicePriv);
 
@@ -150,6 +207,9 @@ class AppState {
     if (sessions.isNotEmpty) 'sessions': sessions,
     if (conversations.isNotEmpty)
       'conversations': conversations.map((k, v) => MapEntry(k, v.toJson())),
+    if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
+    if (blockedPeers.isNotEmpty)
+      'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),
   };
 }
 
