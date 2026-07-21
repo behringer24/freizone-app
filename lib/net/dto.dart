@@ -177,6 +177,17 @@ class PrekeyBundleResponse {
   final OneTimePrekeyDTO? oneTimePrekey;
 }
 
+class PrekeyStatusResponse {
+  PrekeyStatusResponse({required this.oneTimePrekeysRemaining});
+
+  factory PrekeyStatusResponse.fromJson(Map<String, dynamic> j) =>
+      PrekeyStatusResponse(
+        oneTimePrekeysRemaining: j['one_time_prekeys_remaining'] as int,
+      );
+
+  final int oneTimePrekeysRemaining;
+}
+
 /// POST /v1/admin/invites -- a freshly minted single-use invite code.
 class CreateInviteResponse {
   CreateInviteResponse({required this.code, this.expiresAt});

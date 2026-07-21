@@ -4,6 +4,7 @@
 // path_provider.
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
@@ -273,11 +274,23 @@ class LocalStateStore {
     return AppState.fromJson(json.decode(data) as Map<String, dynamic>);
   }
 
+  /// Writes to a fresh, uniquely-named temp file next to the real one,
+  /// then atomically renames it into place -- a background sync isolate
+  /// (see push_manager.dart) and a live foreground AppSession can both be
+  /// writing this same account's profile around the same time; a plain
+  /// write-in-place let a reader observe a half-written file mid-write
+  /// (a real FormatException this has already hit once, see
+  /// push_manager.dart's showMessageNotification doc comment). The random
+  /// suffix means two concurrent writers never share a temp file either,
+  /// so neither write can corrupt the other's -- the rename just decides
+  /// whichever finishes last wins, cleanly.
   static Future<void> saveProfile(AppState state) async {
     final file = await _profileFile(state.accountId);
-    await file.writeAsString(
+    final tmp = File('${file.path}.${Random().nextInt(1 << 32)}.tmp');
+    await tmp.writeAsString(
       const JsonEncoder.withIndent('  ').convert(state.toJson()),
     );
+    await tmp.rename(file.path);
   }
 
   static Future<void> deleteProfile(String accountId) async {

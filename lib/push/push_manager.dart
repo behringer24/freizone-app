@@ -4,12 +4,17 @@
 // freizone-gateway, see ../../../freizone-gateway). Which one a given
 // account registers is controlled by AppSettings.pushPreference, not by
 // which one(s) happen to be installed/available on the device -- see
-// registerForPush. Deliberately minimal either way: the wake payload the
-// server/gateway sends carries no content or metadata (see
-// docs/PROTOCOL.md in freizone-server), so there's nothing to decrypt or
-// preview here -- tapping the notification just opens the app, which
-// syncs over the normal authenticated API exactly as if it had just
-// reconnected.
+// registerForPush. The wake payload the server/gateway sends carries no
+// content or metadata whatsoever (see docs/PROTOCOL.md in
+// freizone-server) -- not even which of several reasons triggered it --
+// so every wake reacts identically: a silent background sync (fetch +
+// decrypt any queued messages, top up the one-time-prekey pool if it's
+// running low, see _syncAndMaybeNotify) that only shows a system
+// notification if a genuine new message actually turned up. This is what
+// lets the exact same wake also serve a purely-housekeeping reason (the
+// prekey pool running low on a rarely-opened device, see
+// app_session.dart's topUpOneTimePrekeysIfNeeded) without ever showing a
+// misleading "New message(s)" for nothing.
 //
 // Both mechanisms can relaunch this app's Dart entrypoint in a
 // background isolate to deliver a wake while the app isn't otherwise
@@ -18,6 +23,7 @@
 // mechanisms, not the same one), so every callback below is a top-level
 // function with no captured app/UI state -- each one loads whatever it
 // needs directly from LocalStateStore/AppSettings.
+import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:firebase_core/firebase_core.dart';
@@ -27,6 +33,7 @@ import 'package:unifiedpush/unifiedpush.dart';
 
 import '../ffi/freizone_core.dart';
 import '../net/api_client.dart';
+import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/local_state.dart';
 import '../util/address_format.dart';
@@ -230,11 +237,7 @@ Future<void> _onTempUnavailable(String instance) async {
 }
 
 Future<void> _onMessage(PushMessage message, String instance) async {
-  // No peer id: this wake payload carries no content (see file header),
-  // so there's nothing here to attribute the message to a specific
-  // conversation with -- tapping still switches to the right account
-  // (see showMessageNotification), just not a specific chat.
-  await showMessageNotification(instance);
+  await _syncAndMaybeNotify(instance);
 }
 
 /// FCM's background-dispatch entrypoint: the plugin invokes this in its
@@ -245,11 +248,90 @@ Future<void> _onMessage(PushMessage message, String instance) async {
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  await showGenericWakeNotification();
+  await _syncAndMaybeNotify(null);
 }
 
 Future<void> _onFcmMessage(RemoteMessage message) async {
-  await showGenericWakeNotification();
+  await _syncAndMaybeNotify(null);
+}
+
+/// The single reaction to any wake, from either mechanism: fetch and
+/// decrypt whatever's actually queued, top up prekeys if needed, and
+/// only then decide whether to show anything. [instance], when known
+/// (UnifiedPush always provides one), limits the sync to that one
+/// account; null (FCM, which can't attribute a wake to a specific
+/// account -- see registerForPush's doc comment) syncs every locally
+/// stored profile instead, same iteration pattern as
+/// _onFcmTokenRefresh.
+Future<void> _syncAndMaybeNotify(String? instance) async {
+  if (instance != null) {
+    final state = await LocalStateStore.loadProfile(instance);
+    if (state == null) return;
+    final peerAccountId = await _syncProfile(state);
+    if (peerAccountId != null) {
+      await showMessageNotification(instance, peerAccountId: peerAccountId);
+    }
+    return;
+  }
+
+  // No per-account attribution possible here (see above) -- one shared
+  // notification if ANY profile turned up a genuine message, same as
+  // before this rework, just now actually confirmed rather than assumed.
+  var anyGenuine = false;
+  for (final state in await LocalStateStore.listProfiles()) {
+    if (await _syncProfile(state) != null) anyGenuine = true;
+  }
+  if (anyGenuine) await showGenericWakeNotification();
+}
+
+/// Runs the same decrypt-and-store logic as AppSession._handleIncoming,
+/// via the shared processIncomingMessage (app_session.dart), for a
+/// profile that has no live AppSession -- fetches every message
+/// currently queued for [state]'s device, processes each, and tops up
+/// the one-time-prekey pool if it's running low (topUpOneTimePrekeysIfNeeded).
+/// A single malformed/undecryptable message is logged and skipped rather
+/// than aborting the rest of the sync. Returns the peer id of the last
+/// genuinely new (non-request) message found, or null if none turned up
+/// -- the caller's cue for whether to notify at all.
+///
+/// Deliberately does NOT send "delivered" receipts (see receipt_signal
+/// .dart) for what it processes here -- that needs AppSession's sending
+/// machinery (_encryptAndSend, _resolvePeerDevice, ...), none of which
+/// exists as a standalone function callable without a live AppSession.
+/// A message that arrives while the app is fully closed only starts
+/// showing delivery/read checkmarks to its sender once the app is next
+/// opened (AppSession._handleIncoming/enterConversation send both).
+Future<String?> _syncProfile(AppState state) async {
+  final core = FreizoneCore();
+  final api = ApiClient(baseUrl: state.server, core: core);
+  String? notifyPeerAccountId;
+  try {
+    final messages = await api.listMessages(state.credentials);
+    var changed = false;
+    for (final msg in messages) {
+      try {
+        final result = await processIncomingMessage(state, msg, core);
+        if (result == null) continue;
+        changed = true;
+        if (result.shouldNotify) notifyPeerAccountId = result.peerAccountId;
+        unawaited(api.deleteMessage(msg.messageId, state.credentials));
+      } catch (e) {
+        developer.log('background message decrypt failed: $e', name: 'push');
+      }
+    }
+    if (changed) await LocalStateStore.saveProfile(state);
+
+    try {
+      await topUpOneTimePrekeysIfNeeded(state, core, api);
+    } catch (e) {
+      developer.log('background prekey top-up failed: $e', name: 'push');
+    }
+  } catch (e) {
+    developer.log('background sync failed: $e', name: 'push');
+  } finally {
+    api.close();
+  }
+  return notifyPeerAccountId;
 }
 
 /// FCM tokens rotate occasionally; re-push the fresh one to every
@@ -285,27 +367,26 @@ Future<void> _onFcmTokenRefresh(String newToken) async {
 /// Shows (or updates, if one's already up) instance's "new message(s)"
 /// notification -- which is also what makes Android show a badge on the
 /// launcher icon, since that's derived from active notifications, not
-/// from anything drawn inside the app. Called both from a background
-/// push wake (_onMessage) and live, from AppSession._handleIncoming,
-/// whenever a message actually becomes unread while the app is in the
-/// foreground -- the badge needs to reflect unread state regardless of
-/// whether the app happened to be open when the message arrived.
+/// from anything drawn inside the app. Called both from a confirmed-
+/// genuine background sync (_syncAndMaybeNotify) and live, from
+/// AppSession._handleIncoming, whenever a message actually becomes
+/// unread while the app is in the foreground -- the badge needs to
+/// reflect unread state regardless of whether the app happened to be
+/// open when the message arrived. Never called speculatively -- by the
+/// time either path calls this, a message has actually been decrypted
+/// and confirmed worth surfacing.
 ///
-/// [peerAccountId], when known (the live path always knows it; a
-/// background push wake never does, see _onMessage), lets tapping the
-/// notification jump straight to that conversation instead of just
-/// switching to the right account -- see notification_navigation.dart.
+/// [peerAccountId] lets tapping the notification jump straight to that
+/// conversation instead of just switching to the right account -- see
+/// notification_navigation.dart.
 Future<void> showMessageNotification(
   String instance, {
   String? peerAccountId,
 }) async {
   // instance is the waking account's own id -- purely local information
   // (never sent anywhere), so it's safe to show in the notification body
-  // to say which of the user's own accounts it's for; also used directly
-  // rather than reloading the profile from disk, since that raced
-  // AppSession's own concurrent (non-atomic) write to that same file on
-  // the live-message path and threw a FormatException on a half-written
-  // read. Also used as the notification id so two accounts overlap into
+  // to say which of the user's own accounts it's for. Also used as the
+  // notification id so two accounts overlap into
   // one update, not a stack of duplicates, and so clearMessageNotification
   // cancels the right one.
   final body = 'New message(s) for ${formatAccountIdForDisplay(instance)}';

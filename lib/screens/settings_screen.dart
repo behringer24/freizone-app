@@ -128,6 +128,17 @@ class SettingsScreen extends StatelessWidget {
                 value: settings.notificationVibration,
                 onChanged: settings.setNotificationVibration,
               ),
+              const Divider(height: 32),
+              _sectionTitle(context, 'Privacy'),
+              SwitchListTile(
+                title: const Text('Read receipts'),
+                subtitle: const Text(
+                  'Reciprocal: turning this off also stops you from seeing '
+                  'whether the people you message have read theirs',
+                ),
+                value: settings.readReceiptsEnabled,
+                onChanged: settings.setReadReceiptsEnabled,
+              ),
             ],
           );
         },

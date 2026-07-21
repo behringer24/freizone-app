@@ -61,6 +61,7 @@ class AppSettings extends ChangeNotifier {
     required bool notificationSound,
     required bool notificationVibration,
     required PushPreference pushPreference,
+    required bool readReceiptsEnabled,
     String? lastActiveAccountId,
   }) : _themeMode = themeMode,
        _accentPreset = accentPreset,
@@ -68,6 +69,7 @@ class AppSettings extends ChangeNotifier {
        _notificationSound = notificationSound,
        _notificationVibration = notificationVibration,
        _pushPreference = pushPreference,
+       _readReceiptsEnabled = readReceiptsEnabled,
        _lastActiveAccountId = lastActiveAccountId;
 
   ThemeMode _themeMode;
@@ -76,6 +78,7 @@ class AppSettings extends ChangeNotifier {
   bool _notificationSound;
   bool _notificationVibration;
   PushPreference _pushPreference;
+  bool _readReceiptsEnabled;
   String? _lastActiveAccountId;
 
   ThemeMode get themeMode => _themeMode;
@@ -87,6 +90,13 @@ class AppSettings extends ChangeNotifier {
   bool get notificationSound => _notificationSound;
   bool get notificationVibration => _notificationVibration;
   PushPreference get pushPreference => _pushPreference;
+
+  /// Whether this device sends delivery/read receipts (receipt_signal
+  /// .dart) for messages it sends/receives, AND whether it stores/shows
+  /// receipts a peer sends back -- a single switch controls both
+  /// directions, so turning it off is reciprocal: you neither tell others
+  /// you've read their messages, nor see whether they've read yours.
+  bool get readReceiptsEnabled => _readReceiptsEnabled;
 
   /// The account id AccountManager should activate on the next app
   /// start, so a multi-account setup doesn't fall back to an
@@ -112,6 +122,7 @@ class AppSettings extends ChangeNotifier {
         notificationSound: true,
         notificationVibration: true,
         pushPreference: PushPreference.automatic,
+        readReceiptsEnabled: true,
       );
     }
     final j = json.decode(await file.readAsString()) as Map<String, dynamic>;
@@ -131,6 +142,7 @@ class AppSettings extends ChangeNotifier {
         (p) => p.name == j['push_preference'],
         orElse: () => PushPreference.automatic,
       ),
+      readReceiptsEnabled: j['read_receipts_enabled'] as bool? ?? true,
       lastActiveAccountId: j['last_active_account_id'] as String?,
     );
   }
@@ -145,6 +157,7 @@ class AppSettings extends ChangeNotifier {
         'notification_sound': _notificationSound,
         'notification_vibration': _notificationVibration,
         'push_preference': _pushPreference.name,
+        'read_receipts_enabled': _readReceiptsEnabled,
         if (_lastActiveAccountId != null)
           'last_active_account_id': _lastActiveAccountId,
       }),
@@ -189,6 +202,13 @@ class AppSettings extends ChangeNotifier {
   Future<void> setPushPreference(PushPreference value) async {
     if (_pushPreference == value) return;
     _pushPreference = value;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setReadReceiptsEnabled(bool value) async {
+    if (_readReceiptsEnabled == value) return;
+    _readReceiptsEnabled = value;
     await _save();
     notifyListeners();
   }
