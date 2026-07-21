@@ -14,7 +14,6 @@ import '../state/app_settings.dart';
 import '../util/avatar_color.dart';
 import '../util/role_icon.dart';
 import '../util/server_label.dart';
-import '../util/server_url.dart';
 import '../util/unread_dot.dart';
 import 'chat_list_screen.dart';
 import 'profile_screen.dart';
@@ -49,6 +48,23 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
   /// rebuilds if the key instance itself is reused.
   final Map<String, GlobalKey> _avatarKeys = {};
 
+  /// The switcher's own ListView, so [_ensureActiveVisible] can drive it
+  /// with an exact, manually-computed offset instead of
+  /// Scrollable.ensureVisible's built-in reveal calculation -- that
+  /// calculation goes through the sliver/viewport machinery
+  /// (RenderAbstractViewport.getOffsetToReveal), which has a long-
+  /// standing history of settling on the wrong offset specifically for
+  /// targets near a scrollable's padded start/end (exactly what was
+  /// reported: it happens more near the edges). Computing the delta
+  /// directly from rendered positions (see below) sidesteps that
+  /// machinery entirely.
+  final _switcherScrollController = ScrollController();
+
+  /// The switcher strip's own bounding box (the Container wrapping the
+  /// ListView, not the ListView widget itself) -- the reference frame
+  /// [_ensureActiveVisible] measures an avatar's position against.
+  final _switcherViewportKey = GlobalKey();
+
   /// The account last scrolled into view -- lets [_ensureActiveVisible]
   /// tell "the active account just changed" (switch via tap, via a
   /// ChatListScreen swipe, or on first load) apart from "the switcher is
@@ -65,15 +81,39 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
     if (accountId == _lastVisibleAccountId) return;
     _lastVisibleAccountId = accountId;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final context = _avatarKeys[accountId]?.currentContext;
-      if (context == null || !context.mounted) return;
-      Scrollable.ensureVisible(
-        context,
-        alignment: 0.5,
+      if (!_switcherScrollController.hasClients) return;
+      final targetContext = _avatarKeys[accountId]?.currentContext;
+      final viewportBox =
+          _switcherViewportKey.currentContext?.findRenderObject();
+      if (targetContext == null || !targetContext.mounted) return;
+      if (viewportBox is! RenderBox || !viewportBox.attached) return;
+      final targetBox = targetContext.findRenderObject();
+      if (targetBox is! RenderBox || !targetBox.attached) return;
+
+      // Both offsets are in the viewport's own coordinate space (its
+      // top-left is (0, 0)), so the delta between them is exactly how
+      // far the target's center currently sits from the viewport's
+      // center -- independent of the ListView's internal sliver layout.
+      final targetLeft = targetBox
+          .localToGlobal(Offset.zero, ancestor: viewportBox)
+          .dx;
+      final targetCenter = targetLeft + targetBox.size.width / 2;
+      final viewportCenter = viewportBox.size.width / 2;
+      final position = _switcherScrollController.position;
+      final target = (position.pixels + targetCenter - viewportCenter)
+          .clamp(position.minScrollExtent, position.maxScrollExtent);
+      _switcherScrollController.animateTo(
+        target,
         duration: const Duration(milliseconds: 250),
         curve: Curves.ease,
       );
     });
+  }
+
+  @override
+  void dispose() {
+    _switcherScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _addAccount(BuildContext context) async {
@@ -99,30 +139,10 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
     );
   }
 
-  /// Buckets sessions by server (via [sameServer], not raw string
-  /// equality -- two accounts on "chat.example.org" and
-  /// "https://chat.example.org" belong in the same group), preserving
-  /// each session's original relative order and each group's
-  /// first-appearance order.
-  List<List<AppSession>> _groupSessionsByServer(List<AppSession> sessions) {
-    final groups = <List<AppSession>>[];
-    for (final session in sessions) {
-      var placed = false;
-      for (final group in groups) {
-        if (sameServer(group.first.state.server, session.state.server)) {
-          group.add(session);
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) groups.add([session]);
-    }
-    return groups;
-  }
-
   Widget _buildSwitcher(BuildContext context, AppSession? active) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
+      key: _switcherViewportKey,
       // Same reasoning as ChatListScreen's AppBar: a solid white strip
       // would glare at night, so dark mode swaps it for a themed dark
       // grey. The role-badge overlay below keeps its own white circle
@@ -136,11 +156,12 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
       child: ListenableBuilder(
         listenable: Listenable.merge(widget.manager.sessions),
         builder: (context, _) {
-          final groups = _groupSessionsByServer(widget.manager.sessions);
+          final groups = widget.manager.groupedSessions;
           final allServers = widget.manager.sessions
               .map((s) => s.state.server)
               .toList();
           return ListView(
+            controller: _switcherScrollController,
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             children: [
