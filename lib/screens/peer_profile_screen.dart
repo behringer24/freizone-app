@@ -10,6 +10,7 @@ import '../state/app_session.dart';
 import '../state/conversation.dart';
 import '../util/address_format.dart';
 import '../util/avatar_color.dart';
+import '../util/block_actions.dart';
 import '../util/freizone_address.dart';
 import '../widgets/rename_dialog.dart';
 
@@ -54,33 +55,7 @@ class PeerProfileScreen extends StatelessWidget {
       await session.setBlocked(peerAccountId, false);
       return;
     }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Block this contact?'),
-        content: Text(
-          'You will stop receiving messages from ${convo.titleFor(session.state.server)} on this '
-          'device -- they are not notified, and this cannot be undone remotely. You can unblock them here '
-          'again at any time.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Block'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true) {
-      await session.setBlocked(peerAccountId, true);
-    }
+    await confirmAndBlock(context, session, convo);
   }
 
   @override
@@ -149,6 +124,14 @@ class PeerProfileScreen extends StatelessWidget {
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
+              ] else if (convo.pendingApproval) ...[
+                const SizedBox(height: 12),
+                Center(
+                  child: Chip(
+                    label: const Text('Pending request'),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
               ],
               const SizedBox(height: 16),
               Center(
@@ -204,6 +187,28 @@ class PeerProfileScreen extends StatelessWidget {
                   onPressed: () => _copy(context, 'Full address', fullAddress),
                 ),
               ),
+              if (convo.pendingApproval) ...[
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    'This is a pending message request -- accept to start chatting, or block below.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: FilledButton.icon(
+                    onPressed: () => session.acceptConversation(peerAccountId),
+                    icon: const Icon(Icons.check),
+                    label: const Text('Accept'),
+                  ),
+                ),
+              ],
               const SizedBox(height: 32),
               const Divider(),
               Padding(

@@ -363,9 +363,21 @@ class AppSession extends ChangeNotifier {
       );
       final now = DateTime.now().toUtc();
 
+      // Blocked/known status is looked up from AppState.blockedPeers/
+      // knownPeerIds -- deliberately independent of whether a Conversation
+      // for this peer currently exists, so a deleted-then-recreated
+      // Conversation (see deleteConversation) picks the right state back
+      // up rather than treating a blocked or already-known peer as a
+      // brand new "message request."
+      final blocked = state.blockedPeers.containsKey(msg.senderAccountId);
+      final isFirstContact = !state.knownPeerIds.contains(msg.senderAccountId);
       final convo = state.conversations.putIfAbsent(
         msg.senderAccountId,
-        () => Conversation(peerAccountId: msg.senderAccountId),
+        () => Conversation(
+          peerAccountId: msg.senderAccountId,
+          blocked: blocked,
+          pendingApproval: isFirstContact && !blocked,
+        ),
       );
       // Refreshed on every message that carries one (not just the
       // first), so this self-heals if local state is ever lost -- see
@@ -392,18 +404,29 @@ class AppSession extends ChangeNotifier {
         convo.lastActivityAt = now;
         if (msg.senderAccountId != _openConversationPeerId) {
           convo.hasUnread = true;
-          // This is the live (app-open) delivery path -- a push wake's
-          // _onMessage already shows this same notification for the
-          // background case. Without this, the launcher icon's badge
-          // (which Android derives from active notifications, not
-          // anything drawn in-app) would never appear for a message that
-          // happened to arrive while the app was in the foreground.
-          unawaited(
-            showMessageNotification(
-              state.accountId,
-              peerAccountId: msg.senderAccountId,
-            ),
-          );
+          // No push notification for a still-unactioned "message
+          // request" -- an unaccepted sender shouldn't be able to
+          // interrupt you, only show up passively in the Message
+          // requests section. This is the live (app-open) delivery path;
+          // a background push wake (push_manager.dart's _onMessage)
+          // can't apply the same filter, since the wake itself is
+          // deliberately content-free (no sender id, by design -- see
+          // the gateway's own "never sees plaintext or metadata"
+          // property) and so has no way to know a message is still
+          // pending -- an accepted trade-off, not something fixable
+          // without weakening that privacy property. Without this call,
+          // the launcher icon's badge (which Android derives from active
+          // notifications, not anything drawn in-app) would never appear
+          // for a message that happened to arrive while the app was in
+          // the foreground.
+          if (!convo.pendingApproval) {
+            unawaited(
+              showMessageNotification(
+                state.accountId,
+                peerAccountId: msg.senderAccountId,
+              ),
+            );
+          }
         }
       }
 
@@ -489,6 +512,7 @@ class AppSession extends ChangeNotifier {
     if (existing != null &&
         existing.peerDeviceId != null &&
         _samePeerServer(existing.peerServer, parsed.server)) {
+      await _markKnown(existing);
       return existing;
     }
 
@@ -496,8 +520,10 @@ class AppSession extends ChangeNotifier {
       for (final convo in state.conversations.values) {
         if (convo.peerDeviceId != null &&
             convo.peerAccountId.startsWith(normalized) &&
-            _samePeerServer(convo.peerServer, parsed.server))
+            _samePeerServer(convo.peerServer, parsed.server)) {
+          await _markKnown(convo);
           return convo;
+        }
       }
     }
 
@@ -521,9 +547,26 @@ class AppSession extends ChangeNotifier {
         displayName.trim().isNotEmpty) {
       convo.displayName = displayName.trim();
     }
+    convo.pendingApproval = false;
+    state.knownPeerIds.add(resolvedId);
     await LocalStateStore.saveProfile(state);
     notifyListeners();
     return convo;
+  }
+
+  /// Reaching out to (or back to) a peer yourself is an implicit accept
+  /// -- there's no "pending" decision left to make about someone you just
+  /// deliberately chose to (re-)contact, e.g. via the new-chat sheet's
+  /// address field even while their message request sat unactioned. Only
+  /// writes/notifies if anything actually changed.
+  Future<void> _markKnown(Conversation convo) async {
+    final wasPending = convo.pendingApproval;
+    convo.pendingApproval = false;
+    final added = state.knownPeerIds.add(convo.peerAccountId);
+    if (wasPending || added) {
+      await LocalStateStore.saveProfile(state);
+      notifyListeners();
+    }
   }
 
   /// Sets, changes, or (name == null / blank) removes a conversation's
@@ -538,6 +581,11 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Every peer blocked locally -- backs the "Blocked contacts" screen,
+  /// which needs to list and unblock peers even once their Conversation
+  /// (and thus their profile screen) no longer exists.
+  List<BlockedPeer> get blockedPeers => state.blockedPeers.values.toList();
+
   /// Blocks or unblocks a peer -- purely local, since Freizone's open
   /// registration means an unwanted contact can't be reported or banned
   /// server-side yet (see peer_profile_screen.dart's "Protection"
@@ -546,10 +594,51 @@ class AppSession extends ChangeNotifier {
   /// clean) but dropped before being stored or notified -- see
   /// _handleIncoming. Sending is disabled in the UI while blocked. The
   /// peer is never told either way.
+  ///
+  /// The block itself lives in [AppState.blockedPeers], not on the
+  /// [Conversation] -- deliberately outliving [deleteConversation] (see
+  /// its own doc comment), so deleting a blocked peer's chat can never
+  /// silently un-block them, and there's always a way to unblock them
+  /// again (the "Blocked contacts" screen) even with no conversation left.
+  /// [convo], if one currently exists, is kept as an in-sync mirror so
+  /// existing chat/profile UI can keep reading `convo.blocked` directly.
   Future<void> setBlocked(String peerAccountId, bool blocked) async {
     final convo = state.conversations[peerAccountId];
+    if (blocked) {
+      state.blockedPeers[peerAccountId] = BlockedPeer(
+        peerAccountId: peerAccountId,
+        peerServer: convo?.peerServer,
+        displayName: convo?.displayName,
+      );
+      if (convo != null) {
+        convo.blocked = true;
+        // Blocking is itself a decision about a pending request --
+        // nothing left to approve.
+        convo.pendingApproval = false;
+      }
+    } else {
+      state.blockedPeers.remove(peerAccountId);
+      // Unblocking is itself a decision to hear from them normally again
+      // -- they shouldn't reappear as an unactioned "message request" the
+      // next time they write.
+      state.knownPeerIds.add(peerAccountId);
+      if (convo != null) convo.blocked = false;
+    }
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+  }
+
+  /// Accepts a pending "message request" (see Conversation.pendingApproval)
+  /// -- purely local, just lifts the UI gate so the chat screen shows the
+  /// normal composer instead of the Accept/Block bar. Nothing is sent to
+  /// the peer or the server; they have no way to know either way. Records
+  /// them in [AppState.knownPeerIds] so a later [deleteConversation]
+  /// doesn't regress them back to "unactioned request" if they write again.
+  Future<void> acceptConversation(String peerAccountId) async {
+    final convo = state.conversations[peerAccountId];
     if (convo == null) return;
-    convo.blocked = blocked;
+    convo.pendingApproval = false;
+    state.knownPeerIds.add(peerAccountId);
     await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
@@ -569,15 +658,18 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Removes peerAccountId's conversation entirely -- history, the
-  /// resolved peer device, and its ratchet session, so a later chat with
-  /// them starts genuinely fresh (a new X3DH handshake) rather than
-  /// silently continuing a session behind now-invisible history. Purely
-  /// local: the account itself is untouched on the server.
+  /// Removes peerAccountId's conversation entirely -- history and the
+  /// resolved peer device. The ratchet session is deliberately kept: the
+  /// peer doesn't know their chat was deleted on our end and may just keep
+  /// writing in what looks to them like an ongoing conversation, without
+  /// including fresh X3DH material. Without a surviving session, such a
+  /// message can't be decrypted at all (no session and no X3DH material to
+  /// start one -- see _handleIncoming) and is lost silently, for both
+  /// sides, with no error or notification anywhere. Purely local: the
+  /// account itself is untouched on the server.
   Future<void> deleteConversation(String peerAccountId) async {
     final removed = state.conversations.remove(peerAccountId);
     if (removed == null) return;
-    state.sessions.remove(peerAccountId);
     if (_openConversationPeerId == peerAccountId)
       _openConversationPeerId = null;
     await LocalStateStore.saveProfile(state);

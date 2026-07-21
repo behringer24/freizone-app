@@ -76,6 +76,7 @@ class Conversation {
     this.hasUnread = false,
     List<String>? pinnedMessageIds,
     this.blocked = false,
+    this.pendingApproval = false,
   }) : messages = messages ?? [],
        pinnedMessageIds = pinnedMessageIds ?? [],
        lastActivityAt = lastActivityAt ?? DateTime.now().toUtc();
@@ -97,6 +98,7 @@ class Conversation {
         ?.cast<String>()
         .toList(),
     blocked: j['blocked'] as bool? ?? false,
+    pendingApproval: j['pending_approval'] as bool? ?? false,
   );
 
   final String peerAccountId;
@@ -132,6 +134,16 @@ class Conversation {
   /// disables sending. The peer is never told either way.
   bool blocked;
 
+  /// True while this conversation is an unactioned "message request" --
+  /// set only when [AppSession._handleIncoming] creates it for a peer
+  /// that never existed before (an incoming first contact), never for one
+  /// created by [AppSession.startConversation] (you reaching out doesn't
+  /// need your own approval). Cleared by [AppSession.acceptConversation]
+  /// or by blocking. Purely a display/composer-gating concern -- messages
+  /// still arrive and get stored normally while pending, see
+  /// _handleIncoming.
+  bool pendingApproval;
+
   /// The alias if one is set, otherwise the peer's compact
   /// "shortid*domain" address -- which server they're actually on is
   /// worth always keeping visible (especially once federation means
@@ -166,5 +178,6 @@ class Conversation {
     'has_unread': hasUnread,
     if (pinnedMessageIds.isNotEmpty) 'pinned_message_ids': pinnedMessageIds,
     if (blocked) 'blocked': blocked,
+    if (pendingApproval) 'pending_approval': pendingApproval,
   };
 }

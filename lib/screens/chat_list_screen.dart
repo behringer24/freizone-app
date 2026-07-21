@@ -11,11 +11,13 @@ import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../util/avatar_color.dart';
+import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/invite_uri.dart';
 import '../util/unread_dot.dart';
 import '../widgets/qr_scan_button.dart';
 import 'admin_screen.dart';
+import 'blocked_contacts_screen.dart';
 import 'chat_screen.dart';
 import 'invite_screen.dart';
 import 'my_address_screen.dart';
@@ -46,6 +48,50 @@ class ChatListScreen extends StatelessWidget {
   /// derives from the topmost AppBar) correct and avoids a seam/gap
   /// between the two.
   final PreferredSizeWidget? appBarBottom;
+
+  /// One chat-list row, shared between the "Message requests" section
+  /// and the regular list below -- both need the exact same tile, since
+  /// the preview text (e.g. a request's greeting, if any) is what
+  /// actually answers "who is this."
+  Widget _buildConversationTile(BuildContext context, Conversation convo) {
+    return ListTile(
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          CircleAvatar(
+            backgroundColor: avatarColorFor(convo.peerAccountId),
+            child: Text(
+              _initials(convo),
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+          if (convo.hasUnread)
+            const Positioned(top: -2, right: -2, child: UnreadDot()),
+        ],
+      ),
+      title: Text(
+        convo.titleFor(session.state.server),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(
+        convo.lastMessagePreview,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: Text(
+        _formatTimestamp(convo.lastActivityAt),
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) =>
+              ChatScreen(session: session, peerAccountId: convo.peerAccountId),
+        ),
+      ),
+      onLongPress: () => _showChatOptions(context, convo),
+    );
+  }
 
   String _initials(Conversation c) {
     final source = c.titleFor(session.state.server);
@@ -90,10 +136,42 @@ class ChatListScreen extends StatelessWidget {
   /// entirely, both purely local (the server never stored the history
   /// in the first place). Either action asks for confirmation first,
   /// since there's no undo.
+  ///
+  /// A still-open, unactioned message request (see [Conversation.
+  /// pendingApproval]) gets Accept/Block here instead -- Clear/Delete
+  /// don't answer the actual open question ("do I want to talk to this
+  /// person"), and deleting would just let them silently ask again the
+  /// next time they write (see AppSession.deleteConversation).
   Future<void> _showChatOptions(
     BuildContext context,
     Conversation convo,
   ) async {
+    if (convo.pendingApproval) {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: Text(convo.titleFor(session.state.server)),
+          children: [
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop('accept'),
+              child: const Text('Accept'),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop('block'),
+              child: const Text('Block'),
+            ),
+          ],
+        ),
+      );
+      if (action == null || !context.mounted) return;
+      if (action == 'accept') {
+        await session.acceptConversation(convo.peerAccountId);
+      } else if (action == 'block') {
+        await confirmAndBlock(context, session, convo);
+      }
+      return;
+    }
+
     final action = await showDialog<String>(
       context: context,
       builder: (context) => SimpleDialog(
@@ -224,6 +302,13 @@ class ChatListScreen extends StatelessWidget {
                   ),
                 );
               }
+              if (value == 'blocked') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => BlockedContactsScreen(session: session),
+                  ),
+                );
+              }
               if (value == 'settings') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -248,6 +333,10 @@ class ChatListScreen extends StatelessWidget {
                   value: 'admin',
                   child: Text('Server Admin'),
                 ),
+              const PopupMenuItem(
+                value: 'blocked',
+                child: Text('Blocked contacts'),
+              ),
               const PopupMenuItem(value: 'settings', child: Text('Settings')),
             ],
           ),
@@ -294,51 +383,72 @@ class ChatListScreen extends StatelessWidget {
               ),
             );
           }
-          return ListView.separated(
-            itemCount: conversations.length,
-            separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
-            itemBuilder: (context, i) {
-              final convo = conversations[i];
-              return ListTile(
-                leading: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    CircleAvatar(
-                      backgroundColor: avatarColorFor(convo.peerAccountId),
-                      child: Text(
-                        _initials(convo),
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ),
-                    if (convo.hasUnread)
-                      const Positioned(top: -2, right: -2, child: UnreadDot()),
-                  ],
-                ),
-                title: Text(
-                  convo.titleFor(session.state.server),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  convo.lastMessagePreview,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: Text(
-                  _formatTimestamp(convo.lastActivityAt),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ChatScreen(
-                      session: session,
-                      peerAccountId: convo.peerAccountId,
+
+          // Unactioned message requests (first contact from someone with
+          // no prior conversation, see Conversation.pendingApproval) are
+          // surfaced above everything else, so they're never buried among
+          // regular chats -- but rendered with the exact same tile, since
+          // the preview text (their greeting, if any) is what actually
+          // answers "who is this."
+          final pending = conversations.where((c) => c.pendingApproval).toList();
+          final regular = conversations
+              .where((c) => !c.pendingApproval)
+              .toList();
+
+          // A tonal surface a step above the plain background -- Material
+          // 3's surfaceContainer* tokens are built exactly for this ("a
+          // panel that reads as a distinct area, without a hard border or
+          // shadow") and, being derived from the seed color per brightness,
+          // land a little darker in light mode and a little lighter in
+          // dark mode automatically, rather than needing a manual
+          // Brightness check here.
+          final requestsSurface = Theme.of(
+            context,
+          ).colorScheme.surfaceContainerHigh;
+
+          return CustomScrollView(
+            slivers: [
+              if (pending.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Container(
+                    color: requestsSurface,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                          child: Text(
+                            'Message requests',
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                          ),
+                        ),
+                        for (final convo in pending) ...[
+                          _buildConversationTile(context, convo),
+                          if (convo != pending.last)
+                            const Divider(height: 1, indent: 72),
+                        ],
+                        // A visibly heavier rule than the hairline dividers
+                        // used between individual rows -- marks this as a
+                        // section boundary, not just another list item.
+                        Divider(
+                          height: 1,
+                          thickness: 2,
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                onLongPress: () => _showChatOptions(context, convo),
-              );
-            },
+              SliverList.separated(
+                itemCount: regular.length,
+                separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
+                itemBuilder: (context, i) =>
+                    _buildConversationTile(context, regular[i]),
+              ),
+            ],
           );
         },
       ),
@@ -370,6 +480,7 @@ class _NewChatSheet extends StatefulWidget {
 class _NewChatSheetState extends State<_NewChatSheet> {
   final _idController = TextEditingController();
   final _nameController = TextEditingController();
+  final _greetingController = TextEditingController();
   bool _loading = false;
   String? _error;
 
@@ -377,6 +488,7 @@ class _NewChatSheetState extends State<_NewChatSheet> {
   void dispose() {
     _idController.dispose();
     _nameController.dispose();
+    _greetingController.dispose();
     super.dispose();
   }
 
@@ -393,6 +505,17 @@ class _NewChatSheetState extends State<_NewChatSheet> {
         peerAccountId,
         displayName: _nameController.text,
       );
+      final greeting = _greetingController.text.trim();
+      if (greeting.isNotEmpty) {
+        // Contact is already added either way -- a failed greeting send
+        // isn't worth blocking on, since it can just be retried manually
+        // from the chat that's about to open.
+        try {
+          await widget.session.sendMessage(convo.peerAccountId, greeting);
+        } catch (_) {
+          // ignore
+        }
+      }
       if (!mounted) return;
       Navigator.of(context).pop(convo.peerAccountId);
     } catch (e) {
@@ -475,6 +598,19 @@ class _NewChatSheetState extends State<_NewChatSheet> {
             controller: _nameController,
             decoration: const InputDecoration(labelText: 'Name (optional)'),
             enabled: !_loading,
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _greetingController,
+            decoration: const InputDecoration(
+              labelText: 'Add a message (optional)',
+              helperText:
+                  'Sent right away -- helps them recognize who\'s reaching out',
+            ),
+            enabled: !_loading,
+            minLines: 1,
+            maxLines: 3,
+            textCapitalization: TextCapitalization.sentences,
             onSubmitted: (_) => _start(),
           ),
           if (_error != null) ...[
