@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
 import '../push/push_manager.dart';
+import '../util/server_url.dart';
 import 'app_session.dart';
 import 'app_settings.dart';
 import 'local_state.dart';
@@ -25,6 +26,39 @@ class AccountManager extends ChangeNotifier {
   List<AppSession> get sessions => _sessions.values.toList();
   AppSession? get active => _sessions[_activeAccountId];
   String? get activeAccountId => _activeAccountId;
+
+  /// Sessions bucketed by server (via [sameServer], not raw string
+  /// equality -- two accounts on "chat.example.org" and
+  /// "https://chat.example.org" belong in the same group), preserving
+  /// each session's original relative order and each group's
+  /// first-appearance order. The single source of truth for how accounts
+  /// are grouped/ordered wherever they're shown side by side --
+  /// AccountShellScreen's switcher strip renders these groups (with a
+  /// divider/label between them), and [orderedSessions] below is just
+  /// this, flattened.
+  List<List<AppSession>> get groupedSessions {
+    final groups = <List<AppSession>>[];
+    for (final session in sessions) {
+      var placed = false;
+      for (final group in groups) {
+        if (sameServer(group.first.state.server, session.state.server)) {
+          group.add(session);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) groups.add([session]);
+    }
+    return groups;
+  }
+
+  /// The single canonical left-to-right account order, used everywhere
+  /// accounts are shown side by side but NOT grouped visually -- the
+  /// swipeable chat list (ChatListScreen) reads this so swiping through
+  /// chats traverses accounts in exactly the order the switcher strip
+  /// shows them in (see [groupedSessions]).
+  List<AppSession> get orderedSessions =>
+      groupedSessions.expand((g) => g).toList();
 
   /// The session for a specific account id, e.g. resolving a tapped
   /// notification's target account (see notification_navigation.dart) --

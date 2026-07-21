@@ -56,7 +56,7 @@ class ChatListScreen extends StatefulWidget {
 class _ChatListScreenState extends State<ChatListScreen> {
   late final PageController _pageController;
 
-  int _indexOf(AppSession session) => widget.manager.sessions.indexWhere(
+  int _indexOf(AppSession session) => widget.manager.orderedSessions.indexWhere(
     (s) => s.state.accountId == session.state.accountId,
   );
 
@@ -95,7 +95,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   void _onPageChanged(int index) {
-    final sessions = widget.manager.sessions;
+    final sessions = widget.manager.orderedSessions;
     if (index < 0 || index >= sessions.length) return;
     final target = sessions[index];
     if (target.state.accountId != widget.session.state.accountId) {
@@ -524,16 +524,20 @@ class _ChatListScreenState extends State<ChatListScreen> {
       // Swipeable so a horizontal drag switches accounts just like tapping
       // an avatar in the switcher strip above -- see _onPageChanged/
       // didUpdateWidget for how the two stay in sync with each other.
-      // AccountShellScreen's own ListenableBuilder(listenable: manager)
-      // already rebuilds this whole screen (with a fresh `sessions` read
+      // Uses AccountManager.orderedSessions (not the raw .sessions list),
+      // the same canonical left-to-right order the switcher strip groups
+      // by server -- otherwise swiping would traverse a different order
+      // than what's shown above whenever accounts span more than one
+      // server. AccountShellScreen's own ListenableBuilder(listenable:
+      // manager) already rebuilds this whole screen (with a fresh read
       // below) on every account add/remove/switch, so this doesn't need
       // its own separate listener on widget.manager.
       body: PageView.builder(
         controller: _pageController,
-        itemCount: widget.manager.sessions.length,
+        itemCount: widget.manager.orderedSessions.length,
         onPageChanged: _onPageChanged,
         itemBuilder: (context, index) =>
-            _buildBody(context, widget.manager.sessions[index]),
+            _buildBody(context, widget.manager.orderedSessions[index]),
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _openNewChatSheet(context),
