@@ -77,6 +77,10 @@ class Conversation {
     List<String>? pinnedMessageIds,
     this.blocked = false,
     this.pendingApproval = false,
+    this.peerDeliveredUpTo,
+    this.peerReadUpTo,
+    this.sentDeliveredReceiptUpTo,
+    this.sentReadReceiptUpTo,
   }) : messages = messages ?? [],
        pinnedMessageIds = pinnedMessageIds ?? [],
        lastActivityAt = lastActivityAt ?? DateTime.now().toUtc();
@@ -99,6 +103,18 @@ class Conversation {
         .toList(),
     blocked: j['blocked'] as bool? ?? false,
     pendingApproval: j['pending_approval'] as bool? ?? false,
+    peerDeliveredUpTo: j['peer_delivered_up_to'] == null
+        ? null
+        : decodeTime(j['peer_delivered_up_to'] as String),
+    peerReadUpTo: j['peer_read_up_to'] == null
+        ? null
+        : decodeTime(j['peer_read_up_to'] as String),
+    sentDeliveredReceiptUpTo: j['sent_delivered_receipt_up_to'] == null
+        ? null
+        : decodeTime(j['sent_delivered_receipt_up_to'] as String),
+    sentReadReceiptUpTo: j['sent_read_receipt_up_to'] == null
+        ? null
+        : decodeTime(j['sent_read_receipt_up_to'] as String),
   );
 
   final String peerAccountId;
@@ -144,6 +160,23 @@ class Conversation {
   /// _handleIncoming.
   bool pendingApproval;
 
+  /// How far the PEER has confirmed receiving/reading MY messages -- one
+  /// marker per conversation, not one per message (see receipt_signal
+  /// .dart): a message of mine with `timestamp <= peerReadUpTo` is
+  /// rendered as read, `<= peerDeliveredUpTo` as delivered. Monotonic --
+  /// only ever moves forward, see AppSession.processIncomingMessage.
+  /// Never set if [AppSettings.readReceiptsEnabled] is off, which is what
+  /// makes disabling receipts reciprocal (nothing to render either way).
+  DateTime? peerDeliveredUpTo;
+  DateTime? peerReadUpTo;
+
+  /// How far I've already told the peer I've received/read THEIR
+  /// messages -- purely local bookkeeping so AppSession doesn't re-send
+  /// an identical receipt every time it re-checks (e.g. on every incoming
+  /// message in a burst, or every time the conversation is reopened).
+  DateTime? sentDeliveredReceiptUpTo;
+  DateTime? sentReadReceiptUpTo;
+
   /// The alias if one is set, otherwise the peer's compact
   /// "shortid*domain" address -- which server they're actually on is
   /// worth always keeping visible (especially once federation means
@@ -179,5 +212,12 @@ class Conversation {
     if (pinnedMessageIds.isNotEmpty) 'pinned_message_ids': pinnedMessageIds,
     if (blocked) 'blocked': blocked,
     if (pendingApproval) 'pending_approval': pendingApproval,
+    if (peerDeliveredUpTo != null)
+      'peer_delivered_up_to': encodeTime(peerDeliveredUpTo!),
+    if (peerReadUpTo != null) 'peer_read_up_to': encodeTime(peerReadUpTo!),
+    if (sentDeliveredReceiptUpTo != null)
+      'sent_delivered_receipt_up_to': encodeTime(sentDeliveredReceiptUpTo!),
+    if (sentReadReceiptUpTo != null)
+      'sent_read_receipt_up_to': encodeTime(sentReadReceiptUpTo!),
   };
 }

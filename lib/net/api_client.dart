@@ -245,6 +245,22 @@ class ApiClient {
     _checkStatus(resp, {200});
   }
 
+  /// Non-destructive counterpart to [claimPrekeyBundle]: how many
+  /// one-time prekeys this device's own pool has left, without consuming
+  /// one -- used to decide whether to top up (see topUpOneTimePrekeysIfNeeded
+  /// in app_session.dart).
+  Future<int> getPrekeyStatus(DeviceCredentials creds) async {
+    final resp = await _signedRequest(
+      'GET',
+      '/v1/devices/${creds.deviceId}/prekey-status',
+      null,
+      creds,
+    );
+    return PrekeyStatusResponse.fromJson(
+      _decodeObject(resp, {200}),
+    ).oneTimePrekeysRemaining;
+  }
+
   /// Claims (and atomically consumes, if any remain) a one-time prekey
   /// from deviceId's bundle. Unauthenticated -- see docs/PROTOCOL.md's
   /// note on this endpoint's trust model.

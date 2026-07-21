@@ -26,16 +26,19 @@ class SseClient {
   /// Reconnects automatically after [retryDelay] on any failure or
   /// disconnect, calling [onError] (if given) first, until [close] is
   /// called. Runs until closed -- typically started with an unawaited
-  /// call from a screen's initState.
+  /// call from a screen's initState. [onConnected], if given, fires once
+  /// per successful (re)connect -- e.g. AppSession uses it to re-check
+  /// its one-time-prekey pool on every reconnect, not just app launch.
   Future<void> connect({
     required void Function(MessageResponse message) onMessage,
     void Function(Object error)? onError,
+    void Function()? onConnected,
     Duration retryDelay = const Duration(seconds: 3),
   }) async {
     _closed = false;
     while (!_closed) {
       try {
-        await _connectOnce(onMessage);
+        await _connectOnce(onMessage, onConnected);
       } catch (e) {
         if (_closed) return;
         onError?.call(e);
@@ -45,7 +48,10 @@ class SseClient {
     }
   }
 
-  Future<void> _connectOnce(void Function(MessageResponse) onMessage) async {
+  Future<void> _connectOnce(
+    void Function(MessageResponse) onMessage,
+    void Function()? onConnected,
+  ) async {
     final httpClient = http.Client();
     _streamHttp = httpClient;
 
@@ -54,6 +60,7 @@ class SseClient {
       final body = await streamed.stream.bytesToString();
       throw ApiException(streamed.statusCode, null, body);
     }
+    onConnected?.call();
 
     final lines = streamed.stream
         .transform(utf8.decoder)

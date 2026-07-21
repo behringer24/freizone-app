@@ -10,6 +10,7 @@
 // screens rebuild via ListenableBuilder, the same primitive already
 // used everywhere else in this codebase.
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -23,13 +24,258 @@ import '../push/push_manager.dart';
 import '../util/address_format.dart';
 import '../util/freizone_address.dart';
 import '../util/server_url.dart';
+import 'app_settings.dart';
 import 'conversation.dart';
 import 'message_content.dart';
 import 'local_state.dart';
+import 'receipt_signal.dart';
 
 /// How many one-time prekeys to generate and upload at once, mirroring
 /// cmd/devclient's defaultOneTimePrekeyBatch.
 const _oneTimePrekeyBatch = 10;
+
+/// How low this device lets its own one-time-prekey pool get before
+/// [topUpOneTimePrekeysIfNeeded] tops it back up -- comfortably above the
+/// server's own lowOneTimePrekeyThreshold (internal/api/prekeys.go),
+/// which only exists as a fallback wake for a device that isn't checking
+/// on its own; a device that's actually in regular use should top up
+/// here, well before the server ever needs to nudge it.
+const _oneTimePrekeyLowWaterMark = 3;
+
+/// Which peer a decrypted message came from, and whether it clears the
+/// bar for a user-visible notification -- distinct from whether it was
+/// stored at all (a blocked peer's message is decrypted and dropped,
+/// never stored, so it can never be notify-worthy either).
+class IncomingMessageResult {
+  const IncomingMessageResult({
+    required this.peerAccountId,
+    required this.shouldNotify,
+    this.deliveredUpTo,
+  });
+
+  final String peerAccountId;
+  final bool shouldNotify;
+
+  /// The timestamp a genuinely new, stored (not blocked, not a receipt)
+  /// message was recorded at -- null for a receipt, a dropped/blocked
+  /// message, or anything else that isn't itself a delivered chat message.
+  /// Lets a caller that CAN send (AppSession, which has sending
+  /// capability; a bare background sync currently doesn't -- see
+  /// push_manager.dart's _syncProfile) decide whether to send a
+  /// "delivered" receipt back, without processIncomingMessage itself
+  /// needing to know how to send anything.
+  final DateTime? deliveredUpTo;
+}
+
+/// Decrypts and stores one incoming envelope into [state] -- the shared
+/// core of [AppSession._handleIncoming], factored out so a background
+/// push wake (push_manager.dart's _syncAndMaybeNotify, which has no live
+/// AppSession) can run the identical decrypt logic. Mutates [state]
+/// in-place (sessions/conversations/one-time-prekey pool) but does not
+/// save it to disk or delete [msg] server-side -- callers do both once,
+/// after processing a whole batch, so several messages in one sync don't
+/// each trigger their own disk write. [openConversationPeerId] only
+/// matters to the live path (a background sync has no open conversation,
+/// so its default of null is always correct there). Returns null if the
+/// envelope couldn't be decrypted (no session and no X3DH material to
+/// start one) -- caller should just skip it; other decrypt failures
+/// propagate as an exception, so a caller processing several messages in
+/// one batch can catch per-message and keep going.
+Future<IncomingMessageResult?> processIncomingMessage(
+  AppState state,
+  MessageResponse msg,
+  FreizoneCore core, {
+  String? openConversationPeerId,
+}) async {
+  final parsed = core.parseEnvelope(msg.payload);
+
+  var session = state.sessions[msg.senderAccountId];
+  if (session == null) {
+    final initial = parsed.initial;
+    if (initial == null) return null; // no way to start a session -- drop.
+
+    Uint8List? otpkPriv;
+    final otpkId = initial.oneTimePrekeyId;
+    if (otpkId != null && state.oneTimePrekeys.containsKey(otpkId)) {
+      otpkPriv = state.oneTimePrekeys[otpkId]!.priv;
+      state.oneTimePrekeys.remove(otpkId);
+    }
+    session = core.respondToSession(
+      localDhIdentityPriv: state.dhIdentityPriv!,
+      signedPrekeyPriv: state.signedPrekeyPriv!,
+      oneTimePrekeyPriv: otpkPriv,
+      initial: initial,
+    );
+  }
+
+  final dec = core.sessionDecrypt(
+    session: session,
+    header: parsed.header,
+    ciphertext: parsed.ciphertext,
+  );
+  state.sessions[msg.senderAccountId] = dec.session;
+
+  final receipt = ReceiptSignal.tryDecode(dec.plaintext);
+  if (receipt != null) {
+    // A receipt never creates a conversation (no putIfAbsent here, unlike
+    // below) -- if there's no local record of this peer at all, there's
+    // nothing to update. Either way this envelope is fully processed (the
+    // ratchet session already advanced above), so the caller still
+    // acks/deletes it from the server queue like any other message.
+    final convo = state.conversations[msg.senderAccountId];
+    if (convo != null && (await AppSettings.load()).readReceiptsEnabled) {
+      // Monotonic: an out-of-order or duplicate older receipt never
+      // regresses an already-newer status.
+      switch (receipt.status) {
+        case ReceiptStatus.delivered:
+          if (convo.peerDeliveredUpTo == null ||
+              receipt.upToSentAt.isAfter(convo.peerDeliveredUpTo!)) {
+            convo.peerDeliveredUpTo = receipt.upToSentAt;
+          }
+        case ReceiptStatus.read:
+          if (convo.peerReadUpTo == null ||
+              receipt.upToSentAt.isAfter(convo.peerReadUpTo!)) {
+            convo.peerReadUpTo = receipt.upToSentAt;
+          }
+      }
+    }
+    return IncomingMessageResult(
+      peerAccountId: msg.senderAccountId,
+      shouldNotify: false,
+    );
+  }
+
+  final content = MessageContent.decode(
+    dec.plaintext,
+    fallbackId: generateMessageId(),
+  );
+  final now = DateTime.now().toUtc();
+
+  // Blocked/known status is looked up from AppState.blockedPeers/
+  // knownPeerIds -- deliberately independent of whether a Conversation
+  // for this peer currently exists, so a deleted-then-recreated
+  // Conversation (see deleteConversation) picks the right state back up
+  // rather than treating a blocked or already-known peer as a brand new
+  // "message request."
+  final blocked = state.blockedPeers.containsKey(msg.senderAccountId);
+  final isFirstContact = !state.knownPeerIds.contains(msg.senderAccountId);
+  // Captured before putIfAbsent creates the entry -- distinguishes the
+  // message that actually starts a new "message request" from a
+  // follow-up while it's still sitting there unactioned (see shouldNotify
+  // below).
+  final isNewConversation = !state.conversations.containsKey(
+    msg.senderAccountId,
+  );
+  final convo = state.conversations.putIfAbsent(
+    msg.senderAccountId,
+    () => Conversation(
+      peerAccountId: msg.senderAccountId,
+      blocked: blocked,
+      pendingApproval: isFirstContact && !blocked,
+    ),
+  );
+  // Refreshed on every message that carries one (not just the first), so
+  // this self-heals if local state is ever lost -- see message_content
+  // .dart's senderServer.
+  if (content.senderServer != null) {
+    convo.peerServer = content.senderServer;
+  }
+
+  var shouldNotify = false;
+  // A blocked peer's messages are still decrypted above (so the ratchet
+  // session stays in sync and the server-side queue still gets drained by
+  // the caller) but dropped here rather than stored or notified -- see
+  // setBlocked.
+  if (!convo.blocked) {
+    convo.messages.add(
+      StoredMessage(
+        id: content.id,
+        text: content.text,
+        mine: false,
+        timestamp: now,
+        replyToId: content.replyToId,
+        replyPreviewText: content.replyPreview?.text,
+        replyPreviewMine: content.replyPreview?.mine,
+      ),
+    );
+    convo.lastActivityAt = now;
+    if (msg.senderAccountId != openConversationPeerId) {
+      convo.hasUnread = true;
+      // The message that actually creates a new "message request" still
+      // notifies once -- you should learn someone wants to chat with you
+      // -- but a follow-up from that same still-unaccepted sender doesn't:
+      // once you've been told a request exists, it shouldn't be able to
+      // keep interrupting you before you've accepted or blocked it, only
+      // show up passively in the Message requests section.
+      shouldNotify = isNewConversation || !convo.pendingApproval;
+    }
+  }
+
+  return IncomingMessageResult(
+    peerAccountId: msg.senderAccountId,
+    shouldNotify: shouldNotify,
+    deliveredUpTo: convo.blocked ? null : now,
+  );
+}
+
+/// Tops up [state]'s one-time-prekey pool if the server reports it's
+/// running low -- called from [AppSession.init], on every SSE reconnect,
+/// and from a background push-wake sync (push_manager.dart, no live
+/// AppSession there), so it must not assume anything beyond [state]/
+/// [core]/[api]. A cheap no-op most of the time: one GET, no upload,
+/// since the pool usually isn't low. No-ops before the very first prekey
+/// upload too (AppSession.init handles that separately, unconditionally,
+/// the one time it's actually needed).
+Future<void> topUpOneTimePrekeysIfNeeded(
+  AppState state,
+  FreizoneCore core,
+  ApiClient api,
+) async {
+  if (state.signedPrekeyPub == null) return;
+
+  final remaining = await api.getPrekeyStatus(state.credentials);
+  if (remaining >= _oneTimePrekeyLowWaterMark) return;
+
+  // The upload endpoint always requires signed_prekey (it replaces
+  // whatever's currently on file) even when only topping up
+  // one_time_prekeys -- re-sign the SAME existing key material rather
+  // than generating a new one, so this stays purely a top-up, not a
+  // rotation.
+  final spkCert = core.signSignedPrekeyCertificate(
+    accountId: state.accountId,
+    deviceId: state.deviceId,
+    keyId: state.signedPrekeyId,
+    dhIdentityPub: state.dhIdentityPub!,
+    prekeyPub: state.signedPrekeyPub!,
+    issuedAt: DateTime.now().toUtc(),
+    devicePriv: state.devicePriv,
+  );
+
+  final otpkDtos = <OneTimePrekeyDTO>[];
+  for (var i = remaining; i < _oneTimePrekeyBatch; i++) {
+    final kp = core.generateX25519KeyPair();
+    final keyId = state.nextOtpkKeyId;
+    state.nextOtpkKeyId++;
+    state.oneTimePrekeys[keyId] = OneTimePrekeyState(
+      pub: kp.pub,
+      priv: kp.priv,
+    );
+    otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
+  }
+
+  await api.uploadPrekeys(
+    creds: state.credentials,
+    signedPrekey: SignedPrekeyDTO(
+      keyId: spkCert.keyId,
+      dhIdentityPubKey: spkCert.dhIdentityPubKey,
+      pubKey: spkCert.prekeyPubKey,
+      issuedAt: spkCert.issuedAt,
+      signature: spkCert.signature,
+    ),
+    oneTimePrekeys: otpkDtos,
+  );
+  await LocalStateStore.saveProfile(state);
+}
 
 class AppSession extends ChangeNotifier {
   AppSession(this.state) {
@@ -46,6 +292,37 @@ class AppSession extends ChangeNotifier {
   /// conversation's peer server rarely changes. [api] itself stays the
   /// one used for anything on this session's own server.
   final Map<String, ApiClient> _peerApiClients = {};
+
+  /// One chained Future per peer, keyed by their account id -- every
+  /// operation that reads-modifies-writes state.sessions[peerAccountId]
+  /// (decrypting an incoming envelope, or encrypting an outgoing one, see
+  /// _withPeerSessionLock) runs through here so two such operations for
+  /// the SAME peer never overlap. Without this, e.g. a "delivered"
+  /// receipt fired from _handleIncoming and a "read" receipt fired
+  /// moments later from enterConversation (tapping a notification jumps
+  /// straight into that chat, fast enough to still race the first send)
+  /// could both encrypt from the same pre-advance ratchet snapshot and
+  /// clobber each other's advancement when writing it back -- the
+  /// clobbered send is still delivered over the wire, just encrypted
+  /// with a state the local session no longer agrees with, so the peer's
+  /// next decrypt of it can silently fail (caught, logged to lastError,
+  /// nothing else) rather than crash.
+  final Map<String, Future<void>> _peerSessionLocks = {};
+
+  Future<T> _withPeerSessionLock<T>(
+    String peerAccountId,
+    Future<T> Function() action,
+  ) async {
+    final previous = _peerSessionLocks[peerAccountId] ?? Future.value();
+    final done = Completer<void>();
+    _peerSessionLocks[peerAccountId] = done.future;
+    try {
+      await previous;
+      return await action();
+    } finally {
+      done.complete();
+    }
+  }
 
   /// The ApiClient to use for a peer whose home server is [server] --
   /// this session's own [api] if null or the same server, otherwise a
@@ -202,6 +479,24 @@ class AppSession extends ChangeNotifier {
     final convo = state.conversations[peerAccountId];
     if (convo == null || !convo.hasUnread) return;
     convo.hasUnread = false;
+
+    // "Read up to" the peer's own last message, not simply the
+    // conversation's last message overall -- a trailing message of mine
+    // shouldn't be part of what I'm confirming I've read.
+    DateTime? theirLastTimestamp;
+    for (final m in convo.messages.reversed) {
+      if (!m.mine) {
+        theirLastTimestamp = m.timestamp;
+        break;
+      }
+    }
+    if (theirLastTimestamp != null &&
+        (convo.sentReadReceiptUpTo == null ||
+            theirLastTimestamp.isAfter(convo.sentReadReceiptUpTo!))) {
+      convo.sentReadReceiptUpTo = theirLastTimestamp;
+      unawaited(_sendReceipt(convo, ReceiptStatus.read, theirLastTimestamp));
+    }
+
     await LocalStateStore.saveProfile(state);
     // If that was the last unread conversation, clear this account's
     // "new message(s)" notification too, so its launcher-icon badge
@@ -217,12 +512,15 @@ class AppSession extends ChangeNotifier {
       _openConversationPeerId = null;
   }
 
-  /// Uploads prekeys if this is the first run, then opens the live
+  /// Uploads prekeys if this is the first run, tops up the one-time
+  /// prekey pool if it's already running low, then opens the live
   /// message stream. Call once, right after construction.
   Future<void> init() async {
     try {
       if (state.signedPrekeyPub == null) {
         await _uploadPrekeys();
+      } else {
+        await topUpOneTimePrekeysIfNeeded(state, core, api);
       }
       prekeysReady = true;
       notifyListeners();
@@ -330,110 +628,61 @@ class AppSession extends ChangeNotifier {
           lastError = 'stream error: $e';
           notifyListeners();
         },
+        onConnected: () {
+          unawaited(topUpOneTimePrekeysIfNeeded(state, core, api));
+        },
       ),
     );
   }
 
   Future<void> _handleIncoming(MessageResponse msg) async {
     try {
-      final parsed = core.parseEnvelope(msg.payload);
-
-      var session = state.sessions[msg.senderAccountId];
-      if (session == null) {
-        final initial = parsed.initial;
-        if (initial == null)
-          return; // no session and no X3DH material to start one -- drop.
-
-        Uint8List? otpkPriv;
-        final otpkId = initial.oneTimePrekeyId;
-        if (otpkId != null && state.oneTimePrekeys.containsKey(otpkId)) {
-          otpkPriv = state.oneTimePrekeys[otpkId]!.priv;
-          state.oneTimePrekeys.remove(otpkId);
-        }
-        session = core.respondToSession(
-          localDhIdentityPriv: state.dhIdentityPriv!,
-          signedPrekeyPriv: state.signedPrekeyPriv!,
-          oneTimePrekeyPriv: otpkPriv,
-          initial: initial,
-        );
-      }
-
-      final dec = core.sessionDecrypt(
-        session: session,
-        header: parsed.header,
-        ciphertext: parsed.ciphertext,
-      );
-      state.sessions[msg.senderAccountId] = dec.session;
-      final content = MessageContent.decode(
-        dec.plaintext,
-        fallbackId: generateMessageId(),
-      );
-      final now = DateTime.now().toUtc();
-
-      // Blocked/known status is looked up from AppState.blockedPeers/
-      // knownPeerIds -- deliberately independent of whether a Conversation
-      // for this peer currently exists, so a deleted-then-recreated
-      // Conversation (see deleteConversation) picks the right state back
-      // up rather than treating a blocked or already-known peer as a
-      // brand new "message request."
-      final blocked = state.blockedPeers.containsKey(msg.senderAccountId);
-      final isFirstContact = !state.knownPeerIds.contains(msg.senderAccountId);
-      final convo = state.conversations.putIfAbsent(
+      // Serialized against any in-flight send to this same peer (see
+      // _withPeerSessionLock) -- decrypting also reads-modifies-writes
+      // state.sessions[msg.senderAccountId], the same resource
+      // _encryptAndSend touches.
+      final result = await _withPeerSessionLock(
         msg.senderAccountId,
-        () => Conversation(
-          peerAccountId: msg.senderAccountId,
-          blocked: blocked,
-          pendingApproval: isFirstContact && !blocked,
+        () => processIncomingMessage(
+          state,
+          msg,
+          core,
+          openConversationPeerId: _openConversationPeerId,
         ),
       );
-      // Refreshed on every message that carries one (not just the
-      // first), so this self-heals if local state is ever lost -- see
-      // message_content.dart's senderServer.
-      if (content.senderServer != null) {
-        convo.peerServer = content.senderServer;
-      }
-      // A blocked peer's messages are still decrypted above (so the
-      // ratchet session stays in sync and the server-side queue still
-      // gets drained below) but dropped here rather than stored or
-      // notified -- see setBlocked.
-      if (!convo.blocked) {
-        convo.messages.add(
-          StoredMessage(
-            id: content.id,
-            text: content.text,
-            mine: false,
-            timestamp: now,
-            replyToId: content.replyToId,
-            replyPreviewText: content.replyPreview?.text,
-            replyPreviewMine: content.replyPreview?.mine,
+      if (result == null) return;
+
+      if (result.shouldNotify) {
+        // Without this call, the launcher icon's badge (which Android
+        // derives from active notifications, not anything drawn in-app)
+        // would never appear for a message that happened to arrive while
+        // the app was in the foreground.
+        unawaited(
+          showMessageNotification(
+            state.accountId,
+            peerAccountId: result.peerAccountId,
           ),
         );
-        convo.lastActivityAt = now;
-        if (msg.senderAccountId != _openConversationPeerId) {
-          convo.hasUnread = true;
-          // No push notification for a still-unactioned "message
-          // request" -- an unaccepted sender shouldn't be able to
-          // interrupt you, only show up passively in the Message
-          // requests section. This is the live (app-open) delivery path;
-          // a background push wake (push_manager.dart's _onMessage)
-          // can't apply the same filter, since the wake itself is
-          // deliberately content-free (no sender id, by design -- see
-          // the gateway's own "never sees plaintext or metadata"
-          // property) and so has no way to know a message is still
-          // pending -- an accepted trade-off, not something fixable
-          // without weakening that privacy property. Without this call,
-          // the launcher icon's badge (which Android derives from active
-          // notifications, not anything drawn in-app) would never appear
-          // for a message that happened to arrive while the app was in
-          // the foreground.
-          if (!convo.pendingApproval) {
-            unawaited(
-              showMessageNotification(
-                state.accountId,
-                peerAccountId: msg.senderAccountId,
-              ),
-            );
-          }
+      }
+
+      // Only the live path sends a "delivered" receipt right away -- a
+      // message processed by the background push-wake sync
+      // (push_manager.dart's _syncProfile, no live AppSession there)
+      // doesn't currently trigger one, so a fully-closed app only starts
+      // showing delivered/read checkmarks to the sender once it's next
+      // opened (which sends both anyway, see enterConversation) --
+      // deliberate scope-narrowing to avoid needing every one of
+      // AppSession's send-path helpers (_resolvePeerDevice,
+      // _getOrCreateCryptoSession, _clientFor) to become standalone,
+      // isolate-safe functions just for this.
+      final upTo = result.deliveredUpTo;
+      if (upTo != null) {
+        final convo = state.conversations[result.peerAccountId];
+        if (convo != null &&
+            (convo.sentDeliveredReceiptUpTo == null ||
+                upTo.isAfter(convo.sentDeliveredReceiptUpTo!))) {
+          convo.sentDeliveredReceiptUpTo = upTo;
+          unawaited(_sendReceipt(convo, ReceiptStatus.delivered, upTo));
         }
       }
 
@@ -768,18 +1017,7 @@ class AppSession extends ChangeNotifier {
     if (convo == null) {
       throw StateError('no conversation for $peerAccountId');
     }
-    if (convo.peerDeviceId == null) {
-      // A conversation that only ever received messages (never started
-      // via startConversation) has no resolved peer device yet -- resolve
-      // it now, lazily, so replying to whoever messaged first works.
-      final (_, verified) = await _resolvePeerDevice(
-        peerAccountId,
-        _clientFor(convo.peerServer),
-      );
-      convo.peerDeviceId = verified.deviceId;
-      convo.peerDevicePubKey = verified.devicePubKey;
-      await LocalStateStore.saveProfile(state);
-    }
+    await _ensurePeerDeviceResolved(convo);
 
     final quoted = replyToId == null ? null : convo.messageById(replyToId);
     // Flipped relative to our own `quoted.mine`: the recipient reads this
@@ -801,43 +1039,7 @@ class AppSession extends ChangeNotifier {
       senderServer: convo.peerServer != null ? state.server : null,
     );
 
-    final (session, initial) = await _getOrCreateCryptoSession(convo);
-    final enc = core.sessionEncrypt(session: session, plaintext: content.encode());
-    state.sessions[peerAccountId] = enc.session;
-
-    final payload = core.buildEnvelope(
-      initial: initial,
-      header: enc.header,
-      ciphertext: enc.ciphertext,
-    );
-    if (convo.peerServer == null) {
-      await api.sendMessage(
-        creds: state.credentials,
-        messageId: _randomHex(16),
-        recipientDeviceId: convo.peerDeviceId!,
-        payload: payload,
-      );
-    } else {
-      // The recipient's server has no local row for this device, so the
-      // request carries a freshly-signed certificate instead of relying
-      // on one cached at registration time -- see docs/PROTOCOL.md §9.
-      final cert = core.signDeviceCertificate(
-        accountId: state.accountId,
-        deviceId: state.deviceId,
-        devicePub: state.devicePub,
-        issuedAt: DateTime.now().toUtc(),
-        rootPriv: state.rootPriv,
-      );
-      await _clientFor(convo.peerServer).sendFederatedMessage(
-        devicePriv: state.devicePriv,
-        rootPub: state.rootPub,
-        senderAccountId: state.accountId,
-        cert: cert,
-        messageId: _randomHex(16),
-        recipientDeviceId: convo.peerDeviceId!,
-        payload: payload,
-      );
-    }
+    await _encryptAndSend(convo, content.encode());
 
     final now = DateTime.now().toUtc();
     convo.messages.add(
@@ -856,6 +1058,100 @@ class AppSession extends ChangeNotifier {
 
     lastError = null;
     notifyListeners();
+  }
+
+  /// Resolves and caches convo's peer device, if it hasn't been already --
+  /// a conversation that only ever received messages (never started via
+  /// startConversation, and never sent to before) has no resolved peer
+  /// device yet. Shared by [sendMessage] and [_sendReceipt], since a
+  /// receipt needs somewhere to send to just as much as a real message
+  /// does, even if the user has never sent this peer anything themselves.
+  Future<void> _ensurePeerDeviceResolved(Conversation convo) async {
+    if (convo.peerDeviceId != null) return;
+    final (_, verified) = await _resolvePeerDevice(
+      convo.peerAccountId,
+      _clientFor(convo.peerServer),
+    );
+    convo.peerDeviceId = verified.deviceId;
+    convo.peerDevicePubKey = verified.devicePubKey;
+    await LocalStateStore.saveProfile(state);
+  }
+
+  /// Encrypts plaintext for convo's peer device and posts it via the
+  /// correct path (same-server vs federated) -- the shared core of
+  /// [sendMessage] and [_sendReceipt]. Requires convo.peerDeviceId to
+  /// already be resolved (see [_ensurePeerDeviceResolved]). Deliberately
+  /// does not touch convo.messages/lastActivityAt or save/notify -- callers
+  /// decide what, if anything, becomes locally visible; a receipt should
+  /// stay invisible and shouldn't bump the conversation to the top of the
+  /// chat list, unlike a real sent message.
+  Future<void> _encryptAndSend(Conversation convo, Uint8List plaintext) {
+    // Serialized per peer (see _withPeerSessionLock) -- two sends to the
+    // same peer close together (e.g. a "delivered" receipt immediately
+    // followed by a "read" one) must never both read the ratchet session
+    // before either has written its advanced state back.
+    return _withPeerSessionLock(convo.peerAccountId, () async {
+      final (session, initial) = await _getOrCreateCryptoSession(convo);
+      final enc = core.sessionEncrypt(session: session, plaintext: plaintext);
+      state.sessions[convo.peerAccountId] = enc.session;
+
+      final payload = core.buildEnvelope(
+        initial: initial,
+        header: enc.header,
+        ciphertext: enc.ciphertext,
+      );
+      if (convo.peerServer == null) {
+        await api.sendMessage(
+          creds: state.credentials,
+          messageId: _randomHex(16),
+          recipientDeviceId: convo.peerDeviceId!,
+          payload: payload,
+        );
+      } else {
+        // The recipient's server has no local row for this device, so
+        // the request carries a freshly-signed certificate instead of
+        // relying on one cached at registration time -- see
+        // docs/PROTOCOL.md §9.
+        final cert = core.signDeviceCertificate(
+          accountId: state.accountId,
+          deviceId: state.deviceId,
+          devicePub: state.devicePub,
+          issuedAt: DateTime.now().toUtc(),
+          rootPriv: state.rootPriv,
+        );
+        await _clientFor(convo.peerServer).sendFederatedMessage(
+          devicePriv: state.devicePriv,
+          rootPub: state.rootPub,
+          senderAccountId: state.accountId,
+          cert: cert,
+          messageId: _randomHex(16),
+          recipientDeviceId: convo.peerDeviceId!,
+          payload: payload,
+        );
+      }
+    });
+  }
+
+  /// Sends a delivery/read receipt to convo's peer, gated by
+  /// AppSettings.readReceiptsEnabled -- best-effort: failures are logged,
+  /// not surfaced, since a missed receipt just leaves the peer's
+  /// checkmark one step behind until the next one goes out, not a lost
+  /// message.
+  Future<void> _sendReceipt(
+    Conversation convo,
+    ReceiptStatus status,
+    DateTime upToSentAt,
+  ) async {
+    try {
+      if (!(await AppSettings.load()).readReceiptsEnabled) return;
+      await _ensurePeerDeviceResolved(convo);
+      await _encryptAndSend(
+        convo,
+        ReceiptSignal(status: status, upToSentAt: upToSentAt).encode(),
+      );
+    } catch (e) {
+      developer.log('sending $status receipt failed: $e', name: 'receipts');
+    }
   }
 
   /// Removes a single message from this device's own history only -- the

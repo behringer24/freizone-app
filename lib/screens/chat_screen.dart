@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../state/app_session.dart';
 import '../state/conversation.dart';
+import '../state/receipt_signal.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
@@ -199,6 +200,22 @@ class _ChatScreenState extends State<ChatScreen> {
     return '${two(local.hour)}:${two(local.minute)}';
   }
 
+  /// Derived from convo's per-conversation markers (see conversation
+  /// .dart), not stored per message -- null for a peer's own message, or
+  /// one of mine the peer hasn't yet confirmed at all.
+  ReceiptStatus? _deliveryStatusFor(Conversation convo, StoredMessage m) {
+    if (!m.mine) return null;
+    final readUpTo = convo.peerReadUpTo;
+    if (readUpTo != null && !m.timestamp.isAfter(readUpTo)) {
+      return ReceiptStatus.read;
+    }
+    final deliveredUpTo = convo.peerDeliveredUpTo;
+    if (deliveredUpTo != null && !m.timestamp.isAfter(deliveredUpTo)) {
+      return ReceiptStatus.delivered;
+    }
+    return null;
+  }
+
   List<Widget> _buildItems(BuildContext context, Conversation convo) {
     final items = <Widget>[];
     DateTime? lastDay;
@@ -216,6 +233,7 @@ class _ChatScreenState extends State<ChatScreen> {
           timeLabel: _timeLabel(m.timestamp),
           peerTitle: convo.titleFor(widget.session.state.server),
           isPinned: convo.pinnedMessageIds.contains(m.id),
+          deliveryStatus: _deliveryStatusFor(convo, m),
           onLongPress: () => _showMessageActions(context, convo, m),
           onTapQuote: m.replyToId == null
               ? null
@@ -636,6 +654,7 @@ class _MessageBubble extends StatelessWidget {
     required this.peerTitle,
     required this.isPinned,
     required this.onLongPress,
+    this.deliveryStatus,
     this.onTapQuote,
   });
 
@@ -647,6 +666,10 @@ class _MessageBubble extends StatelessWidget {
   final String peerTitle;
   final bool isPinned;
   final VoidCallback onLongPress;
+
+  /// Null for one of the peer's messages, or one of mine the peer hasn't
+  /// confirmed at all yet -- see _ChatScreenState._deliveryStatusFor.
+  final ReceiptStatus? deliveryStatus;
 
   /// Scrolls to the quoted original, if this message is a reply and its
   /// target is still in local history -- null (and the quote becomes
@@ -736,12 +759,27 @@ class _MessageBubble extends StatelessWidget {
                     ),
                   Text(message.text, style: TextStyle(color: onBubble)),
                   const SizedBox(height: 2),
-                  Text(
-                    timeLabel,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: onBubble.withValues(alpha: 0.7),
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        timeLabel,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: onBubble.withValues(alpha: 0.7),
+                        ),
+                      ),
+                      if (deliveryStatus != null) ...[
+                        const SizedBox(width: 4),
+                        Icon(
+                          deliveryStatus == ReceiptStatus.read
+                              ? Icons.done_all
+                              : Icons.done,
+                          size: 14,
+                          color: onBubble.withValues(alpha: 0.7),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
               ),
