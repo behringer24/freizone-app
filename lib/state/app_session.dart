@@ -157,6 +157,13 @@ class AppSession extends ChangeNotifier {
     await refreshMyRole();
   }
 
+  /// Permanently deletes THIS account -- server-side, not just locally.
+  /// Only ever targets the caller's own accountId (see api_client.dart's
+  /// matching self-only endpoint) -- unlike [deleteAccount] above, which
+  /// is the admin-only path for removing a *different* account.
+  Future<void> deleteOwnAccount() =>
+      api.deleteOwnAccount(state.credentials, state.accountId);
+
   /// Returns the current registration policy ("open"/"invite"/"closed").
   Future<String> getRegistrationPolicy() =>
       api.getRegistrationPolicy(state.credentials);
