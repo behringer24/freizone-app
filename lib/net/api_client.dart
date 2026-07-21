@@ -408,6 +408,22 @@ class ApiClient {
     _checkStatus(resp, {200});
   }
 
+  /// Permanently deletes the caller's own account server-side -- there is
+  /// no path back to the same identity afterward, on this or any other
+  /// device. The server derives the actual target from the request's
+  /// signature, never from [accountId] alone (see docs/PROTOCOL.md's
+  /// entry for this endpoint), so this can never be pointed at a
+  /// different account no matter what's passed here.
+  Future<void> deleteOwnAccount(DeviceCredentials creds, String accountId) async {
+    final resp = await _signedRequest(
+      'DELETE',
+      '/v1/accounts/$accountId',
+      null,
+      creds,
+    );
+    _checkStatus(resp, {200});
+  }
+
   /// Returns the current registration policy ("open", "invite", or
   /// "closed"). Admin or moderator.
   Future<String> getRegistrationPolicy(DeviceCredentials creds) async {

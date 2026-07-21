@@ -1,14 +1,17 @@
 // One account's profile: avatar (with admin/moderator decoration), its
 // short id and server at a glance, both address forms ready to copy,
 // and -- as the one destructive action that used to live behind a
-// long-press on the account switcher -- removing it from this device.
+// long-press on the account switcher -- permanently deleting it, both
+// server-side and on this device.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../net/api_client.dart';
 import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../util/address_format.dart';
 import '../util/avatar_color.dart';
+import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/role_icon.dart';
 
@@ -30,15 +33,15 @@ class ProfileScreen extends StatelessWidget {
     ).showSnackBar(SnackBar(content: Text('$label copied to clipboard')));
   }
 
-  Future<void> _confirmRemove(BuildContext context) async {
+  Future<void> _confirmDelete(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Remove account?'),
+        title: const Text('Delete account?'),
         content: Text(
-          'This removes ${formatAccountIdForDisplay(session.state.accountId)} from this device -- its message '
-          'history and keys are deleted locally. The account itself still exists on the server. This cannot be '
-          'undone without a recovery seed.',
+          'This permanently deletes ${formatAccountIdForDisplay(session.state.accountId)} -- on the server and on '
+          'this device. Anyone who messages you afterward gets an immediate "unknown recipient" error, not '
+          'silence. There is no way back to this identity, on this or any other device -- this cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -50,14 +53,62 @@ class ProfileScreen extends StatelessWidget {
               backgroundColor: Theme.of(context).colorScheme.error,
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Remove'),
+            child: const Text('Delete'),
           ),
         ],
       ),
     );
     if (confirmed != true || !context.mounted) return;
 
-    await manager.removeProfile(session.state.accountId);
+    try {
+      await manager.deleteAccount(session.state.accountId);
+      if (context.mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (!context.mounted) return;
+      // A 401 here means the server flatly doesn't recognize this
+      // device/account -- not a transient error, but a sign the account
+      // is already gone or unreachable server-side (its data was reset
+      // independently, say). No request this device signs will ever be
+      // accepted, so the normal delete can never succeed -- offer the
+      // one remaining way to get rid of it: forget it locally only.
+      if (e is ApiException && e.statusCode == 401) {
+        await _offerOrphanedRemoval(context);
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Delete failed: ${describeError(e)}')));
+    }
+  }
+
+  Future<void> _offerOrphanedRemoval(BuildContext context) async {
+    final removeLocally = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Account not recognized by server'),
+        content: Text(
+          'The server rejected this device\'s credentials for ${formatAccountIdForDisplay(session.state.accountId)} -- '
+          'this usually means the account no longer exists there. It can never be deleted server-side from here, '
+          'since no request this device signs will be accepted. Remove it from this device only?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove from this device'),
+          ),
+        ],
+      ),
+    );
+    if (removeLocally != true || !context.mounted) return;
+
+    await manager.removeOrphanedAccount(session.state.accountId);
     if (context.mounted) Navigator.of(context).pop();
   }
 
@@ -183,9 +234,9 @@ class ProfileScreen extends StatelessWidget {
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
-                  onPressed: () => _confirmRemove(context),
+                  onPressed: () => _confirmDelete(context),
                   icon: const Icon(Icons.delete_outline),
-                  label: const Text('Remove account from this device'),
+                  label: const Text('Delete account'),
                 ),
               ),
             ],
