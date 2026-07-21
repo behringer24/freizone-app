@@ -24,7 +24,7 @@ import 'my_address_screen.dart';
 import 'qr_scan_screen.dart';
 import 'settings_screen.dart';
 
-class ChatListScreen extends StatelessWidget {
+class ChatListScreen extends StatefulWidget {
   const ChatListScreen({
     super.key,
     required this.session,
@@ -49,11 +49,69 @@ class ChatListScreen extends StatelessWidget {
   /// between the two.
   final PreferredSizeWidget? appBarBottom;
 
+  @override
+  State<ChatListScreen> createState() => _ChatListScreenState();
+}
+
+class _ChatListScreenState extends State<ChatListScreen> {
+  late final PageController _pageController;
+
+  int _indexOf(AppSession session) => widget.manager.sessions.indexWhere(
+    (s) => s.state.accountId == session.state.accountId,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = _indexOf(widget.session);
+    _pageController = PageController(initialPage: initial < 0 ? 0 : initial);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  /// Keeps the swipeable body in sync with account switches that
+  /// originate elsewhere (tapping an avatar in the switcher strip) --
+  /// [_onPageChanged] handles the reverse direction (a swipe here
+  /// driving [AccountManager.setActive]). Guarded so the two don't fight
+  /// each other: a swipe-driven switch already lands on the right page,
+  /// so this only actually animates for an externally-driven one.
+  @override
+  void didUpdateWidget(ChatListScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.session.state.accountId == oldWidget.session.state.accountId)
+      return;
+    final target = _indexOf(widget.session);
+    if (target < 0 || !_pageController.hasClients) return;
+    if (_pageController.page?.round() == target) return;
+    _pageController.animateToPage(
+      target,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.ease,
+    );
+  }
+
+  void _onPageChanged(int index) {
+    final sessions = widget.manager.sessions;
+    if (index < 0 || index >= sessions.length) return;
+    final target = sessions[index];
+    if (target.state.accountId != widget.session.state.accountId) {
+      widget.manager.setActive(target.state.accountId);
+    }
+  }
+
   /// One chat-list row, shared between the "Message requests" section
   /// and the regular list below -- both need the exact same tile, since
   /// the preview text (e.g. a request's greeting, if any) is what
   /// actually answers "who is this."
-  Widget _buildConversationTile(BuildContext context, Conversation convo) {
+  Widget _buildConversationTile(
+    BuildContext context,
+    AppSession session,
+    Conversation convo,
+  ) {
     return ListTile(
       leading: Stack(
         clipBehavior: Clip.none,
@@ -61,7 +119,7 @@ class ChatListScreen extends StatelessWidget {
           CircleAvatar(
             backgroundColor: avatarColorFor(convo.peerAccountId),
             child: Text(
-              _initials(convo),
+              _initials(session, convo),
               style: const TextStyle(color: Colors.white),
             ),
           ),
@@ -89,11 +147,11 @@ class ChatListScreen extends StatelessWidget {
               ChatScreen(session: session, peerAccountId: convo.peerAccountId),
         ),
       ),
-      onLongPress: () => _showChatOptions(context, convo),
+      onLongPress: () => _showChatOptions(context, session, convo),
     );
   }
 
-  String _initials(Conversation c) {
+  String _initials(AppSession session, Conversation c) {
     final source = c.titleFor(session.state.server);
     return source.isEmpty
         ? '?'
@@ -144,6 +202,7 @@ class ChatListScreen extends StatelessWidget {
   /// next time they write (see AppSession.deleteConversation).
   Future<void> _showChatOptions(
     BuildContext context,
+    AppSession session,
     Conversation convo,
   ) async {
     if (convo.pendingApproval) {
@@ -244,20 +303,138 @@ class ChatListScreen extends StatelessWidget {
     final peerAccountId = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => _NewChatSheet(session: session),
+      builder: (context) => _NewChatSheet(session: widget.session),
     );
     if (peerAccountId == null || !context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) =>
-            ChatScreen(session: session, peerAccountId: peerAccountId),
+            ChatScreen(session: widget.session, peerAccountId: peerAccountId),
       ),
+    );
+  }
+
+  /// The scrollable conversation list for one account -- pulled out of
+  /// [build] so it can be reused per-page in the swipeable [PageView]
+  /// below, each page bound to a different account's own [AppSession]
+  /// rather than always the active one.
+  Widget _buildBody(BuildContext context, AppSession session) {
+    return ListenableBuilder(
+      listenable: session,
+      builder: (context, _) {
+        if (session.pushUnavailable) {
+          session.pushUnavailable = false; // one-time hint, consume it
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'No push notifications available on this device -- install a UnifiedPush app (e.g. ntfy) or check '
+                  'the push delivery setting. Chat still works while Freizone is open.',
+                ),
+                duration: Duration(seconds: 6),
+              ),
+            );
+          });
+        }
+
+        final conversations = session.conversations;
+        if (conversations.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.chat_bubble_outline,
+                  size: 64,
+                  color: Theme.of(context).colorScheme.outline,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No conversations yet',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                const Text('Tap the button below to start one'),
+              ],
+            ),
+          );
+        }
+
+        // Unactioned message requests (first contact from someone with
+        // no prior conversation, see Conversation.pendingApproval) are
+        // surfaced above everything else, so they're never buried among
+        // regular chats -- but rendered with the exact same tile, since
+        // the preview text (their greeting, if any) is what actually
+        // answers "who is this."
+        final pending = conversations.where((c) => c.pendingApproval).toList();
+        final regular = conversations
+            .where((c) => !c.pendingApproval)
+            .toList();
+
+        // A tonal surface a step above the plain background -- Material
+        // 3's surfaceContainer* tokens are built exactly for this ("a
+        // panel that reads as a distinct area, without a hard border or
+        // shadow") and, being derived from the seed color per brightness,
+        // land a little darker in light mode and a little lighter in
+        // dark mode automatically, rather than needing a manual
+        // Brightness check here.
+        final requestsSurface = Theme.of(
+          context,
+        ).colorScheme.surfaceContainerHigh;
+
+        return CustomScrollView(
+          slivers: [
+            if (pending.isNotEmpty)
+              SliverToBoxAdapter(
+                child: Container(
+                  color: requestsSurface,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                        child: Text(
+                          'Message requests',
+                          style: Theme.of(context).textTheme.labelLarge
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                        ),
+                      ),
+                      for (final convo in pending) ...[
+                        _buildConversationTile(context, session, convo),
+                        if (convo != pending.last)
+                          const Divider(height: 1, indent: 72),
+                      ],
+                      // A visibly heavier rule than the hairline dividers
+                      // used between individual rows -- marks this as a
+                      // section boundary, not just another list item.
+                      Divider(
+                        height: 1,
+                        thickness: 2,
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            SliverList.separated(
+              itemCount: regular.length,
+              separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
+              itemBuilder: (context, i) =>
+                  _buildConversationTile(context, session, regular[i]),
+            ),
+          ],
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final session = widget.session;
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -275,7 +452,7 @@ class ChatListScreen extends StatelessWidget {
         backgroundColor: isDark
             ? Theme.of(context).colorScheme.surfaceContainerHigh
             : Colors.grey.shade100,
-        bottom: appBarBottom,
+        bottom: widget.appBarBottom,
         actions: [
           PopupMenuButton<String>(
             onSelected: (value) {
@@ -312,8 +489,10 @@ class ChatListScreen extends StatelessWidget {
               if (value == 'settings') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) =>
-                        SettingsScreen(settings: settings, manager: manager),
+                    builder: (_) => SettingsScreen(
+                      settings: widget.settings,
+                      manager: widget.manager,
+                    ),
                   ),
                 );
               }
@@ -342,115 +521,19 @@ class ChatListScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: ListenableBuilder(
-        listenable: session,
-        builder: (context, _) {
-          if (session.pushUnavailable) {
-            session.pushUnavailable = false; // one-time hint, consume it
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'No push notifications available on this device -- install a UnifiedPush app (e.g. ntfy) or check '
-                    'the push delivery setting. Chat still works while Freizone is open.',
-                  ),
-                  duration: Duration(seconds: 6),
-                ),
-              );
-            });
-          }
-
-          final conversations = session.conversations;
-          if (conversations.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.chat_bubble_outline,
-                    size: 64,
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No conversations yet',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text('Tap the button below to start one'),
-                ],
-              ),
-            );
-          }
-
-          // Unactioned message requests (first contact from someone with
-          // no prior conversation, see Conversation.pendingApproval) are
-          // surfaced above everything else, so they're never buried among
-          // regular chats -- but rendered with the exact same tile, since
-          // the preview text (their greeting, if any) is what actually
-          // answers "who is this."
-          final pending = conversations.where((c) => c.pendingApproval).toList();
-          final regular = conversations
-              .where((c) => !c.pendingApproval)
-              .toList();
-
-          // A tonal surface a step above the plain background -- Material
-          // 3's surfaceContainer* tokens are built exactly for this ("a
-          // panel that reads as a distinct area, without a hard border or
-          // shadow") and, being derived from the seed color per brightness,
-          // land a little darker in light mode and a little lighter in
-          // dark mode automatically, rather than needing a manual
-          // Brightness check here.
-          final requestsSurface = Theme.of(
-            context,
-          ).colorScheme.surfaceContainerHigh;
-
-          return CustomScrollView(
-            slivers: [
-              if (pending.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: Container(
-                    color: requestsSurface,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                          child: Text(
-                            'Message requests',
-                            style: Theme.of(context).textTheme.labelLarge
-                                ?.copyWith(
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                          ),
-                        ),
-                        for (final convo in pending) ...[
-                          _buildConversationTile(context, convo),
-                          if (convo != pending.last)
-                            const Divider(height: 1, indent: 72),
-                        ],
-                        // A visibly heavier rule than the hairline dividers
-                        // used between individual rows -- marks this as a
-                        // section boundary, not just another list item.
-                        Divider(
-                          height: 1,
-                          thickness: 2,
-                          color: Theme.of(context).colorScheme.outlineVariant,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              SliverList.separated(
-                itemCount: regular.length,
-                separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
-                itemBuilder: (context, i) =>
-                    _buildConversationTile(context, regular[i]),
-              ),
-            ],
-          );
-        },
+      // Swipeable so a horizontal drag switches accounts just like tapping
+      // an avatar in the switcher strip above -- see _onPageChanged/
+      // didUpdateWidget for how the two stay in sync with each other.
+      // AccountShellScreen's own ListenableBuilder(listenable: manager)
+      // already rebuilds this whole screen (with a fresh `sessions` read
+      // below) on every account add/remove/switch, so this doesn't need
+      // its own separate listener on widget.manager.
+      body: PageView.builder(
+        controller: _pageController,
+        itemCount: widget.manager.sessions.length,
+        onPageChanged: _onPageChanged,
+        itemBuilder: (context, index) =>
+            _buildBody(context, widget.manager.sessions[index]),
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _openNewChatSheet(context),
