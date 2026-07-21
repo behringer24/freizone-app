@@ -20,7 +20,7 @@ import 'chat_list_screen.dart';
 import 'profile_screen.dart';
 import 'setup_screen.dart';
 
-class AccountShellScreen extends StatelessWidget {
+class AccountShellScreen extends StatefulWidget {
   const AccountShellScreen({
     super.key,
     required this.manager,
@@ -30,18 +30,60 @@ class AccountShellScreen extends StatelessWidget {
   final AccountManager manager;
   final AppSettings settings;
 
+  @override
+  State<AccountShellScreen> createState() => _AccountShellScreenState();
+}
+
+class _AccountShellScreenState extends State<AccountShellScreen> {
   /// Gap between a group divider and its label -- kept equal to the
   /// gap between the label and the group's first icon (the latter is
   /// just that first avatar's own leading padding, not a second
   /// spacer), so the two don't visually read as different amounts.
   static const _labelGap = 4.0;
 
+  /// One stable [GlobalKey] per account, so the active one's on-screen
+  /// position can be found (see [_ensureActiveVisible]) regardless of
+  /// how the switcher's own ListView has scrolled -- created lazily and
+  /// kept for the account's lifetime rather than recreated every build,
+  /// since a GlobalKey only usefully identifies the same element across
+  /// rebuilds if the key instance itself is reused.
+  final Map<String, GlobalKey> _avatarKeys = {};
+
+  /// The account last scrolled into view -- lets [_ensureActiveVisible]
+  /// tell "the active account just changed" (switch via tap, via a
+  /// ChatListScreen swipe, or on first load) apart from "the switcher is
+  /// merely rebuilding for an unrelated reason" (a badge update, ...),
+  /// so it doesn't fight a manual scroll of the strip by re-centering on
+  /// every rebuild.
+  String? _lastVisibleAccountId;
+
+  GlobalKey _avatarKeyFor(String accountId) =>
+      _avatarKeys.putIfAbsent(accountId, () => GlobalKey());
+
+  void _ensureActiveVisible(AppSession active) {
+    final accountId = active.state.accountId;
+    if (accountId == _lastVisibleAccountId) return;
+    _lastVisibleAccountId = accountId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _avatarKeys[accountId]?.currentContext;
+      if (context == null || !context.mounted) return;
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.ease,
+      );
+    });
+  }
+
   Future<void> _addAccount(BuildContext context) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => SetupScreen(
-          onRegistered: (state) => manager.addProfile(state),
-          existingServers: manager.sessions.map((s) => s.state.server).toList(),
+          onRegistered: (state) => widget.manager.addProfile(state),
+          existingServers: widget.manager.sessions
+              .map((s) => s.state.server)
+              .toList(),
           isAddingAccount: true,
         ),
       ),
@@ -51,7 +93,8 @@ class AccountShellScreen extends StatelessWidget {
   void _openProfile(BuildContext context, AppSession session) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ProfileScreen(session: session, manager: manager),
+        builder: (_) =>
+            ProfileScreen(session: session, manager: widget.manager),
       ),
     );
   }
@@ -91,10 +134,10 @@ class AccountShellScreen extends StatelessWidget {
       // AccountManager.setActive's refresh -- updates live without
       // needing an account switch to force a rebuild.
       child: ListenableBuilder(
-        listenable: Listenable.merge(manager.sessions),
+        listenable: Listenable.merge(widget.manager.sessions),
         builder: (context, _) {
-          final groups = _groupSessionsByServer(manager.sessions);
-          final allServers = manager.sessions
+          final groups = _groupSessionsByServer(widget.manager.sessions);
+          final allServers = widget.manager.sessions
               .map((s) => s.state.server)
               .toList();
           return ListView(
@@ -152,6 +195,7 @@ class AccountShellScreen extends StatelessWidget {
                 ),
                 for (final session in groups[gi])
                   Padding(
+                    key: _avatarKeyFor(session.state.accountId),
                     // The last avatar in a group that's followed by
                     // another group skips its own trailing gap --
                     // the next divider's margin provides that gap
@@ -160,7 +204,8 @@ class AccountShellScreen extends StatelessWidget {
                         ? const EdgeInsets.only(left: 4)
                         : const EdgeInsets.symmetric(horizontal: 4),
                     child: GestureDetector(
-                      onTap: () => manager.setActive(session.state.accountId),
+                      onTap: () =>
+                          widget.manager.setActive(session.state.accountId),
                       onLongPress: () => _openProfile(context, session),
                       child: CircleAvatar(
                         radius: 24,
@@ -256,18 +301,19 @@ class AccountShellScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: manager,
+      listenable: widget.manager,
       builder: (context, _) {
-        final active = manager.active;
+        final active = widget.manager.active;
         if (active == null) {
           return const Scaffold(
             body: Center(child: Text('No account selected')),
           );
         }
+        _ensureActiveVisible(active);
         return ChatListScreen(
           session: active,
-          settings: settings,
-          manager: manager,
+          settings: widget.settings,
+          manager: widget.manager,
           appBarBottom: PreferredSize(
             preferredSize: const Size.fromHeight(72),
             child: _buildSwitcher(context, active),
