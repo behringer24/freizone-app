@@ -15,6 +15,7 @@ import '../util/avatar_color.dart';
 import '../util/role_icon.dart';
 import '../util/server_label.dart';
 import '../util/unread_dot.dart';
+import '../widgets/peer_avatar.dart';
 import 'chat_list_screen.dart';
 import 'profile_screen.dart';
 import 'setup_screen.dart';
@@ -83,8 +84,8 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_switcherScrollController.hasClients) return;
       final targetContext = _avatarKeys[accountId]?.currentContext;
-      final viewportBox =
-          _switcherViewportKey.currentContext?.findRenderObject();
+      final viewportBox = _switcherViewportKey.currentContext
+          ?.findRenderObject();
       if (targetContext == null || !targetContext.mounted) return;
       if (viewportBox is! RenderBox || !viewportBox.attached) return;
       final targetBox = targetContext.findRenderObject();
@@ -100,8 +101,10 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
       final targetCenter = targetLeft + targetBox.size.width / 2;
       final viewportCenter = viewportBox.size.width / 2;
       final position = _switcherScrollController.position;
-      final target = (position.pixels + targetCenter - viewportCenter)
-          .clamp(position.minScrollExtent, position.maxScrollExtent);
+      final target = (position.pixels + targetCenter - viewportCenter).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
       _switcherScrollController.animateTo(
         target,
         duration: const Duration(milliseconds: 250),
@@ -147,7 +150,9 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
       // would glare at night, so dark mode swaps it for a themed dark
       // grey. The role-badge overlay below keeps its own white circle
       // behind the glyph, so it stays legible against either background.
-      color: isDark ? Theme.of(context).colorScheme.surfaceContainerHigh : Colors.white,
+      color: isDark
+          ? Theme.of(context).colorScheme.surfaceContainerHigh
+          : Colors.white,
       height: 72,
       // Listens to every session directly (not just `manager`) so a
       // badge -- an incoming message, a role change picked up by
@@ -221,7 +226,8 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
                     // another group skips its own trailing gap --
                     // the next divider's margin provides that gap
                     // instead (see above), so it isn't doubled up.
-                    padding: (session == groups[gi].last && gi < groups.length - 1)
+                    padding:
+                        (session == groups[gi].last && gi < groups.length - 1)
                         ? const EdgeInsets.only(left: 4)
                         : const EdgeInsets.symmetric(horizontal: 4),
                     child: GestureDetector(
@@ -237,14 +243,8 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
                           clipBehavior: Clip.none,
                           children: [
                             Center(
-                              child: Text(
-                                session.state.accountId
-                                    .substring(0, 2)
-                                    .toUpperCase(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                              child: PeerAvatarLabel(
+                                accountId: session.state.accountId,
                               ),
                             ),
                             if (session == active)
