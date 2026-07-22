@@ -35,6 +35,45 @@ class ApiException implements Exception {
       'ApiException($statusCode${code != null ? ', $code' : ''}): $message';
 }
 
+/// The host answered, but not in the JSON every Freizone server speaks --
+/// almost always because the address resolved to a domain that isn't
+/// running Freizone at all (a parked page, a plain web server's HTML 404,
+/// a reverse proxy). Kept distinct from [ApiException], which is a genuine
+/// Freizone server refusing a request in its own JSON error format: this
+/// one means "wrong server", so the UI can point the user at the address
+/// instead of dumping a raw HTML page on them.
+class NotFreizoneServerException implements Exception {
+  NotFreizoneServerException(this.statusCode, this.host);
+
+  final int statusCode;
+  final String? host;
+
+  @override
+  String toString() =>
+      'NotFreizoneServerException($statusCode${host != null ? ', $host' : ''})';
+}
+
+/// Decodes [resp]'s body as a JSON object, or throws
+/// [NotFreizoneServerException] when it isn't one. A Freizone server always
+/// answers in JSON, so a body that doesn't decode to a JSON object (HTML, an
+/// empty page, a bare JSON value) is the reliable tell that the far end
+/// isn't a Freizone server -- surfacing that as its own exception keeps raw
+/// HTML and low-level FormatExceptions out of the user-facing error. Shared
+/// by the client's decode paths; top-level so it can be unit-tested without
+/// the FFI core an [ApiClient] instance needs.
+Map<String, dynamic> parseJsonObject(http.Response resp) {
+  final Object? decoded;
+  try {
+    decoded = json.decode(resp.body);
+  } catch (_) {
+    throw NotFreizoneServerException(resp.statusCode, resp.request?.url.host);
+  }
+  if (decoded is! Map<String, dynamic>) {
+    throw NotFreizoneServerException(resp.statusCode, resp.request?.url.host);
+  }
+  return decoded;
+}
+
 class ApiClient {
   ApiClient({
     required this.baseUrl,
@@ -49,25 +88,22 @@ class ApiClient {
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
   Never _throwError(http.Response resp) {
-    try {
-      final body = json.decode(resp.body) as Map<String, dynamic>;
-      final err = body['error'] as Map<String, dynamic>?;
-      throw ApiException(
-        resp.statusCode,
-        err?['code'] as String?,
-        err?['message'] as String? ?? resp.body,
-      );
-    } on ApiException {
-      rethrow;
-    } catch (_) {
-      throw ApiException(resp.statusCode, null, resp.body);
-    }
+    // parseJsonObject throws NotFreizoneServerException for an HTML/non-JSON
+    // body -- i.e. this isn't a Freizone server saying no, it's not a
+    // Freizone server at all.
+    final body = parseJsonObject(resp);
+    final err = body['error'];
+    final code = err is Map<String, dynamic> ? err['code'] as String? : null;
+    final message = err is Map<String, dynamic>
+        ? (err['message'] as String? ?? resp.body)
+        : resp.body;
+    throw ApiException(resp.statusCode, code, message);
   }
 
   Map<String, dynamic> _decodeObject(http.Response resp, Set<int> okStatuses) {
     if (!okStatuses.contains(resp.statusCode)) _throwError(resp);
     if (resp.body.isEmpty) return const {};
-    return json.decode(resp.body) as Map<String, dynamic>;
+    return parseJsonObject(resp);
   }
 
   void _checkStatus(http.Response resp, Set<int> okStatuses) {
