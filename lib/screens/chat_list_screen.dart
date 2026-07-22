@@ -10,11 +10,11 @@ import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
-import '../util/avatar_color.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/invite_uri.dart';
 import '../util/unread_dot.dart';
+import '../widgets/peer_avatar.dart';
 import '../widgets/qr_scan_button.dart';
 import 'admin_screen.dart';
 import 'blocked_contacts_screen.dart';
@@ -116,13 +116,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
       leading: Stack(
         clipBehavior: Clip.none,
         children: [
-          CircleAvatar(
-            backgroundColor: avatarColorFor(convo.peerAccountId),
-            child: Text(
-              _initials(session, convo),
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
+          PeerAvatar(accountId: convo.peerAccountId, radius: 20),
           if (convo.hasUnread)
             const Positioned(top: -2, right: -2, child: UnreadDot()),
         ],
@@ -149,13 +143,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
       ),
       onLongPress: () => _showChatOptions(context, session, convo),
     );
-  }
-
-  String _initials(AppSession session, Conversation c) {
-    final source = c.titleFor(session.state.server);
-    return source.isEmpty
-        ? '?'
-        : source.substring(0, source.length >= 2 ? 2 : 1).toUpperCase();
   }
 
   String _formatTimestamp(DateTime utc) {
@@ -368,9 +355,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         // the preview text (their greeting, if any) is what actually
         // answers "who is this."
         final pending = conversations.where((c) => c.pendingApproval).toList();
-        final regular = conversations
-            .where((c) => !c.pendingApproval)
-            .toList();
+        final regular = conversations.where((c) => !c.pendingApproval).toList();
 
         // A tonal surface a step above the plain background -- Material
         // 3's surfaceContainer* tokens are built exactly for this ("a
@@ -441,7 +426,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
           'Freizone',
           style: TextStyle(
             fontWeight: FontWeight.w800,
-            color: isDark ? Colors.white : Theme.of(context).colorScheme.primary,
+            color: isDark
+                ? Colors.white
+                : Theme.of(context).colorScheme.primary,
           ),
         ),
         // A pure-light background (as used in light mode) would glare at

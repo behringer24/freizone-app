@@ -6,8 +6,8 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_session.dart';
-import '../util/avatar_color.dart';
 import '../util/freizone_address.dart';
+import '../widgets/peer_avatar.dart';
 
 class BlockedContactsScreen extends StatelessWidget {
   const BlockedContactsScreen({super.key, required this.session});
@@ -45,13 +45,9 @@ class BlockedContactsScreen extends StatelessWidget {
                           server: server,
                         );
                     return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: avatarColorFor(peer.peerAccountId),
-                        child: Text(
-                          title.substring(0, title.length >= 2 ? 2 : 1)
-                              .toUpperCase(),
-                          style: const TextStyle(color: Colors.white),
-                        ),
+                      leading: PeerAvatar(
+                        accountId: peer.peerAccountId,
+                        radius: 20,
                       ),
                       title: Text(
                         title,

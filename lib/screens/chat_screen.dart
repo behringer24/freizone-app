@@ -13,6 +13,7 @@ import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../widgets/pattern_background.dart';
+import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
 import 'peer_profile_screen.dart';
 
@@ -52,9 +53,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   GlobalKey _keyFor(String messageId) =>
       _messageKeys.putIfAbsent(messageId, () => GlobalKey());
-
-  Color _avatarColor(String seed) =>
-      Colors.primaries[seed.hashCode.abs() % Colors.primaries.length];
 
   @override
   void initState() {
@@ -128,7 +126,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 isPinned ? Icons.push_pin_outlined : Icons.push_pin,
               ),
               title: Text(isPinned ? 'Unpin' : 'Pin'),
-              onTap: () => Navigator.of(context).pop(isPinned ? 'unpin' : 'pin'),
+              onTap: () =>
+                  Navigator.of(context).pop(isPinned ? 'unpin' : 'pin'),
             ),
             ListTile(
               leading: const Icon(Icons.delete_outline),
@@ -291,14 +290,7 @@ class _ChatScreenState extends State<ChatScreen> {
       onTap: () => _openProfile(context),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: _avatarColor(convo.peerAccountId),
-            child: Text(
-              title.substring(0, title.length >= 2 ? 2 : 1).toUpperCase(),
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-            ),
-          ),
+          PeerAvatar(accountId: convo.peerAccountId, radius: 18),
           const SizedBox(width: 12),
           Expanded(
             child: convo.displayName != null
@@ -306,18 +298,13 @@ class _ChatScreenState extends State<ChatScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        convo.displayName!,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      Text(convo.displayName!, overflow: TextOverflow.ellipsis),
                       // Always shown alongside the alias, smaller and muted,
                       // so which server this peer is actually on is never
                       // hidden behind a name someone else could equally claim.
                       Text(
                         shortAddress,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodySmall?.copyWith(
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
                         overflow: TextOverflow.ellipsis,
@@ -694,10 +681,7 @@ class _MessageBubble extends StatelessWidget {
                 maxWidth: MediaQuery.of(context).size.width * 0.75,
               ),
               margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 8,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                 color: mine
                     ? colorScheme.primary

@@ -10,10 +10,10 @@ import '../net/api_client.dart';
 import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../util/address_format.dart';
-import '../util/avatar_color.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/role_icon.dart';
+import '../widgets/peer_avatar.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
@@ -75,9 +75,9 @@ class ProfileScreen extends StatelessWidget {
         await _offerOrphanedRemoval(context);
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Delete failed: ${describeError(e)}')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Delete failed: ${describeError(e)}')),
+      );
     }
   }
 
@@ -137,18 +137,7 @@ class ProfileScreen extends StatelessWidget {
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    CircleAvatar(
-                      radius: 48,
-                      backgroundColor: avatarColorFor(accountId),
-                      child: Text(
-                        accountId.substring(0, 2).toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
+                    PeerAvatar(accountId: accountId, radius: 48),
                     if (roleBadgeIcon(session.myRole) case final icon?)
                       Positioned(
                         bottom: -4,

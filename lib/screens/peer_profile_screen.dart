@@ -9,9 +9,9 @@ import 'package:flutter/services.dart';
 import '../state/app_session.dart';
 import '../state/conversation.dart';
 import '../util/address_format.dart';
-import '../util/avatar_color.dart';
 import '../util/block_actions.dart';
 import '../util/freizone_address.dart';
+import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
 
 class PeerProfileScreen extends StatelessWidget {
@@ -44,10 +44,7 @@ class PeerProfileScreen extends StatelessWidget {
       builder: (context) => RenameDialog(initialName: convo.displayName ?? ''),
     );
     if (result == null) return; // cancelled
-    await session.setDisplayName(
-      peerAccountId,
-      result.isEmpty ? null : result,
-    );
+    await session.setDisplayName(peerAccountId, result.isEmpty ? null : result);
   }
 
   Future<void> _toggleBlock(BuildContext context, Conversation convo) async {
@@ -75,10 +72,7 @@ class PeerProfileScreen extends StatelessWidget {
           );
         }
 
-        final shortId = convo.peerAccountId.substring(
-          0,
-          accountIdPrefixLength,
-        );
+        final shortId = convo.peerAccountId.substring(0, accountIdPrefixLength);
         final peerServer = convo.peerServer ?? session.state.server;
         final shortAddress = shortFreizoneAddress(
           id: convo.peerAccountId,
@@ -97,20 +91,7 @@ class PeerProfileScreen extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 24),
             children: [
               Center(
-                child: CircleAvatar(
-                  radius: 48,
-                  backgroundColor: avatarColorFor(convo.peerAccountId),
-                  child: Text(
-                    primaryText
-                        .substring(0, primaryText.length >= 2 ? 2 : 1)
-                        .toUpperCase(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
+                child: PeerAvatar(accountId: convo.peerAccountId, radius: 48),
               ),
               if (convo.blocked) ...[
                 const SizedBox(height: 12),
@@ -160,7 +141,8 @@ class PeerProfileScreen extends StatelessWidget {
               ListTile(
                 title: const Text('Peer name'),
                 subtitle: Text(
-                  convo.displayName ?? 'No name set -- shows the address instead',
+                  convo.displayName ??
+                      'No name set -- shows the address instead',
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.edit_outlined),
