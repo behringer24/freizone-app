@@ -12,6 +12,10 @@ import 'package:http/http.dart' as http;
 import '../net/api_client.dart';
 
 String describeError(Object e) {
+  if (e is NotFreizoneServerException) {
+    return "This address doesn't point to a Freizone server. "
+        'Check the server part of the address (after the *).';
+  }
   if (e is ApiException) return e.message;
   if (e is SocketException ||
       e is http.ClientException ||
