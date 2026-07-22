@@ -56,8 +56,10 @@ class IncomingMessageResult {
   final String peerAccountId;
   final bool shouldNotify;
 
-  /// The timestamp a genuinely new, stored (not blocked, not a receipt)
-  /// message was recorded at -- null for a receipt, a dropped/blocked
+  /// The receipt anchor of a genuinely new, stored (not blocked, not a
+  /// receipt) message -- the sender's own send-time stamp when the
+  /// message carried one, local arrival time otherwise (see
+  /// StoredMessage.receiptAnchor); null for a receipt, a dropped/blocked
   /// message, or anything else that isn't itself a delivered chat message.
   /// Lets a caller that CAN send (AppSession, which has sending
   /// capability; a bare background sync currently doesn't -- see
@@ -193,6 +195,7 @@ Future<IncomingMessageResult?> processIncomingMessage(
         text: content.text,
         mine: false,
         timestamp: now,
+        senderSentAt: content.sentAt,
         replyToId: content.replyToId,
         replyPreviewText: content.replyPreview?.text,
         replyPreviewMine: content.replyPreview?.mine,
@@ -214,18 +217,36 @@ Future<IncomingMessageResult?> processIncomingMessage(
   return IncomingMessageResult(
     peerAccountId: msg.senderAccountId,
     shouldNotify: shouldNotify,
-    deliveredUpTo: convo.blocked ? null : now,
+    // The sender's own send-time stamp when it carried one (see
+    // StoredMessage.receiptAnchor for why receipts must be in the
+    // sender's clock domain), local arrival time only as the legacy
+    // fallback.
+    deliveredUpTo: convo.blocked ? null : (content.sentAt ?? now),
   );
 }
 
-/// Tops up [state]'s one-time-prekey pool if the server reports it's
-/// running low -- called from [AppSession.init], on every SSE reconnect,
+/// Re-asserts [state]'s DH identity + signed-prekey certificates (using
+/// its already-held key material, unchanged -- never rotates anything)
+/// and tops up the one-time-prekey pool if the server reports it's
+/// running low. Called from [AppSession.init], on every SSE reconnect,
 /// and from a background push-wake sync (push_manager.dart, no live
 /// AppSession there), so it must not assume anything beyond [state]/
-/// [core]/[api]. A cheap no-op most of the time: one GET, no upload,
-/// since the pool usually isn't low. No-ops before the very first prekey
-/// upload too (AppSession.init handles that separately, unconditionally,
-/// the one time it's actually needed).
+/// [core]/[api]. No-ops before the very first prekey upload (AppSession
+/// .init handles that separately, unconditionally, the one time it's
+/// actually needed).
+///
+/// Re-sending the DH identity cert on every call, not just once at
+/// registration, is deliberately defensive, not redundant: found in
+/// production (see the qsvfg*chatcentral.de investigation) that a
+/// device's server-stored DH identity signature can drift from what the
+/// device actually holds -- likely stale data from an account/device
+/// reset -- silently blocking every new contact's first session with it,
+/// with no error ever surfaced to the device itself (a peer whose
+/// session-start fails gets nothing back to report -- there is no
+/// feedback channel for "your identity cert doesn't verify"). Re-signing
+/// and re-uploading the SAME key material on every reconnect is cheap
+/// (one GET plus one small POST) and self-heals that class of drift the
+/// moment it happens, rather than needing a live incident to notice it.
 Future<void> topUpOneTimePrekeysIfNeeded(
   AppState state,
   FreizoneCore core,
@@ -233,38 +254,50 @@ Future<void> topUpOneTimePrekeysIfNeeded(
 ) async {
   if (state.signedPrekeyPub == null) return;
 
-  final remaining = await api.getPrekeyStatus(state.credentials);
-  if (remaining >= _oneTimePrekeyLowWaterMark) return;
-
+  final now = DateTime.now().toUtc();
+  final dhCert = core.signDHIdentityCertificate(
+    accountId: state.accountId,
+    deviceId: state.deviceId,
+    dhPub: state.dhIdentityPub!,
+    issuedAt: now,
+    devicePriv: state.devicePriv,
+  );
   // The upload endpoint always requires signed_prekey (it replaces
-  // whatever's currently on file) even when only topping up
-  // one_time_prekeys -- re-sign the SAME existing key material rather
-  // than generating a new one, so this stays purely a top-up, not a
-  // rotation.
+  // whatever's currently on file) -- re-sign the SAME existing key
+  // material rather than generating a new one, so this stays purely a
+  // re-assertion, not a rotation.
   final spkCert = core.signSignedPrekeyCertificate(
     accountId: state.accountId,
     deviceId: state.deviceId,
     keyId: state.signedPrekeyId,
     dhIdentityPub: state.dhIdentityPub!,
     prekeyPub: state.signedPrekeyPub!,
-    issuedAt: DateTime.now().toUtc(),
+    issuedAt: now,
     devicePriv: state.devicePriv,
   );
 
+  final remaining = await api.getPrekeyStatus(state.credentials);
   final otpkDtos = <OneTimePrekeyDTO>[];
-  for (var i = remaining; i < _oneTimePrekeyBatch; i++) {
-    final kp = core.generateX25519KeyPair();
-    final keyId = state.nextOtpkKeyId;
-    state.nextOtpkKeyId++;
-    state.oneTimePrekeys[keyId] = OneTimePrekeyState(
-      pub: kp.pub,
-      priv: kp.priv,
-    );
-    otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
+  if (remaining < _oneTimePrekeyLowWaterMark) {
+    for (var i = remaining; i < _oneTimePrekeyBatch; i++) {
+      final kp = core.generateX25519KeyPair();
+      final keyId = state.nextOtpkKeyId;
+      state.nextOtpkKeyId++;
+      state.oneTimePrekeys[keyId] = OneTimePrekeyState(
+        pub: kp.pub,
+        priv: kp.priv,
+      );
+      otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
+    }
   }
 
   await api.uploadPrekeys(
     creds: state.credentials,
+    dhIdentityCert: DHIdentityCertDTO(
+      dhPubKey: dhCert.dhPubKey,
+      issuedAt: dhCert.issuedAt,
+      signature: dhCert.signature,
+    ),
     signedPrekey: SignedPrekeyDTO(
       keyId: spkCert.keyId,
       dhIdentityPubKey: spkCert.dhIdentityPubKey,
@@ -472,6 +505,75 @@ class AppSession extends ChangeNotifier {
   /// is already looking at it (see _handleIncoming).
   String? _openConversationPeerId;
 
+  /// Whether the app is actually in the foreground. Pressing Home does
+  /// NOT dispose a ChatScreen (it stays on the navigation stack), so
+  /// _openConversationPeerId alone can't tell "user is looking at this
+  /// chat" apart from "chat is technically still open but the app is
+  /// backgrounded." Set via [setForeground] from the app-lifecycle
+  /// observer (see main.dart).
+  bool _appInForeground = true;
+
+  /// The conversation the user is actually reading right now: the open
+  /// one, but only while the app is in the foreground. Backgrounded, no
+  /// chat counts as being read -- so an incoming message still notifies
+  /// and still marks unread, and no read receipt is sent for a chat the
+  /// user isn't actually looking at.
+  String? get _readableConversation =>
+      _appInForeground ? _openConversationPeerId : null;
+
+  /// Called by the app-lifecycle observer (main.dart) when the app moves
+  /// between foreground and background. On returning to the foreground it
+  /// first adopts whatever the background push isolate wrote while the app
+  /// was frozen (see _reloadVolatileStateFromDisk) -- otherwise this
+  /// isolate's stale in-memory state would clobber the push isolate's
+  /// ratchet advancement on the next save, desyncing the Double Ratchet
+  /// and silently dropping every subsequent message. Only then, with a
+  /// chat still open, re-runs the read logic so anything that arrived
+  /// while backgrounded (left unread + notified) is now marked read --
+  /// the user is looking at it again.
+  Future<void> setForeground(bool value) async {
+    if (_appInForeground == value) return;
+    _appInForeground = value;
+    if (!value) return;
+    await _reloadVolatileStateFromDisk();
+    if (_openConversationPeerId != null) {
+      unawaited(enterConversation(_openConversationPeerId!));
+    }
+  }
+
+  /// Re-reads this account's profile from disk and adopts the fields the
+  /// background push isolate (push_manager.dart's _syncProfile) can have
+  /// advanced while this isolate was frozen -- the Double Ratchet
+  /// sessions above all, plus the conversation history it stored and the
+  /// prekey material it may have topped up. The two isolates share state
+  /// only through the profile file with last-writer-wins (see
+  /// LocalStateStore.saveProfile); without adopting the disk copy on
+  /// resume, this isolate keeps a stale ratchet in memory and overwrites
+  /// the push isolate's progress on its next save. Identity fields
+  /// (server/accountId/root*/device*) are never touched by the push
+  /// isolate, so they're deliberately left as-is. The field swaps run
+  /// synchronously after the single await, so no _handleIncoming can
+  /// interleave mid-swap within this single-threaded isolate. Correct as
+  /// a plain "disk wins": a frozen isolate produces no in-memory changes,
+  /// so its memory can never be newer than disk.
+  Future<void> _reloadVolatileStateFromDisk() async {
+    final fresh = await LocalStateStore.loadProfile(state.accountId);
+    if (fresh == null) return;
+    state.sessions = fresh.sessions;
+    state.conversations = fresh.conversations;
+    state.oneTimePrekeys = fresh.oneTimePrekeys;
+    state.nextOtpkKeyId = fresh.nextOtpkKeyId;
+    state.signedPrekeyId = fresh.signedPrekeyId;
+    state.signedPrekeyPub = fresh.signedPrekeyPub;
+    state.signedPrekeyPriv = fresh.signedPrekeyPriv;
+    state.nextSignedPrekeyId = fresh.nextSignedPrekeyId;
+    state.dhIdentityPub = fresh.dhIdentityPub;
+    state.dhIdentityPriv = fresh.dhIdentityPriv;
+    state.knownPeerIds = fresh.knownPeerIds;
+    state.blockedPeers = fresh.blockedPeers;
+    notifyListeners();
+  }
+
   /// Call when a ChatScreen for peerAccountId opens: clears its unread
   /// flag and remembers it as "currently open" for _handleIncoming.
   Future<void> enterConversation(String peerAccountId) async {
@@ -486,14 +588,13 @@ class AppSession extends ChangeNotifier {
     DateTime? theirLastTimestamp;
     for (final m in convo.messages.reversed) {
       if (!m.mine) {
-        theirLastTimestamp = m.timestamp;
+        theirLastTimestamp = m.receiptAnchor;
         break;
       }
     }
     if (theirLastTimestamp != null &&
         (convo.sentReadReceiptUpTo == null ||
             theirLastTimestamp.isAfter(convo.sentReadReceiptUpTo!))) {
-      convo.sentReadReceiptUpTo = theirLastTimestamp;
       unawaited(_sendReceipt(convo, ReceiptStatus.read, theirLastTimestamp));
     }
 
@@ -630,6 +731,7 @@ class AppSession extends ChangeNotifier {
         },
         onConnected: () {
           unawaited(topUpOneTimePrekeysIfNeeded(state, core, api));
+          _retryPendingReceipts();
         },
       ),
     );
@@ -647,7 +749,7 @@ class AppSession extends ChangeNotifier {
           state,
           msg,
           core,
-          openConversationPeerId: _openConversationPeerId,
+          openConversationPeerId: _readableConversation,
         ),
       );
       if (result == null) return;
@@ -681,8 +783,25 @@ class AppSession extends ChangeNotifier {
         if (convo != null &&
             (convo.sentDeliveredReceiptUpTo == null ||
                 upTo.isAfter(convo.sentDeliveredReceiptUpTo!))) {
-          convo.sentDeliveredReceiptUpTo = upTo;
           unawaited(_sendReceipt(convo, ReceiptStatus.delivered, upTo));
+        }
+        // A message that lands in the conversation the user is actually
+        // reading right now (chat open AND app in the foreground, see
+        // _readableConversation) is read the moment it arrives. Without
+        // this, no read receipt would ever fire for it: enterConversation
+        // only sends one when it finds the conversation unread on open,
+        // and a message arriving into the open chat never marks it unread
+        // (same behavior as WhatsApp/Signal: blue ticks appear immediately
+        // while the chat is open). Gated on _readableConversation, not the
+        // raw open-chat id, so a chat left open but sent to the background
+        // (Home button doesn't dispose the ChatScreen) does NOT falsely
+        // confirm "read" -- that message stays unread + notified until the
+        // user actually returns (setForeground re-runs the read logic then).
+        if (convo != null &&
+            result.peerAccountId == _readableConversation &&
+            (convo.sentReadReceiptUpTo == null ||
+                upTo.isAfter(convo.sentReadReceiptUpTo!))) {
+          unawaited(_sendReceipt(convo, ReceiptStatus.read, upTo));
         }
       }
 
@@ -1027,6 +1146,14 @@ class AppSession extends ChangeNotifier {
         ? null
         : ReplyPreview(text: quoted.text, mine: !quoted.mine);
 
+    // Stamped ONCE, before the send: this exact instant goes out inside
+    // the encrypted content (sentAt) AND becomes the local StoredMessage
+    // .timestamp below -- receipts echo it back verbatim, and the
+    // checkmark comparison (chat_screen.dart) is then an equality within
+    // this one clock reading. Stamping after the await (as this used to)
+    // loses that race locally: the receiver can decrypt and stamp its
+    // receipt before the sender's own post-send stamp is even taken.
+    final now = DateTime.now().toUtc();
     final content = MessageContent(
       id: generateMessageId(),
       text: text,
@@ -1037,11 +1164,11 @@ class AppSession extends ChangeNotifier {
       // self-heals even if their local state is ever lost -- see
       // message_content.dart.
       senderServer: convo.peerServer != null ? state.server : null,
+      sentAt: now,
     );
 
     await _encryptAndSend(convo, content.encode());
 
-    final now = DateTime.now().toUtc();
     convo.messages.add(
       StoredMessage(
         id: content.id,
@@ -1136,7 +1263,11 @@ class AppSession extends ChangeNotifier {
   /// AppSettings.readReceiptsEnabled -- best-effort: failures are logged,
   /// not surfaced, since a missed receipt just leaves the peer's
   /// checkmark one step behind until the next one goes out, not a lost
-  /// message.
+  /// message. The "sent up to" marker (Conversation.sentDeliveredReceiptUpTo
+  /// / sentReadReceiptUpTo) is only advanced once the send actually
+  /// succeeds -- callers must NOT set it themselves beforehand, or a
+  /// failed send would be marked done anyway and never get retried. See
+  /// _retryPendingReceipts for how a failed send gets a second chance.
   Future<void> _sendReceipt(
     Conversation convo,
     ReceiptStatus status,
@@ -1149,8 +1280,49 @@ class AppSession extends ChangeNotifier {
         convo,
         ReceiptSignal(status: status, upToSentAt: upToSentAt).encode(),
       );
+      if (status == ReceiptStatus.read) {
+        convo.sentReadReceiptUpTo = upToSentAt;
+      } else {
+        convo.sentDeliveredReceiptUpTo = upToSentAt;
+      }
+      await LocalStateStore.saveProfile(state);
     } catch (e) {
       developer.log('sending $status receipt failed: $e', name: 'receipts');
+    }
+  }
+
+  /// Re-checks every conversation's delivered/read markers against its
+  /// locally known message history and re-fires any receipt that never
+  /// got through -- the self-heal for _sendReceipt's silent failures.
+  /// Called on every SSE (re)connect (see _startStream), mirroring
+  /// topUpOneTimePrekeysIfNeeded's own "init + reconnect" trigger. A read
+  /// receipt is only retried once the conversation is confirmed actually
+  /// read locally (!convo.hasUnread, set unconditionally by
+  /// enterConversation regardless of whether its own send succeeded) --
+  /// otherwise this could wrongly tell a peer their message was read when
+  /// the user never actually opened that conversation.
+  void _retryPendingReceipts() {
+    for (final convo in state.conversations.values) {
+      DateTime? theirLastTimestamp;
+      for (final m in convo.messages.reversed) {
+        if (!m.mine) {
+          theirLastTimestamp = m.receiptAnchor;
+          break;
+        }
+      }
+      if (theirLastTimestamp == null) continue;
+
+      if (convo.sentDeliveredReceiptUpTo == null ||
+          theirLastTimestamp.isAfter(convo.sentDeliveredReceiptUpTo!)) {
+        unawaited(
+          _sendReceipt(convo, ReceiptStatus.delivered, theirLastTimestamp),
+        );
+      }
+      if (!convo.hasUnread &&
+          (convo.sentReadReceiptUpTo == null ||
+              theirLastTimestamp.isAfter(convo.sentReadReceiptUpTo!))) {
+        unawaited(_sendReceipt(convo, ReceiptStatus.read, theirLastTimestamp));
+      }
     }
   }
 

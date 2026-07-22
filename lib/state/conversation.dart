@@ -21,6 +21,7 @@ class StoredMessage {
     required this.text,
     required this.mine,
     required this.timestamp,
+    this.senderSentAt,
     this.replyToId,
     this.replyPreviewText,
     this.replyPreviewMine,
@@ -31,6 +32,9 @@ class StoredMessage {
     text: j['text'] as String,
     mine: j['mine'] as bool,
     timestamp: decodeTime(j['timestamp'] as String),
+    senderSentAt: j['sender_sent_at'] == null
+        ? null
+        : decodeTime(j['sender_sent_at'] as String),
     replyToId: j['reply_to_id'] as String?,
     replyPreviewText: j['reply_preview_text'] as String?,
     replyPreviewMine: j['reply_preview_mine'] as bool?,
@@ -41,6 +45,7 @@ class StoredMessage {
     'text': text,
     'mine': mine,
     'timestamp': encodeTime(timestamp),
+    if (senderSentAt != null) 'sender_sent_at': encodeTime(senderSentAt!),
     if (replyToId != null) 'reply_to_id': replyToId,
     if (replyPreviewText != null) 'reply_preview_text': replyPreviewText,
     if (replyPreviewMine != null) 'reply_preview_mine': replyPreviewMine,
@@ -50,6 +55,21 @@ class StoredMessage {
   final String text;
   final bool mine;
   final DateTime timestamp;
+
+  /// For a RECEIVED message: the sender's own clock reading at send time,
+  /// carried inside the encrypted content (message_content.dart's sentAt)
+  /// -- null for own messages and for messages from senders predating the
+  /// field. Display and ordering keep using [timestamp] (local arrival
+  /// time); this exists solely as the value receipts must echo back, see
+  /// [receiptAnchor].
+  final DateTime? senderSentAt;
+
+  /// The timestamp a delivery/read receipt for this message must carry:
+  /// the sender's own send-time stamp when known, so the sender's
+  /// checkmark comparison (chat_screen.dart's _deliveryStatusFor, its own
+  /// StoredMessage.timestamp vs. the receipt) happens within one clock --
+  /// falling back to local arrival time for legacy senders.
+  DateTime get receiptAnchor => senderSentAt ?? timestamp;
 
   /// The id of the message this one replies to, if any -- may point at a
   /// message no longer in local history (deleted, or never received);

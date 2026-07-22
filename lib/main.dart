@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'push/notification_navigation.dart';
@@ -69,14 +71,37 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class _AppRootState extends State<AppRoot> {
+class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   AccountManager? _manager;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Propagates foreground/background to every live session so read
+  /// receipts only fire while the app is actually on screen -- pressing
+  /// Home leaves a ChatScreen mounted, so the session's own
+  /// "chat is open" flag can't tell "reading" from "backgrounded" on its
+  /// own (see AppSession.setForeground). Only `resumed` counts as
+  /// foreground; every other state is treated as background.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final manager = _manager;
+    if (manager == null) return;
+    final foreground = state == AppLifecycleState.resumed;
+    for (final session in manager.sessions) {
+      unawaited(session.setForeground(foreground));
+    }
   }
 
   Future<void> _load() async {
