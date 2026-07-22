@@ -53,6 +53,42 @@ void main() {
       expect(raw.containsKey('sender_server'), isFalse);
     });
 
+    test('round-trips sent_at as UTC', () {
+      final sentAt = DateTime.utc(2026, 7, 22, 9, 30, 15, 123);
+      final content = MessageContent(id: 'ts-id', text: 'hi', sentAt: sentAt);
+      final decoded = MessageContent.decode(
+        content.encode(),
+        fallbackId: 'unused',
+      );
+      expect(decoded.sentAt, sentAt);
+      expect(decoded.sentAt!.isUtc, isTrue);
+    });
+
+    test('sent_at is null for a legacy sender that never included it', () {
+      final bytes = Uint8List.fromList(
+        utf8.encode(jsonEncode({'v': 1, 'id': 'old-id', 'text': 'hi'})),
+      );
+      final decoded = MessageContent.decode(bytes, fallbackId: 'unused');
+      expect(decoded.sentAt, isNull);
+    });
+
+    test('omits sent_at entirely when not set', () {
+      final content = MessageContent(id: 'no-ts', text: 'hi');
+      final raw = jsonDecode(utf8.decode(content.encode())) as Map;
+      expect(raw.containsKey('sent_at'), isFalse);
+    });
+
+    test('an unparsable sent_at decodes as null, not an error', () {
+      final bytes = Uint8List.fromList(
+        utf8.encode(
+          jsonEncode({'v': 1, 'id': 'bad-ts', 'text': 'hi', 'sent_at': 'nope'}),
+        ),
+      );
+      final decoded = MessageContent.decode(bytes, fallbackId: 'unused');
+      expect(decoded.sentAt, isNull);
+      expect(decoded.text, 'hi');
+    });
+
     test('legacy (pre-envelope) bare-text plaintext falls back cleanly', () {
       final bytes = Uint8List.fromList(utf8.encode('just plain old text'));
       final decoded = MessageContent.decode(bytes, fallbackId: 'fallback-1');

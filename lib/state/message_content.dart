@@ -58,12 +58,27 @@ class MessageContent {
     this.replyToId,
     this.replyPreview,
     this.senderServer,
+    this.sentAt,
   });
 
   final String id;
   final String text;
   final String? replyToId;
   final ReplyPreview? replyPreview;
+
+  /// The sender's OWN clock reading at send time, taken before the
+  /// message left the device. Receipts echo this exact value back (see
+  /// receipt_signal.dart / AppSession._sendReceipt), so the sender's
+  /// checkmark comparison happens entirely within its own clock -- the
+  /// receiver's arrival timestamp is useless for that: on a fast local
+  /// network the receiver can decrypt before the sender's post-send code
+  /// even stamps its local copy, and across two real devices the clocks
+  /// can disagree outright; either way a receipt built from the
+  /// receiver's clock can land "before" the message it confirms and be
+  /// discarded by the monotonic guards forever. Null from senders
+  /// predating this field -- receivers then fall back to their arrival
+  /// stamp (the old, racy-but-usually-fine behavior).
+  final DateTime? sentAt;
 
   /// The sender's own home server, if they're sending cross-server --
   /// null for an ordinary same-server message. This is how a recipient
@@ -86,6 +101,7 @@ class MessageContent {
       if (replyToId != null) 'reply_to': replyToId,
       if (replyPreview != null) 'reply_preview': replyPreview!.toJson(),
       if (senderServer != null) 'sender_server': senderServer,
+      if (sentAt != null) 'sent_at': sentAt!.toUtc().toIso8601String(),
     };
     return Uint8List.fromList(utf8.encode(jsonEncode(json)));
   }
@@ -114,6 +130,9 @@ class MessageContent {
                 ? null
                 : ReplyPreview.fromJson(replyPreviewJson as Map<String, dynamic>),
             senderServer: decoded['sender_server'] as String?,
+            sentAt: DateTime.tryParse(
+              decoded['sent_at'] as String? ?? '',
+            )?.toUtc(),
           );
         }
         if (v is int && v > currentVersion) {
