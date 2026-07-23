@@ -75,6 +75,41 @@ Two independent, non-interfering delivery mechanisms exist; a device uses exactl
 
 Because FCM issues one token per app install rather than one per account (unlike UnifiedPush's per-account distributor registration), an FCM wake can't say which account it's for — it shows a generic "New message(s)" notification rather than naming a specific account, and tapping it opens the app, which resyncs every connected account normally.
 
+## Release builds
+
+`flutter build apk --debug`/`--release` and `flutter run` always work with no
+setup — a debug build is signed with a generic, shared debug key (fine for
+sideloading and testing, never accepted by Google Play), and a `--release`
+build falls back to the *same* debug key until a release keystore is set up
+below, so it stays usable for local testing in the meantime.
+
+A **Play Store upload requires its own release keystore** — Google doesn't
+provide one; you generate it yourself, once, and keep it forever (losing it
+means you can never update the app under the same listing again):
+
+```sh
+keytool -genkeypair -v -keystore /path/outside/this/repo/freizone-release.jks \
+  -alias freizone -keyalg RSA -keysize 2048 -validity 10000
+```
+
+(`keytool` ships with any JDK; Android Studio bundles one too, e.g. under its
+`jbr/bin/` folder.) Then create `android/key.properties` (gitignored, like
+`google-services.json` above — never commit it):
+
+```properties
+storePassword=<your keystore password>
+keyPassword=<your key password>
+keyAlias=freizone
+storeFile=/path/outside/this/repo/freizone-release.jks
+```
+
+`android/app/build.gradle.kts` picks this up automatically when present and
+signs the `release` build type with it; `flutter build appbundle --release`
+then produces a Play-uploadable `.aab`. Store both the keystore file and its
+passwords somewhere durable and backed up outside this repo (a password
+manager, not `key.properties` itself) -- they're the actual secret, not
+anything Play Console hands you.
+
 ## Development
 
 ```sh
