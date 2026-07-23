@@ -121,10 +121,25 @@ class _ChatListScreenState extends State<ChatListScreen> {
             const Positioned(top: -2, right: -2, child: UnreadDot()),
         ],
       ),
-      title: Text(
-        convo.titleFor(session.state.server),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
+      title: Row(
+        children: [
+          if (session.federationLocked(convo))
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Icon(
+                Icons.lock,
+                size: 16,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          Expanded(
+            child: Text(
+              convo.titleFor(session.state.server),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
       subtitle: Text(
         convo.lastMessagePreview,

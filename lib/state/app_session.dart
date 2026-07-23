@@ -399,18 +399,38 @@ class AppSession extends ChangeNotifier {
   /// plain "user" account still see the Invite action on an open server.
   String? registrationPolicy;
 
-  /// Refreshes [registrationPolicy] from the server. Call once after
-  /// [init] and again whenever the chat list is shown, so a policy
-  /// change made elsewhere is picked up.
+  /// Whether this account's own home server currently accepts federation,
+  /// from the public GET /v1/server-status. Defaults to true until first
+  /// fetched. Because outbound federated messages go client-direct (never
+  /// through this server), there is no send-time server signal for "my
+  /// server turned federation off" -- this polled flag is the only source,
+  /// so it drives both the outbound guard and the lock UI. See
+  /// [federationLocked].
+  bool federationEnabled = true;
+
+  /// Refreshes [registrationPolicy] and [federationEnabled] from the public
+  /// server-status endpoint (one call covers both). Call once after [init]
+  /// and again whenever the app returns to the foreground, the SSE stream
+  /// (re)connects, or the chat list / admin area is shown, so a change made
+  /// elsewhere is picked up in time.
   Future<void> refreshRegistrationPolicy() async {
     try {
       final status = await api.getServerStatus();
       registrationPolicy = status.registrationPolicy;
+      federationEnabled = status.federationEnabled;
     } catch (e) {
       lastError = 'checking registration policy failed: $e';
     }
     notifyListeners();
   }
+
+  /// A conversation is federation-locked when it lives on another server
+  /// and this account's home server currently has federation disabled: the
+  /// peer's replies would be blocked inbound, so we must not let the user
+  /// keep sending into a dead end. Only sending is affected -- already
+  /// received messages stay readable.
+  bool federationLocked(Conversation convo) =>
+      convo.peerServer != null && !federationEnabled;
 
   /// Refreshes [myRole] and [adminAccounts] from the server. A 403 means
   /// this device is neither admin nor moderator -- not an error, just
@@ -482,6 +502,20 @@ class AppSession extends ChangeNotifier {
   Future<void> setRegistrationPolicy(String policy) =>
       api.setRegistrationPolicy(state.credentials, policy);
 
+  /// Returns whether inbound federation is currently enabled. Admin or
+  /// moderator only (read).
+  Future<bool> getFederationEnabled() =>
+      api.getFederationEnabled(state.credentials);
+
+  /// Turns inbound federation on/off (persisted server-side). Admin only.
+  /// Also updates the locally cached [federationEnabled] so the lock UI
+  /// reflects it immediately without waiting for the next status refresh.
+  Future<void> setFederationEnabled(bool enabled) async {
+    await api.setFederationEnabled(state.credentials, enabled);
+    federationEnabled = enabled;
+    notifyListeners();
+  }
+
   /// Mints a single-use invite code. Admin or moderator only.
   Future<CreateInviteResponse> createInvite() =>
       api.createInvite(state.credentials);
@@ -536,6 +570,11 @@ class AppSession extends ChangeNotifier {
     _appInForeground = value;
     if (!value) return;
     await _reloadVolatileStateFromDisk();
+    // Re-check server-status on resume so an admin's federation (or
+    // registration-policy) change made while the app was backgrounded shows
+    // up promptly -- the lock UI and outbound guard depend on this flag, and
+    // there is no push for a settings change.
+    unawaited(refreshRegistrationPolicy());
     if (_openConversationPeerId != null) {
       unawaited(enterConversation(_openConversationPeerId!));
     }
@@ -731,6 +770,9 @@ class AppSession extends ChangeNotifier {
         },
         onConnected: () {
           unawaited(topUpOneTimePrekeysIfNeeded(state, core, api));
+          // Pick up a server-status change (e.g. federation toggled) on every
+          // (re)connect -- covers long-lived sessions and network changes.
+          unawaited(refreshRegistrationPolicy());
           _retryPendingReceipts();
         },
       ),
@@ -881,6 +923,19 @@ class AppSession extends ChangeNotifier {
   }) async {
     final parsed = parseFreizoneAddress(peerAddress);
     if (parsed == null) throw StateError('Not a valid Freizone address');
+
+    // Outbound federation guard: if the address is on another server but this
+    // account's home server has federation disabled, the peer could never
+    // reply (its messages would be blocked inbound), so refuse to start the
+    // conversation rather than let the user run into a silent dead end.
+    if (parsed.server != null &&
+        !sameServer(parsed.server!, state.server) &&
+        !federationEnabled) {
+      throw StateError(
+        'Federation is turned off on your server, so you can\'t message '
+        'contacts on other servers.',
+      );
+    }
     final normalized = parsed.idOrPrefix;
 
     final existing = state.conversations[normalized];
@@ -1213,6 +1268,16 @@ class AppSession extends ChangeNotifier {
   /// stay invisible and shouldn't bump the conversation to the top of the
   /// chat list, unlike a real sent message.
   Future<void> _encryptAndSend(Conversation convo, Uint8List plaintext) {
+    // Outbound federation guard: a federated conversation whose home server
+    // now has federation disabled is a dead end (replies blocked inbound), so
+    // stop sending -- covers both real messages and receipts. Already received
+    // messages remain readable; only sending is blocked.
+    if (federationLocked(convo)) {
+      throw StateError(
+        'Federation is turned off on your server, so you can\'t message '
+        'contacts on other servers.',
+      );
+    }
     // Serialized per peer (see _withPeerSessionLock) -- two sends to the
     // same peer close together (e.g. a "delivered" receipt immediately
     // followed by a "read" one) must never both read the ratchet session

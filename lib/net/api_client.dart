@@ -500,6 +500,25 @@ class ApiClient {
     _checkStatus(resp, {200});
   }
 
+  /// Returns whether inbound federation is currently enabled. Admin or
+  /// moderator.
+  Future<bool> getFederationEnabled(DeviceCredentials creds) async {
+    final resp = await _signedRequest('GET', '/v1/admin/federation', null, creds);
+    return _decodeObject(resp, {200})['enabled'] as bool;
+  }
+
+  /// Turns inbound federation on/off (persisted -- survives a restart).
+  /// Admin only.
+  Future<void> setFederationEnabled(
+    DeviceCredentials creds,
+    bool enabled,
+  ) async {
+    final resp = await _signedRequest('PUT', '/v1/admin/federation', {
+      'enabled': enabled,
+    }, creds);
+    _checkStatus(resp, {200});
+  }
+
   /// Mints a single-use invite code. Admin or moderator only -- matches
   /// the server-side gate in handleCreateInvite.
   Future<CreateInviteResponse> createInvite(DeviceCredentials creds) async {
