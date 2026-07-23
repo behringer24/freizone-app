@@ -87,3 +87,22 @@ Both should be clean before committing. There's no CI configured yet — these a
 ## A note on trust
 
 This client independently verifies the full self-certifying chain for every peer it talks to (`hash(root_pubkey) == account_id`, then verifies each device certificate's signature) rather than trusting the server's word for who owns which key or device. The server can misbehave (drop messages, go offline, get compromised) without being able to silently impersonate anyone or read your messages.
+
+## License
+
+Copyright (C) 2026 Andreas Behringer
+
+The Freizone app is free software: you can redistribute it and/or modify it
+under the terms of the **GNU General Public License** as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See the [`LICENSE`](LICENSE) file for the full text.
+
+`SPDX-License-Identifier: GPL-3.0-or-later`
+
+The server and gateway components are licensed separately under the AGPL-3.0
+(see their repositories). Note: GPL terms are incompatible with the Apple App
+Store's distribution conditions, so an iOS build would require relicensing the
+app (e.g. permissive or a GPL App Store exception); this affects only the app,
+not the AGPL server/gateway. The optional Firebase Cloud Messaging integration
+relies on proprietary Google Play services; the UnifiedPush build path avoids
+it (relevant for F-Droid-style fully-free distribution).
