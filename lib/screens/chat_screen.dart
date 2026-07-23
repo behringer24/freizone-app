@@ -313,6 +313,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   )
                 : Text(title, overflow: TextOverflow.ellipsis),
           ),
+          if (widget.session.federationLocked(convo))
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Icon(Icons.lock, size: 18, color: colorScheme.onSurfaceVariant),
+            ),
         ],
       ),
     );
@@ -367,6 +372,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 _buildBlockedBar(context, convo)
               else if (convo.pendingApproval)
                 _buildPendingRequestBar(context, convo)
+              else if (widget.session.federationLocked(convo))
+                _buildFederationLockedBar(context)
               else
                 SafeArea(
                   top: false,
@@ -454,6 +461,36 @@ class _ChatScreenState extends State<ChatScreen> {
               onPressed: () =>
                   widget.session.setBlocked(widget.peerAccountId, false),
               child: const Text('Unblock'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Replaces the message composer when this is a cross-server conversation
+  /// and the user's own home server currently has federation disabled: the
+  /// peer could not receive anything sent now, so sending is locked (like the
+  /// blocked bar, but the user can't lift it -- only a server admin can, via
+  /// the admin screen). Already-received messages above stay readable.
+  Widget _buildFederationLockedBar(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        color: colorScheme.surfaceContainerHighest,
+        child: Row(
+          children: [
+            Icon(Icons.lock, size: 18, color: colorScheme.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Federation is turned off on your server, so you can\'t message '
+                'contacts on other servers.',
+                style: TextStyle(color: colorScheme.onSurfaceVariant),
+              ),
             ),
           ],
         ),
