@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 
 import '../state/account_manager.dart';
+import '../push/push_manager.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
@@ -309,20 +310,35 @@ class _ChatListScreenState extends State<ChatListScreen> {
     return ListenableBuilder(
       listenable: session,
       builder: (context, _) {
-        if (session.pushUnavailable) {
-          session.pushUnavailable = false; // one-time hint, consume it
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'No push notifications available on this device -- install a UnifiedPush app (e.g. ntfy) or check '
-                  'the push delivery setting. Chat still works while Freizone is open.',
+        // One-time push hint -- but never while this account's server is
+        // unreachable: that state is already shown by the offline marking,
+        // and the registration "failure" is just the dead server, not a push
+        // setup problem. Left pending (not consumed) until reachable, so the
+        // reconnect's re-registration can settle the real status first.
+        if (session.pushHintPending &&
+            session.reachability != ServerReachability.unreachable) {
+          session.pushHintPending = false; // consume it
+          final message = switch (session.pushRegistration) {
+            PushRegistration.needsDistributorChoice =>
+              'Choose a push target in Settings > Push delivery. '
+                  'Chat still works while Freizone is open.',
+            PushRegistration.unavailable =>
+              'No push notifications available -- install a UnifiedPush app '
+                  '(e.g. ntfy) or switch to Firebase (FCM) in Settings > Push '
+                  'delivery. Chat still works while Freizone is open.',
+            PushRegistration.registered => null,
+          };
+          if (message != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(message),
+                  duration: const Duration(seconds: 6),
                 ),
-                duration: Duration(seconds: 6),
-              ),
-            );
-          });
+              );
+            });
+          }
         }
 
         final conversations = session.conversations;

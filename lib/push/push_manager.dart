@@ -132,25 +132,28 @@ Future<void> requestNotificationPermission() async {
       ?.requestNotificationsPermission();
 }
 
+/// Outcome of a push registration attempt (see [registerForPush]). Lets the
+/// UI tell apart "all good", "you need to pick a UnifiedPush distributor"
+/// and "nothing worked at all" -- the last two warrant different one-time
+/// hints (choose one in Settings vs. install a distributor / switch to FCM).
+enum PushRegistration { registered, needsDistributorChoice, unavailable }
+
 /// Registers one account's device for push, per the current
 /// [PushPreference] (see lib/state/app_settings.dart):
 ///
 /// - `automatic` (default): prefer UnifiedPush if a distributor is
-///   installed -- no Google dependency needed when the user already has
-///   one. Falls back to FCM only if none is found, which is the whole
-///   reason the FCM path exists at all.
-/// - `forceFcm` / `forceUnifiedPush`: pin to one mechanism regardless of
-///   what's installed, mainly so the other can be tested deliberately
-///   (e.g. verifying the FCM path without uninstalling UnifiedPush/ntfy).
-///   `forceUnifiedPush` does not silently fall back to FCM if no
-///   distributor is found -- an explicit force shouldn't quietly do the
-///   other thing.
+///   available, else fall back to FCM. With exactly one distributor
+///   installed and none chosen yet, that one is selected automatically so
+///   the common case needs no interaction.
+/// - `forceUnifiedPush`: UnifiedPush only, never FCM. With several
+///   distributors installed and none chosen yet, returns
+///   [PushRegistration.needsDistributorChoice] so the UI can prompt rather
+///   than pick one silently.
+/// - `forceFcm`: FCM only, ignoring any installed distributor.
 ///
-/// Safe to call on every app start and again whenever the preference
-/// changes (see AppSession.reregisterPush). Returns false only if no
-/// mechanism could be registered at all -- the caller uses that to show
-/// a one-time hint; chat keeps working via SSE either way.
-Future<bool> registerForPush(
+/// Safe to call on every app start, on every SSE reconnect, and whenever the
+/// preference or chosen distributor changes (see AppSession.reregisterPush).
+Future<PushRegistration> registerForPush(
   ApiClient api,
   String instance,
   DeviceCredentials creds,
@@ -161,16 +164,37 @@ Future<bool> registerForPush(
     case PushPreference.forceUnifiedPush:
       return _registerUnifiedPush(api, instance);
     case PushPreference.forceFcm:
-      return _registerFcm(api, creds);
+      return (await _registerFcm(api, creds))
+          ? PushRegistration.registered
+          : PushRegistration.unavailable;
     case PushPreference.automatic:
-      if (await _registerUnifiedPush(api, instance)) return true;
-      return _registerFcm(api, creds);
+      final viaUnifiedPush = await _registerUnifiedPush(api, instance);
+      if (viaUnifiedPush == PushRegistration.registered) return viaUnifiedPush;
+      // Prefer UnifiedPush but don't get stuck on it: fall back to FCM, and
+      // only surface UnifiedPush's own reason (choose/none) if FCM fails too.
+      if (await _registerFcm(api, creds)) return PushRegistration.registered;
+      return viaUnifiedPush;
   }
 }
 
-Future<bool> _registerUnifiedPush(ApiClient api, String instance) async {
-  final hasDistributor = await UnifiedPush.tryUseCurrentOrDefaultDistributor();
-  if (!hasDistributor) return false;
+/// Registers via UnifiedPush. Auto-selects the sole installed distributor
+/// when none has been chosen yet; with several installed and none chosen,
+/// returns [PushRegistration.needsDistributorChoice] rather than picking one
+/// silently -- which distributor sees the (metadata-only) push wake is the
+/// user's call. The chosen distributor is persisted by the plugin, so this
+/// stays stable across launches.
+Future<PushRegistration> _registerUnifiedPush(
+  ApiClient api,
+  String instance,
+) async {
+  var distributor = await UnifiedPush.getDistributor();
+  if (distributor == null || distributor.isEmpty) {
+    final available = await UnifiedPush.getDistributors();
+    if (available.isEmpty) return PushRegistration.unavailable;
+    if (available.length > 1) return PushRegistration.needsDistributorChoice;
+    distributor = available.first;
+    await UnifiedPush.saveDistributor(distributor);
+  }
 
   String? vapidKey;
   try {
@@ -179,7 +203,7 @@ Future<bool> _registerUnifiedPush(ApiClient api, String instance) async {
     developer.log('fetching vapid public key failed: $e', name: 'push');
   }
   await UnifiedPush.register(instance: instance, vapid: vapidKey);
-  return true;
+  return PushRegistration.registered;
 }
 
 Future<bool> _registerFcm(ApiClient api, DeviceCredentials creds) async {

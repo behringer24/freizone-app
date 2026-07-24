@@ -6,6 +6,7 @@
 // `data: ` carry anything this client needs.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
@@ -23,70 +24,105 @@ class SseClient {
   http.Client? _streamHttp;
 
   /// Opens the stream and calls [onMessage] for every message received.
-  /// Reconnects automatically after [retryDelay] on any failure or
-  /// disconnect, calling [onError] (if given) first, until [close] is
-  /// called. Runs until closed -- typically started with an unawaited
-  /// call from a screen's initState. [onConnected], if given, fires once
-  /// per successful (re)connect -- e.g. AppSession uses it to re-check
-  /// its one-time-prekey pool on every reconnect, not just app launch.
+  /// Reconnects automatically on any failure or disconnect, calling
+  /// [onError] (if given) first, until [close] is called. Runs until
+  /// closed -- typically started with an unawaited call from a screen's
+  /// initState. [onConnected], if given, fires once per successful
+  /// (re)connect -- e.g. AppSession uses it to re-check its one-time-prekey
+  /// pool on every reconnect, not just app launch.
+  ///
+  /// Retries use exponential backoff between [initialRetryDelay] and
+  /// [maxRetryDelay] with ±20% jitter, so an offline home server is probed
+  /// ever less aggressively (instead of hammered every 3s) yet still
+  /// recovers within [maxRetryDelay] once it returns -- resetting to
+  /// [initialRetryDelay] after any connection that actually established.
+  /// [connectTimeout] bounds a single connect attempt so a dead-but-routed
+  /// host surfaces as unreachable in seconds rather than after the OS-level
+  /// TCP timeout.
   Future<void> connect({
     required void Function(MessageResponse message) onMessage,
     void Function(Object error)? onError,
     void Function()? onConnected,
-    Duration retryDelay = const Duration(seconds: 3),
+    Duration initialRetryDelay = const Duration(seconds: 3),
+    Duration maxRetryDelay = const Duration(seconds: 30),
+    Duration connectTimeout = const Duration(seconds: 10),
   }) async {
     _closed = false;
+    final rand = Random();
+    var delay = initialRetryDelay;
     while (!_closed) {
       try {
-        await _connectOnce(onMessage, onConnected);
+        await _connectOnce(onMessage, onConnected, connectTimeout);
+        // Established (then disconnected) -- next retry starts fresh.
+        delay = initialRetryDelay;
       } catch (e) {
         if (_closed) return;
         onError?.call(e);
       }
       if (_closed) return;
-      await Future.delayed(retryDelay);
+      // ±20% jitter so many sessions whose shared server just dropped
+      // don't reconnect in lockstep.
+      final ms = delay.inMilliseconds;
+      final jittered = (ms * (0.8 + rand.nextDouble() * 0.4)).round();
+      await Future.delayed(Duration(milliseconds: jittered));
+      delay = Duration(
+        milliseconds: min(ms * 2, maxRetryDelay.inMilliseconds),
+      );
     }
   }
 
   Future<void> _connectOnce(
     void Function(MessageResponse) onMessage,
     void Function()? onConnected,
+    Duration connectTimeout,
   ) async {
     final httpClient = http.Client();
     _streamHttp = httpClient;
+    try {
+      final streamed = await httpClient
+          .send(apiClient.buildStreamRequest(creds))
+          .timeout(connectTimeout);
+      if (streamed.statusCode != 200) {
+        final body = await streamed.stream.bytesToString();
+        throw ApiException(streamed.statusCode, null, body);
+      }
+      onConnected?.call();
 
-    final streamed = await httpClient.send(apiClient.buildStreamRequest(creds));
-    if (streamed.statusCode != 200) {
-      final body = await streamed.stream.bytesToString();
-      throw ApiException(streamed.statusCode, null, body);
+      final lines = streamed.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter());
+      final completer = Completer<void>();
+      _lineSub = lines.listen(
+        (line) {
+          if (!line.startsWith('data: ')) return;
+          final data = line.substring('data: '.length);
+          try {
+            onMessage(
+              MessageResponse.fromJson(
+                json.decode(data) as Map<String, dynamic>,
+              ),
+            );
+          } catch (_) {
+            // Malformed line; ignore and keep the connection open.
+          }
+        },
+        onDone: () {
+          if (!completer.isCompleted) completer.complete();
+        },
+        onError: (Object e) {
+          if (!completer.isCompleted) completer.completeError(e);
+        },
+        cancelOnError: true,
+      );
+      await completer.future;
+    } finally {
+      // Close this attempt's client so a timed-out or failed connect
+      // doesn't leak its socket: against a dead server every backoff retry
+      // would otherwise pile up another lingering SYN-SENT connection that
+      // only clears on the OS-level TCP timeout minutes later.
+      await _lineSub?.cancel();
+      httpClient.close();
     }
-    onConnected?.call();
-
-    final lines = streamed.stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter());
-    final completer = Completer<void>();
-    _lineSub = lines.listen(
-      (line) {
-        if (!line.startsWith('data: ')) return;
-        final data = line.substring('data: '.length);
-        try {
-          onMessage(
-            MessageResponse.fromJson(json.decode(data) as Map<String, dynamic>),
-          );
-        } catch (_) {
-          // Malformed line; ignore and keep the connection open.
-        }
-      },
-      onDone: () {
-        if (!completer.isCompleted) completer.complete();
-      },
-      onError: (Object e) {
-        if (!completer.isCompleted) completer.completeError(e);
-      },
-      cancelOnError: true,
-    );
-    await completer.future;
   }
 
   void close() {
