@@ -78,8 +78,17 @@ class AccountManager extends ChangeNotifier {
     final sessions = <String, AppSession>{};
     for (final profile in profiles) {
       final session = AppSession(profile);
-      await session.init();
       sessions[profile.accountId] = session;
+      // Fire init() but do NOT await it here: init() does network I/O
+      // (prekey upload/top-up) against the account's own home server, and
+      // awaiting each in turn meant one account whose server is offline
+      // froze the entire app at startup (endless spinner) -- it blocked
+      // AccountManager.load from ever returning. init() already catches its
+      // own errors and surfaces them via the session's lastError +
+      // notifyListeners, so letting each run independently lets every
+      // account appear immediately and reach readiness (or an error state)
+      // on its own, without holding up the others or the app shell.
+      unawaited(session.init());
     }
     final remembered = settings.lastActiveAccountId;
     final initialActiveId =

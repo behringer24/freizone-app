@@ -85,7 +85,27 @@ class ApiClient {
   final FreizoneCore core;
   final http.Client _http;
 
+  /// Upper bound on any single request to a Freizone server. Without it a
+  /// home server that is offline (but whose IP still routes on the LAN) or
+  /// that accepts the connection yet never answers would hang the caller
+  /// forever. Because AppSession.init() runs at startup, one such dead
+  /// server used to freeze the whole app in an endless spinner. On timeout
+  /// the request throws TimeoutException, which the callers already treat
+  /// like any other network failure (see AppSession.init's catch), so a
+  /// dead account degrades to an error state instead of blocking the app.
+  static const _requestTimeout = Duration(seconds: 10);
+
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
+
+  /// Sends [req] and reads the full response under a single [_requestTimeout]
+  /// deadline. All request helpers below go through here so the timeout is
+  /// applied uniformly.
+  Future<http.Response> _send(http.Request req) {
+    return Future(() async {
+      final streamed = await _http.send(req);
+      return http.Response.fromStream(streamed);
+    }).timeout(_requestTimeout);
+  }
 
   Never _throwError(http.Response resp) {
     // parseJsonObject throws NotFreizoneServerException for an HTML/non-JSON
@@ -118,7 +138,7 @@ class ApiClient {
     final req = http.Request(method, _uri(path));
     req.headers['Content-Type'] = 'application/json';
     if (body != null) req.body = json.encode(body);
-    return http.Response.fromStream(await _http.send(req));
+    return _send(req);
   }
 
   Future<http.Response> _signedRequest(
@@ -141,7 +161,7 @@ class ApiClient {
     req.headers['Content-Type'] = 'application/json';
     headers.forEach((key, value) => req.headers[key] = value);
     if (body != null) req.bodyBytes = bodyBytes;
-    return http.Response.fromStream(await _http.send(req));
+    return _send(req);
   }
 
   // --- Bootstrap / registration / directory ---------------------------------
@@ -372,7 +392,7 @@ class ApiClient {
     req.headers['Content-Type'] = 'application/json';
     headers.forEach((key, value) => req.headers[key] = value);
     req.bodyBytes = bodyBytes;
-    final resp = await http.Response.fromStream(await _http.send(req));
+    final resp = await _send(req);
     _checkStatus(resp, {202});
   }
 
