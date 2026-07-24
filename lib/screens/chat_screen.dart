@@ -348,6 +348,8 @@ class _ChatScreenState extends State<ChatScreen> {
           final convo = widget.session.conversation(widget.peerAccountId)!;
           final items = _buildItems(context, convo);
           _scrollToBottom();
+          final unreachable =
+              widget.session.reachability == ServerReachability.unreachable;
           return Column(
             children: [
               if (convo.pinnedMessageIds.isNotEmpty)
@@ -361,12 +363,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
               ),
-              if (_replyingTo != null && !convo.pendingApproval)
+              if (_replyingTo != null &&
+                  !convo.pendingApproval &&
+                  !unreachable)
                 _buildReplyComposerBar(context, convo, _replyingTo!),
               if (convo.blocked)
                 _buildBlockedBar(context, convo)
               else if (convo.pendingApproval)
                 _buildPendingRequestBar(context, convo)
+              else if (unreachable)
+                _buildServerOfflineBar(context)
               else
                 SafeArea(
                   top: false,
@@ -425,6 +431,49 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// Replaces the composer while this account's home server is unreachable
+  /// (see AppSession.reachability). Sending is disabled; the chat history
+  /// above stays fully readable. Unlike the blocked bar this is nothing the
+  /// user did wrong, so it uses a neutral tone rather than error red, and
+  /// offers no action -- reconnection is automatic (SseClient's backoff),
+  /// and the bar clears itself once the server is reachable again.
+  Widget _buildServerOfflineBar(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        color: colorScheme.tertiaryContainer,
+        // Match the height of the blocked/pending bars, whose action buttons
+        // give them the standard interactive height -- this bar has no
+        // button, so pin the same minimum so the composer-replacement bars
+        // stay visually consistent.
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minHeight: kMinInteractiveDimension,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.cloud_off,
+                size: 18,
+                color: colorScheme.onTertiaryContainer,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Server unreachable — can't send messages right now",
+                  style: TextStyle(color: colorScheme.onTertiaryContainer),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -310,6 +310,13 @@ Future<void> topUpOneTimePrekeysIfNeeded(
   await LocalStateStore.saveProfile(state);
 }
 
+/// Whether this session's own home server is currently reachable. Drives
+/// the account switcher's offline marking and the chat composer's
+/// send-disabled bar. Starts [connecting] (no attempt has resolved yet),
+/// flips to [online] on a successful SSE connect and to [unreachable] when
+/// a connect attempt fails -- see AppSession._startStream / init.
+enum ServerReachability { connecting, online, unreachable }
+
 class AppSession extends ChangeNotifier {
   AppSession(this.state) {
     api = ApiClient(baseUrl: state.server, core: core);
@@ -373,13 +380,25 @@ class AppSession extends ChangeNotifier {
   bool prekeysReady = false;
   String? lastError;
 
-  /// True once a push-registration attempt found no way to deliver a
-  /// background wake at all under the current PushPreference (no
-  /// UnifiedPush distributor for automatic/forceUnifiedPush, or no FCM
-  /// token obtainable for forceFcm/automatic's fallback). Consumed (reset
-  /// to false) by whichever screen shows the one-time hint about it --
-  /// chat keeps working via SSE regardless.
-  bool pushUnavailable = false;
+  /// Live reachability of this session's home server, kept current by the
+  /// SSE reconnect loop (see [_startStream]). The UI treats [unreachable]
+  /// as "read-only": the account stays selectable and its cached chats
+  /// readable, but the composer is disabled (see chat_screen) and the
+  /// switcher dims the avatar + shows an offline badge (see
+  /// account_shell_screen). Recovers on its own -- when the server comes
+  /// back, the next reconnect flips this to [online] and the UI follows.
+  ServerReachability reachability = ServerReachability.connecting;
+
+  /// Result of the most recent push registration (see push_manager). The
+  /// chat-list one-time hint uses this to tell "pick a distributor" apart
+  /// from "nothing available".
+  PushRegistration pushRegistration = PushRegistration.registered;
+
+  /// Set when a fresh registration produced a non-registered result the UI
+  /// hasn't surfaced yet; consumed by the chat list's one-time hint. Kept
+  /// separate from [pushRegistration] so merely re-reading the status on a
+  /// rebuild doesn't re-trigger the hint.
+  bool pushHintPending = false;
 
   /// This device's own server role ("admin"/"moderator"), or null if it
   /// has neither -- in which case the admin area should be hidden
@@ -617,6 +636,13 @@ class AppSession extends ChangeNotifier {
   /// prekey pool if it's already running low, then opens the live
   /// message stream. Call once, right after construction.
   Future<void> init() async {
+    // The prekey upload/top-up is network I/O against this account's home
+    // server and may fail if that server is down. It must NOT gate the
+    // rest of init: the SSE reconnect loop below is what tracks
+    // reachability and recovers when the server returns, so it has to
+    // start even on a dead server -- otherwise the account would be stuck
+    // "connecting" forever with nothing ever retrying. onConnected re-runs
+    // the top-up, so a recovered server still gets its prekeys refreshed.
     try {
       if (state.signedPrekeyPub == null) {
         await _uploadPrekeys();
@@ -624,25 +650,26 @@ class AppSession extends ChangeNotifier {
         await topUpOneTimePrekeysIfNeeded(state, core, api);
       }
       prekeysReady = true;
-      notifyListeners();
-      _startStream();
-      unawaited(refreshMyRole());
-      unawaited(refreshRegistrationPolicy());
-      unawaited(_registerPush());
     } catch (e) {
+      reachability = ServerReachability.unreachable;
       lastError = 'prekey upload failed: $e';
-      notifyListeners();
     }
+    notifyListeners();
+    _startStream();
+    unawaited(refreshMyRole());
+    unawaited(refreshRegistrationPolicy());
+    unawaited(_registerPush());
   }
 
   Future<void> _registerPush() async {
     try {
-      final delivered = await registerForPush(
+      final result = await registerForPush(
         api,
         state.accountId,
         state.credentials,
       );
-      pushUnavailable = !delivered;
+      pushRegistration = result;
+      pushHintPending = result != PushRegistration.registered;
       notifyListeners();
     } catch (e) {
       lastError = 'push registration failed: $e';
@@ -726,11 +753,19 @@ class AppSession extends ChangeNotifier {
       _sse!.connect(
         onMessage: _handleIncoming,
         onError: (e) {
+          reachability = ServerReachability.unreachable;
           lastError = 'stream error: $e';
           notifyListeners();
         },
         onConnected: () {
+          reachability = ServerReachability.online;
+          notifyListeners();
           unawaited(topUpOneTimePrekeysIfNeeded(state, core, api));
+          // Re-register push on every (re)connect: a server that was down at
+          // startup (or when the endpoint first arrived) never got this
+          // account's push target otherwise, and would stay push-less until
+          // the next app start. registerForPush is idempotent.
+          unawaited(_registerPush());
           _retryPendingReceipts();
         },
       ),

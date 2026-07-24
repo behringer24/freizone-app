@@ -2,6 +2,7 @@
 // color, the default for "copy my address", and notification sound/
 // vibration. See lib/state/app_settings.dart for persistence.
 import 'package:flutter/material.dart';
+import 'package:unifiedpush/unifiedpush.dart';
 
 import '../state/account_manager.dart';
 import '../state/app_settings.dart';
@@ -116,6 +117,10 @@ class SettingsScreen extends StatelessWidget {
                   ],
                 ),
               ),
+              // The distributor only matters when UnifiedPush is in play --
+              // hidden when FCM is forced, since it wouldn't be used then.
+              if (settings.pushPreference != PushPreference.forceFcm)
+                _PushDistributorTile(manager: manager),
               const Divider(height: 32),
               _sectionTitle(context, 'Notifications'),
               SwitchListTile(
@@ -182,5 +187,115 @@ class _AccentSwatch extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Lets the user pick which installed UnifiedPush distributor delivers push
+/// for this device. Shown only while UnifiedPush is in play (see
+/// SettingsScreen.build). The selection is persisted by the plugin
+/// (`saveDistributor`); changing it re-registers every live account so each
+/// account's server learns the new endpoint (the distributor is device-wide,
+/// but the server-side registration is per account).
+class _PushDistributorTile extends StatefulWidget {
+  const _PushDistributorTile({required this.manager});
+
+  final AccountManager manager;
+
+  @override
+  State<_PushDistributorTile> createState() => _PushDistributorTileState();
+}
+
+class _PushDistributorTileState extends State<_PushDistributorTile> {
+  List<String>? _available;
+  String? _current;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final available = await UnifiedPush.getDistributors();
+    final current = await UnifiedPush.getDistributor();
+    if (!mounted) return;
+    setState(() {
+      _available = available;
+      _current = current;
+      _loading = false;
+    });
+  }
+
+  Future<void> _choose(String distributor) async {
+    await UnifiedPush.saveDistributor(distributor);
+    // Re-register every account so each server gets the new push endpoint --
+    // same "all sessions" rule as a push-preference change.
+    for (final session in widget.manager.sessions) {
+      await session.reregisterPush();
+    }
+    if (!mounted) return;
+    setState(() => _current = distributor);
+  }
+
+  // A friendly name for the common distributors; falls back to the package
+  // id for anything else (resolving the real app label would need a
+  // PackageManager round-trip we don't otherwise take).
+  String _label(String pkg) => switch (pkg) {
+    'io.heckel.ntfy' => 'ntfy',
+    'org.unifiedpush.distributor.nextpush' => 'NextPush',
+    'org.unifiedpush.distributor.fcm' => 'Embedded (FCM-backed)',
+    _ => pkg,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const ListTile(
+        title: Text('Push distributor'),
+        subtitle: Text('Checking installed apps…'),
+      );
+    }
+    final available = _available ?? const <String>[];
+    if (available.isEmpty) {
+      return const ListTile(
+        title: Text('Push distributor'),
+        subtitle: Text(
+          'No UnifiedPush app installed. Install one (e.g. ntfy), or use '
+          'Firebase (FCM) above.',
+        ),
+      );
+    }
+    final current = _current;
+    return ListTile(
+      title: const Text('Push distributor'),
+      subtitle: Text(
+        current == null || current.isEmpty ? 'None selected' : _label(current),
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showPicker(available),
+    );
+  }
+
+  Future<void> _showPicker(List<String> available) async {
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Choose push distributor'),
+        children: [
+          for (final d in available)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, d),
+              child: Row(
+                children: [
+                  Expanded(child: Text(_label(d))),
+                  if (d == _current) const Icon(Icons.check, size: 18),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (chosen != null && chosen != _current) await _choose(chosen);
   }
 }

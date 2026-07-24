@@ -234,56 +234,99 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
                       onTap: () =>
                           widget.manager.setActive(session.state.accountId),
                       onLongPress: () => _openProfile(context, session),
-                      child: CircleAvatar(
-                        radius: 24,
-                        backgroundColor: avatarColorFor(
-                          session.state.accountId,
-                        ),
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Center(
-                              child: PeerAvatarLabel(
-                                accountId: session.state.accountId,
+                      child: Builder(
+                        builder: (context) {
+                          final unreachable =
+                              session.reachability ==
+                              ServerReachability.unreachable;
+                          // Home server offline: dim the whole avatar so it
+                          // reads as inactive, but keep it fully tappable
+                          // (Opacity is layout-neutral, and not IgnorePointer)
+                          // -- the account stays selectable so its cached
+                          // chats remain readable while offline. The avatar's
+                          // internal layout is deliberately left exactly as
+                          // the online case (see the note in _buildSwitcher):
+                          // only the badge in the bottom-right slot swaps.
+                          return Opacity(
+                            opacity: unreachable ? 0.4 : 1.0,
+                            child: CircleAvatar(
+                              radius: 24,
+                              backgroundColor: avatarColorFor(
+                                session.state.accountId,
+                              ),
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  Center(
+                                    child: PeerAvatarLabel(
+                                      accountId: session.state.accountId,
+                                    ),
+                                  ),
+                                  if (session == active)
+                                    Positioned(
+                                      bottom: -4,
+                                      left: 16,
+                                      right: 16,
+                                      child: Container(
+                                        height: 3,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.primary,
+                                      ),
+                                    ),
+                                  // Role badge -- only while reachable; myRole
+                                  // can't be trusted offline, so its slot is
+                                  // reused by the offline badge below.
+                                  if (roleBadgeIcon(session.myRole)
+                                      case final icon? when !unreachable)
+                                    Positioned(
+                                      bottom: -3,
+                                      right: -3,
+                                      child: CircleAvatar(
+                                        radius: 12,
+                                        backgroundColor: Colors.white,
+                                        child: Icon(
+                                          icon,
+                                          size: 16,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                  // Offline badge -- exact same slot and size
+                                  // as the role badge (radius 12 / icon 16),
+                                  // so the switcher's layout is unchanged.
+                                  // cloud_off (not wifi_off): the server is
+                                  // unreachable, not the phone's connectivity.
+                                  if (unreachable)
+                                    Positioned(
+                                      bottom: -3,
+                                      right: -3,
+                                      child: CircleAvatar(
+                                        radius: 12,
+                                        backgroundColor: Colors.grey.shade300,
+                                        child: const Icon(
+                                          Icons.cloud_off,
+                                          size: 16,
+                                          color: Colors.black54,
+                                        ),
+                                      ),
+                                    ),
+                                  if (session.hasAnyUnread)
+                                    // Closer to the avatar than the
+                                    // role/active indicators -- keeps the
+                                    // group tighter now that each group also
+                                    // carries a label, rather than protruding
+                                    // further out past the circle's edge.
+                                    const Positioned(
+                                      top: 0,
+                                      right: 0,
+                                      child: UnreadDot(),
+                                    ),
+                                ],
                               ),
                             ),
-                            if (session == active)
-                              Positioned(
-                                bottom: -4,
-                                left: 16,
-                                right: 16,
-                                child: Container(
-                                  height: 3,
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                              ),
-                            if (roleBadgeIcon(session.myRole) case final icon?)
-                              Positioned(
-                                bottom: -3,
-                                right: -3,
-                                child: CircleAvatar(
-                                  radius: 12,
-                                  backgroundColor: Colors.white,
-                                  child: Icon(
-                                    icon,
-                                    size: 16,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                              ),
-                            if (session.hasAnyUnread)
-                              // Closer to the avatar than the role/active
-                              // indicators -- keeps the group tighter
-                              // now that each group also carries a
-                              // label, rather than protruding further
-                              // out past the circle's edge.
-                              const Positioned(
-                                top: 0,
-                                right: 0,
-                                child: UnreadDot(),
-                              ),
-                          ],
-                        ),
+                          );
+                        },
                       ),
                     ),
                   ),
