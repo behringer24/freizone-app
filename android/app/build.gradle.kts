@@ -1,4 +1,3 @@
-import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
@@ -10,14 +9,18 @@ plugins {
     id("com.google.gms.google-services")
 }
 
-// Release signing is read from android/key.properties (gitignored -- holds the
-// keystore path, alias and passwords). Absent on a machine without the release
-// keystore, in which case the release build falls back to debug signing below
-// so `flutter run --release` still works.
+// Release signing config, loaded from android/key.properties (gitignored --
+// see android/.gitignore). That file is never committed and points at a
+// keystore kept outside the repo entirely; see README.md's release-signing
+// section for how to generate both. Missing key.properties (a fresh clone,
+// CI, or a contributor who only needs debug builds) falls back to null,
+// which below means "keep signing release with the debug key" -- so
+// `flutter build apk/appbundle --release` still works, it just isn't a
+// Play-uploadable artifact until this file is created locally.
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+    keystoreProperties.load(keystorePropertiesFile.inputStream())
 }
 
 android {
@@ -43,22 +46,29 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String?
-            keyPassword = keystoreProperties["keyPassword"] as String?
-            storeFile = (keystoreProperties["storeFile"] as String?)?.let { file(it) }
-            storePassword = keystoreProperties["storePassword"] as String?
+        // Only created when android/key.properties exists (see the loader
+        // above) -- a fresh clone without it falls back to the debug config
+        // below, so debug builds/tests are never blocked by a missing
+        // keystore. Required before any Play Store upload.
+        if (keystoreProperties.isNotEmpty()) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
         }
     }
 
     buildTypes {
         release {
-            // Sign with the release keystore when key.properties is present;
-            // otherwise fall back to debug signing so `flutter run --release`
-            // still works on a machine without the release keystore.
-            signingConfig = if (keystorePropertiesFile.exists()) {
+            signingConfig = if (keystoreProperties.isNotEmpty()) {
                 signingConfigs.getByName("release")
             } else {
+                // No android/key.properties locally -- keeps `flutter build
+                // apk/appbundle --release` working for local testing, but
+                // this is NOT a Play-uploadable artifact until key.properties
+                // (and the keystore it points at) exist. See README.md.
                 signingConfigs.getByName("debug")
             }
         }

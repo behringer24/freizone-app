@@ -10,15 +10,22 @@ import '../ffi/models.dart' show decodeB64, decodeTime, encodeB64, encodeTime;
 /// GET /v1/server-status -- lets the setup wizard decide which path
 /// applies (bootstrap/open/invite/closed) before any identity exists.
 class ServerStatus {
-  ServerStatus({required this.claimed, required this.registrationPolicy});
+  ServerStatus({
+    required this.claimed,
+    required this.registrationPolicy,
+    this.federationEnabled = true,
+  });
 
   factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
     claimed: j['claimed'] as bool,
     registrationPolicy: j['registration_policy'] as String,
+    // Older servers don't send this; default to on (federation-open-by-design).
+    federationEnabled: j['federation_enabled'] as bool? ?? true,
   );
 
   final bool claimed;
   final String registrationPolicy;
+  final bool federationEnabled;
 }
 
 class AccountResponse {

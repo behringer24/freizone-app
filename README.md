@@ -75,6 +75,41 @@ Two independent, non-interfering delivery mechanisms exist; a device uses exactl
 
 Because FCM issues one token per app install rather than one per account (unlike UnifiedPush's per-account distributor registration), an FCM wake can't say which account it's for — it shows a generic "New message(s)" notification rather than naming a specific account, and tapping it opens the app, which resyncs every connected account normally.
 
+## Release builds
+
+`flutter build apk --debug`/`--release` and `flutter run` always work with no
+setup — a debug build is signed with a generic, shared debug key (fine for
+sideloading and testing, never accepted by Google Play), and a `--release`
+build falls back to the *same* debug key until a release keystore is set up
+below, so it stays usable for local testing in the meantime.
+
+A **Play Store upload requires its own release keystore** — Google doesn't
+provide one; you generate it yourself, once, and keep it forever (losing it
+means you can never update the app under the same listing again):
+
+```sh
+keytool -genkeypair -v -keystore /path/outside/this/repo/freizone-release.jks \
+  -alias freizone -keyalg RSA -keysize 2048 -validity 10000
+```
+
+(`keytool` ships with any JDK; Android Studio bundles one too, e.g. under its
+`jbr/bin/` folder.) Then create `android/key.properties` (gitignored, like
+`google-services.json` above — never commit it):
+
+```properties
+storePassword=<your keystore password>
+keyPassword=<your key password>
+keyAlias=freizone
+storeFile=/path/outside/this/repo/freizone-release.jks
+```
+
+`android/app/build.gradle.kts` picks this up automatically when present and
+signs the `release` build type with it; `flutter build appbundle --release`
+then produces a Play-uploadable `.aab`. Store both the keystore file and its
+passwords somewhere durable and backed up outside this repo (a password
+manager, not `key.properties` itself) -- they're the actual secret, not
+anything Play Console hands you.
+
 ## Development
 
 ```sh
@@ -87,3 +122,22 @@ Both should be clean before committing. There's no CI configured yet — these a
 ## A note on trust
 
 This client independently verifies the full self-certifying chain for every peer it talks to (`hash(root_pubkey) == account_id`, then verifies each device certificate's signature) rather than trusting the server's word for who owns which key or device. The server can misbehave (drop messages, go offline, get compromised) without being able to silently impersonate anyone or read your messages.
+
+## License
+
+Copyright (C) 2026 Andreas Behringer
+
+The Freizone app is free software: you can redistribute it and/or modify it
+under the terms of the **GNU General Public License** as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See the [`LICENSE`](LICENSE) file for the full text.
+
+`SPDX-License-Identifier: GPL-3.0-or-later`
+
+The server and gateway components are licensed separately under the AGPL-3.0
+(see their repositories). Note: GPL terms are incompatible with the Apple App
+Store's distribution conditions, so an iOS build would require relicensing the
+app (e.g. permissive or a GPL App Store exception); this affects only the app,
+not the AGPL server/gateway. The optional Firebase Cloud Messaging integration
+relies on proprietary Google Play services; the UnifiedPush build path avoids
+it (relevant for F-Droid-style fully-free distribution).

@@ -22,6 +22,7 @@ class AdminScreen extends StatefulWidget {
 class _AdminScreenState extends State<AdminScreen> {
   bool _loading = true;
   String? _policy;
+  bool? _federationEnabled;
   String? _error;
 
   bool get _isAdmin => widget.session.myRole == 'admin';
@@ -40,9 +41,11 @@ class _AdminScreenState extends State<AdminScreen> {
     try {
       await widget.session.refreshMyRole();
       final policy = await widget.session.getRegistrationPolicy();
+      final federationEnabled = await widget.session.getFederationEnabled();
       if (!mounted) return;
       setState(() {
         _policy = policy;
+        _federationEnabled = federationEnabled;
         _loading = false;
       });
     } catch (e) {
@@ -152,6 +155,49 @@ class _AdminScreenState extends State<AdminScreen> {
     }
   }
 
+  Future<void> _setFederationEnabled(bool enabled) async {
+    final previous = _federationEnabled;
+    setState(() => _federationEnabled = enabled);
+    try {
+      await widget.session.setFederationEnabled(enabled);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _federationEnabled = previous);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to change federation: ${describeError(e)}'),
+        ),
+      );
+    }
+  }
+
+  Widget _buildFederationSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+          child: Text(
+            'Federation',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        SwitchListTile(
+          title: const Text('Accept messages from other servers'),
+          subtitle: const Text(
+            'When off, this server rejects incoming federated messages, and '
+            'accounts on it can no longer message contacts on other servers '
+            '(existing cross-server chats are locked).',
+          ),
+          value: _federationEnabled ?? true,
+          onChanged: _isAdmin && _federationEnabled != null
+              ? (v) => _setFederationEnabled(v)
+              : null,
+        ),
+      ],
+    );
+  }
+
   Widget _buildPolicySection(BuildContext context) {
     const options = [
       ('open', 'Open', 'Anyone can self-register.'),
@@ -252,6 +298,8 @@ class _AdminScreenState extends State<AdminScreen> {
                 return ListView(
                   children: [
                     _buildPolicySection(context),
+                    const Divider(height: 32),
+                    _buildFederationSection(context),
                     const Divider(height: 32),
                     const Padding(
                       padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
