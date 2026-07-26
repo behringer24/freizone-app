@@ -158,4 +158,20 @@ func SignHTTPRequest(cReq *C.char) *C.char {
 	return jsonCall(cReq, doSignHTTPRequest)
 }
 
+//export RevealRecoveryPhrase
+func RevealRecoveryPhrase(cReq *C.char) *C.char {
+	return jsonCall(cReq, doRevealRecoveryPhrase)
+}
+
+//export RestoreIdentityFromSeed
+func RestoreIdentityFromSeed(cReq *C.char) *C.char {
+	return jsonCall(cReq, doRestoreIdentityFromSeed)
+}
+
+//export RecoveryWordlist
+func RecoveryWordlist() *C.char {
+	resp, err := doRecoveryWordlist()
+	return toCResult(resp, err)
+}
+
 func main() {}
