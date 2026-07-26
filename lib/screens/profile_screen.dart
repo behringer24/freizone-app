@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import '../net/api_client.dart';
 import '../state/account_manager.dart';
+import 'backup_screen.dart';
 import '../state/app_session.dart';
 import '../util/address_format.dart';
 import '../util/errors.dart';
@@ -202,7 +203,33 @@ class ProfileScreen extends StatelessWidget {
                   onPressed: () => _copy(context, 'Full address', fullAddress),
                 ),
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 16),
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Security',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.key),
+                title: const Text('Recovery phrase'),
+                subtitle: const Text(
+                  'Back up your account so you can restore it on a new device',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        BackupScreen(rootPriv: session.state.rootPriv),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
               const Divider(),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),

@@ -15,6 +15,7 @@
 import 'package:flutter/material.dart';
 
 import '../ffi/freizone_core.dart';
+import '../ffi/freizone_core_exception.dart';
 import '../ffi/models.dart';
 import '../net/api_client.dart';
 import '../state/local_state.dart';
@@ -24,7 +25,7 @@ import '../util/server_url.dart';
 import '../widgets/qr_scan_button.dart';
 import 'qr_scan_screen.dart';
 
-enum _WizardStep { address, bootstrap, invite, openRegister, closed }
+enum _WizardStep { address, bootstrap, invite, openRegister, closed, recover }
 
 class SetupScreen extends StatefulWidget {
   const SetupScreen({
@@ -57,6 +58,7 @@ class SetupScreen extends StatefulWidget {
 class _SetupScreenState extends State<SetupScreen> {
   final _serverController = TextEditingController();
   final _tokenController = TextEditingController();
+  final _seedController = TextEditingController();
 
   _WizardStep _step = _WizardStep.address;
   String? _server;
@@ -73,6 +75,7 @@ class _SetupScreenState extends State<SetupScreen> {
   void dispose() {
     _serverController.dispose();
     _tokenController.dispose();
+    _seedController.dispose();
     super.dispose();
   }
 
@@ -82,7 +85,107 @@ class _SetupScreenState extends State<SetupScreen> {
       _error = null;
       _scannedCode = null;
       _tokenController.clear();
+      _seedController.clear();
     });
+  }
+
+  /// Switches to the recovery step (APP-01): the user already has an account
+  /// on this server and wants to restore it from its seed phrase. Unlike
+  /// _checkServer, this deliberately does NOT warn about a duplicate server or
+  /// probe the registration policy -- recovery reattaches to an *existing*
+  /// account and works regardless of whether registration is open or closed.
+  void _startRecover() {
+    final input = _serverController.text.trim();
+    if (input.isEmpty) {
+      setState(() => _error = 'Server address is required');
+      return;
+    }
+    setState(() {
+      _server = normalizeServerUrl(input);
+      _error = null;
+      _step = _WizardStep.recover;
+    });
+  }
+
+  /// Fills the seed field from a scanned recovery-phrase QR (as produced by
+  /// the backup screen -- the raw QR content is just the space-joined words).
+  Future<void> _scanSeedQr() async {
+    final raw = await Navigator.of(
+      context,
+    ).push<String>(MaterialPageRoute(builder: (_) => const QrScanScreen()));
+    if (raw == null || !mounted) return;
+    setState(() {
+      _seedController.text = raw.trim();
+      _error = null;
+    });
+  }
+
+  Future<void> _submitRecover() async {
+    final phrase = _seedController.text.trim();
+    if (phrase.isEmpty) {
+      setState(() => _error = 'Enter your recovery phrase');
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+
+    final core = FreizoneCore();
+    final api = ApiClient(baseUrl: _server!, core: core);
+    try {
+      final words = phrase
+          .toLowerCase()
+          .split(RegExp(r'\s+'))
+          .where((w) => w.isNotEmpty)
+          .toList();
+
+      final Identity identity;
+      try {
+        identity = core.restoreIdentityFromSeed(words);
+      } on FreizoneCoreException catch (e) {
+        setState(() {
+          _error = 'That recovery phrase is not valid (${e.message}).';
+          _submitting = false;
+        });
+        return;
+      }
+
+      final cert = core.signDeviceCertificate(
+        accountId: identity.accountId,
+        deviceId: identity.deviceId,
+        devicePub: identity.devicePub,
+        issuedAt: DateTime.now().toUtc(),
+        rootPriv: identity.rootPriv,
+      );
+      await api.recoverAccount(identity: identity, cert: cert);
+
+      final state = AppState(
+        server: _server!,
+        accountId: identity.accountId,
+        rootPub: identity.rootPub,
+        rootPriv: identity.rootPriv,
+        deviceId: identity.deviceId,
+        devicePub: identity.devicePub,
+        devicePriv: identity.devicePriv,
+        // The user just restored from the phrase, so they already have it --
+        // no post-setup backup nudge for a recovered account.
+        recoveryBackupDone: true,
+      );
+      await LocalStateStore.saveProfile(state);
+      await widget.onRegistered(state);
+
+      if (!mounted) return;
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+    } catch (e) {
+      setState(() {
+        _error = describeError(e);
+        _submitting = false;
+      });
+    } finally {
+      api.close();
+    }
   }
 
   /// Pushes the QR scanner and, on a recognizable freizone://join result
@@ -232,13 +335,15 @@ class _SetupScreenState extends State<SetupScreen> {
               );
             case _WizardStep.address:
             case _WizardStep.closed:
+            case _WizardStep.recover:
               return;
           }
           identity = candidateIdentity;
           break;
         } on ApiException catch (e) {
-          if (e.code == 'id_prefix_taken' && attempt < maxIdentityAttempts)
+          if (e.code == 'id_prefix_taken' && attempt < maxIdentityAttempts) {
             continue;
+          }
           rethrow;
         }
       }
@@ -319,6 +424,73 @@ class _SetupScreenState extends State<SetupScreen> {
                 )
               : const Text('Continue'),
         ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _submitting ? null : _startRecover,
+          child: const Text('Recover an existing account'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRecoverStep() {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Restore an account you already have on this server using its '
+          '24-word recovery phrase. This keeps your existing address; it does '
+          'not create a new account.',
+          style: theme.textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Your other devices for this account will be signed out. Chat history '
+          'is not restored -- only your identity.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _seedController,
+          decoration: const InputDecoration(
+            labelText: 'Recovery phrase',
+            hintText: '24 words separated by spaces',
+            border: OutlineInputBorder(),
+          ),
+          enabled: !_submitting,
+          minLines: 3,
+          maxLines: 5,
+          autocorrect: false,
+          enableSuggestions: false,
+          textInputAction: TextInputAction.done,
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _submitting ? null : _scanSeedQr,
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('Scan QR instead'),
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (_error != null) ...[
+          Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+          const SizedBox(height: 16),
+        ],
+        ElevatedButton(
+          onPressed: _submitting ? null : _submitRecover,
+          child: _submitting
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Recover account'),
+        ),
       ],
     );
   }
@@ -351,6 +523,7 @@ class _SetupScreenState extends State<SetupScreen> {
         tokenLabel = null;
         buttonLabel = '';
       case _WizardStep.address:
+      case _WizardStep.recover:
         return const SizedBox();
     }
 
@@ -412,7 +585,11 @@ class _SetupScreenState extends State<SetupScreen> {
         ),
         body: Padding(
           padding: const EdgeInsets.all(16),
-          child: onAddressStep ? _buildAddressStep() : _buildFinalStep(),
+          child: switch (_step) {
+            _WizardStep.address => _buildAddressStep(),
+            _WizardStep.recover => _buildRecoverStep(),
+            _ => _buildFinalStep(),
+          },
         ),
       ),
     );

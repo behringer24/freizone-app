@@ -18,6 +18,7 @@ import '../util/unread_dot.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/qr_scan_button.dart';
 import 'admin_screen.dart';
+import 'backup_screen.dart';
 import 'blocked_contacts_screen.dart';
 import 'chat_screen.dart';
 import 'invite_screen.dart';
@@ -362,25 +363,36 @@ class _ChatListScreenState extends State<ChatListScreen> {
           }
         }
 
+        // One-time nudge to back up the recovery phrase, shown above the list
+        // (and the empty state) until the user backs up or dismisses it. Never
+        // shown for a recovered account (recoveryBackupDone is set from the
+        // start there). See APP-01.
+        final nudge = session.state.recoveryBackupDone
+            ? null
+            : _buildBackupNudge(context, session);
+
         final conversations = session.conversations;
         if (conversations.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.chat_bubble_outline,
-                  size: 64,
-                  color: Theme.of(context).colorScheme.outline,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'No conversations yet',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                const Text('Tap the button below to start one'),
-              ],
+          return _withNudge(
+            nudge,
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.chat_bubble_outline,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No conversations yet',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Tap the button below to start one'),
+                ],
+              ),
             ),
           );
         }
@@ -405,7 +417,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
           context,
         ).colorScheme.surfaceContainerHigh;
 
-        return CustomScrollView(
+        return _withNudge(
+          nudge,
+          CustomScrollView(
           slivers: [
             if (pending.isNotEmpty)
               SliverToBoxAdapter(
@@ -448,8 +462,51 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   _buildConversationTile(context, session, regular[i]),
             ),
           ],
+          ),
         );
       },
+    );
+  }
+
+  /// Stacks [nudge] (if any) above [body], so the recovery-phrase backup
+  /// prompt appears over both the conversation list and the empty state.
+  Widget _withNudge(Widget? nudge, Widget body) {
+    if (nudge == null) {
+      return body;
+    }
+    return Column(children: [nudge, Expanded(child: body)]);
+  }
+
+  Widget _buildBackupNudge(BuildContext context, AppSession session) {
+    final theme = Theme.of(context);
+    return MaterialBanner(
+      backgroundColor: theme.colorScheme.secondaryContainer,
+      leading: Icon(Icons.key, color: theme.colorScheme.onSecondaryContainer),
+      content: Text(
+        'Back up your recovery phrase so you can restore this account if you '
+        'lose this device.',
+        style: TextStyle(color: theme.colorScheme.onSecondaryContainer),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => session.markRecoveryBackupDone(),
+          child: const Text('Dismiss'),
+        ),
+        FilledButton(
+          onPressed: () {
+            // Engaging with the prompt settles it either way; the phrase
+            // stays reachable from the profile screen afterward.
+            session.markRecoveryBackupDone();
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) =>
+                    BackupScreen(rootPriv: session.state.rootPriv),
+              ),
+            );
+          },
+          child: const Text('Back up now'),
+        ),
+      ],
     );
   }
 

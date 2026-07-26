@@ -86,6 +86,7 @@ class AppState {
     Map<String, Conversation>? conversations,
     Set<String>? knownPeerIds,
     Map<String, BlockedPeer>? blockedPeers,
+    this.recoveryBackupDone = false,
   }) : oneTimePrekeys = oneTimePrekeys ?? {},
        sessions = sessions ?? {},
        conversations = conversations ?? {},
@@ -136,6 +137,7 @@ class AppState {
           m[p.peerAccountId] = p;
           return m;
         }),
+    recoveryBackupDone: j['recovery_backup_done'] as bool? ?? false,
   );
 
   String server;
@@ -181,6 +183,12 @@ class AppState {
   /// un-block them.
   Map<String, BlockedPeer> blockedPeers;
 
+  /// True once the user has backed up (or explicitly dismissed the prompt to
+  /// back up) this account's recovery phrase (APP-01). Drives the one-time
+  /// post-setup backup nudge on the chat list; set for a *recovered* account
+  /// from the start, since the user already holds the phrase.
+  bool recoveryBackupDone;
+
   DeviceCredentials get credentials =>
       DeviceCredentials(deviceId: deviceId, devicePriv: devicePriv);
 
@@ -211,6 +219,7 @@ class AppState {
     if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
     if (blockedPeers.isNotEmpty)
       'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),
+    if (recoveryBackupDone) 'recovery_backup_done': true,
   };
 }
 
