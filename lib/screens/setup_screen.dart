@@ -61,6 +61,11 @@ class _SetupScreenState extends State<SetupScreen> {
   final _seedController = TextEditingController();
 
   _WizardStep _step = _WizardStep.address;
+
+  /// The post-connect step recovery was launched from, so backing out of the
+  /// recovery step returns there (keeping the verified server) rather than all
+  /// the way to the address entry.
+  _WizardStep _recoverReturnStep = _WizardStep.address;
   String? _server;
   bool _submitting = false;
   String? _error;
@@ -89,22 +94,35 @@ class _SetupScreenState extends State<SetupScreen> {
     });
   }
 
-  /// Switches to the recovery step (APP-01): the user already has an account
-  /// on this server and wants to restore it from its seed phrase. Unlike
-  /// _checkServer, this deliberately does NOT warn about a duplicate server or
-  /// probe the registration policy -- recovery reattaches to an *existing*
-  /// account and works regardless of whether registration is open or closed.
+  /// Switches to the recovery step (APP-01) from the post-connect step: the
+  /// server has already been verified by _checkServer and stored in _server,
+  /// so recovery is just one more option alongside register/bootstrap. Works
+  /// regardless of the server's registration policy (open/invite/closed) --
+  /// recovery reattaches to an account that already exists, and the server's
+  /// recovery endpoint (SRV-06) doesn't gate on the policy, so it's offered
+  /// even on a server with registration blocked.
   void _startRecover() {
-    final input = _serverController.text.trim();
-    if (input.isEmpty) {
-      setState(() => _error = 'Server address is required');
-      return;
-    }
+    if (_server == null) return;
     setState(() {
-      _server = normalizeServerUrl(input);
+      _recoverReturnStep = _step;
       _error = null;
       _step = _WizardStep.recover;
     });
+  }
+
+  /// Back navigation: from the recovery step, return to the post-connect step
+  /// it was launched from (keeping the verified server); otherwise reset to
+  /// the address entry.
+  void _handleBack() {
+    if (_step == _WizardStep.recover) {
+      setState(() {
+        _step = _recoverReturnStep;
+        _error = null;
+        _seedController.clear();
+      });
+      return;
+    }
+    _goToAddressStep();
   }
 
   /// Fills the seed field from a scanned recovery-phrase QR (as produced by
@@ -437,11 +455,6 @@ class _SetupScreenState extends State<SetupScreen> {
                 )
               : const Text('Continue'),
         ),
-        const SizedBox(height: 8),
-        TextButton(
-          onPressed: _submitting ? null : _startRecover,
-          child: const Text('Recover an existing account'),
-        ),
       ],
     );
   }
@@ -572,6 +585,14 @@ class _SetupScreenState extends State<SetupScreen> {
                   )
                 : Text(buttonLabel),
           ),
+        // Recovery is offered here regardless of registration policy -- even a
+        // server with registration blocked can still recover an existing
+        // account (the server's recovery endpoint doesn't gate on the policy).
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _submitting ? null : _startRecover,
+          child: const Text('Recover an existing account'),
+        ),
       ],
     );
   }
@@ -582,7 +603,7 @@ class _SetupScreenState extends State<SetupScreen> {
     return PopScope(
       canPop: onAddressStep,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) _goToAddressStep();
+        if (!didPop) _handleBack();
       },
       child: Scaffold(
         appBar: AppBar(
@@ -593,7 +614,7 @@ class _SetupScreenState extends State<SetupScreen> {
               ? null
               : IconButton(
                   icon: const Icon(Icons.arrow_back),
-                  onPressed: _goToAddressStep,
+                  onPressed: _handleBack,
                 ),
         ),
         body: Padding(
