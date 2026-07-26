@@ -1113,6 +1113,25 @@ class AppSession extends ChangeNotifier {
     }
     final normalized = parsed.idOrPrefix;
 
+    // Self-chat guard: messaging your own id resolves to your own device and
+    // breaks X3DH/the ratchet (you'd be establishing a session with yourself),
+    // so refuse it up front. A full id is your key's global identity, so match
+    // it regardless of server; a short prefix only identifies an account
+    // within a server, so only count a prefix match as "self" when the address
+    // targets your own server.
+    final ownServer =
+        parsed.server == null || sameServer(parsed.server!, state.server);
+    final isSelf =
+        normalized == state.accountId ||
+        (ownServer &&
+            normalized.length == accountIdPrefixLength &&
+            state.accountId.startsWith(normalized));
+    if (isSelf) {
+      throw StateError(
+        "That's your own address -- you can't start a chat with yourself.",
+      );
+    }
+
     final existing = state.conversations[normalized];
     if (existing != null &&
         existing.peerDeviceId != null &&
