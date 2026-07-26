@@ -178,6 +178,19 @@ class _SetupScreenState extends State<SetupScreen> {
 
       if (!mounted) return;
       if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+    } on ApiException catch (e) {
+      setState(() {
+        // A 404 from the recovery endpoint means no account for this phrase
+        // exists on this server -- recovery only re-attaches a device to an
+        // account that still exists, so a deleted account can't be restored.
+        _error = e.statusCode == 404
+            ? 'No account for this recovery phrase exists on this server. '
+                  'If the account was deleted it cannot be restored. If you '
+                  'are recovering after losing a device, check that the server '
+                  'address is correct.'
+            : describeError(e);
+        _submitting = false;
+      });
     } catch (e) {
       setState(() {
         _error = describeError(e);
