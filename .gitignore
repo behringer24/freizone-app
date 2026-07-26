@@ -65,3 +65,7 @@ gfx/*_files/
 
 # Personal Claude Code workflow notes -- not part of the public project.
 CLAUDE.md
+
+# Local, machine-specific VS Code build/deploy tasks -- not part of the
+# public project (paths and device targets are personal).
+.vscode/tasks.json
