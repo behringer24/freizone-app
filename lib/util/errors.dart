@@ -23,5 +23,9 @@ String describeError(Object e) {
       e is TimeoutException) {
     return 'Server not reachable. Check the server address and your connection.';
   }
+  // StateError carries an already user-facing message (e.g. the self-chat and
+  // federation-disabled guards in AppSession.startConversation) -- show it
+  // directly rather than Dart's "Bad state: ..." toString() prefix.
+  if (e is StateError) return e.message;
   return '$e';
 }
