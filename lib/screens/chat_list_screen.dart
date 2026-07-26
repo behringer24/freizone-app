@@ -232,6 +232,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
             onPressed: () => Navigator.of(context).pop('delete'),
             child: const Text('Delete chat'),
           ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(context).pop('reset'),
+            child: const Text('Reset secure session'),
+          ),
         ],
       ),
     );
@@ -284,6 +288,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
       );
       if (confirmed == true)
         await session.deleteConversation(convo.peerAccountId);
+    } else if (action == 'reset') {
+      await confirmAndResetSession(context, session, convo);
     }
   }
 

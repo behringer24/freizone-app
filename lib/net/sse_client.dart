@@ -23,6 +23,11 @@ class SseClient {
   StreamSubscription<String>? _lineSub;
   http.Client? _streamHttp;
 
+  /// Whether the current/last connect attempt actually came up (reached the
+  /// stream) before it ended -- lets [connect] tell "connected then dropped"
+  /// (reconnect promptly) apart from "never connected" (back off).
+  bool _attemptEstablished = false;
+
   /// Opens the stream and calls [onMessage] for every message received.
   /// Reconnects automatically on any failure or disconnect, calling
   /// [onError] (if given) first, until [close] is called. Runs until
@@ -31,14 +36,15 @@ class SseClient {
   /// (re)connect -- e.g. AppSession uses it to re-check its one-time-prekey
   /// pool on every reconnect, not just app launch.
   ///
-  /// Retries use exponential backoff between [initialRetryDelay] and
-  /// [maxRetryDelay] with ±20% jitter, so an offline home server is probed
-  /// ever less aggressively (instead of hammered every 3s) yet still
-  /// recovers within [maxRetryDelay] once it returns -- resetting to
-  /// [initialRetryDelay] after any connection that actually established.
-  /// [connectTimeout] bounds a single connect attempt so a dead-but-routed
-  /// host surfaces as unreachable in seconds rather than after the OS-level
-  /// TCP timeout.
+  /// Attempts that never come up retry with exponential backoff between
+  /// [initialRetryDelay] and [maxRetryDelay] (±20% jitter), so an offline home
+  /// server is probed ever less aggressively (instead of hammered every 3s)
+  /// yet still recovers within [maxRetryDelay] once it returns. A connection
+  /// that *did* come up and then dropped (a background resume, a brief blip)
+  /// instead reconnects after just [quickRetryDelay] with the backoff reset,
+  /// so a healthy link recovers in well under a second. [connectTimeout]
+  /// bounds a single connect attempt so a dead-but-routed host surfaces as
+  /// unreachable in seconds rather than after the OS-level TCP timeout.
   Future<void> connect({
     required void Function(MessageResponse message) onMessage,
     void Function(Object error)? onError,
@@ -46,6 +52,7 @@ class SseClient {
     Duration initialRetryDelay = const Duration(seconds: 3),
     Duration maxRetryDelay = const Duration(seconds: 30),
     Duration connectTimeout = const Duration(seconds: 10),
+    Duration quickRetryDelay = const Duration(milliseconds: 500),
   }) async {
     _closed = false;
     final rand = Random();
@@ -53,21 +60,29 @@ class SseClient {
     while (!_closed) {
       try {
         await _connectOnce(onMessage, onConnected, connectTimeout);
-        // Established (then disconnected) -- next retry starts fresh.
-        delay = initialRetryDelay;
       } catch (e) {
         if (_closed) return;
         onError?.call(e);
       }
       if (_closed) return;
-      // ±20% jitter so many sessions whose shared server just dropped
-      // don't reconnect in lockstep.
-      final ms = delay.inMilliseconds;
-      final jittered = (ms * (0.8 + rand.nextDouble() * 0.4)).round();
-      await Future.delayed(Duration(milliseconds: jittered));
-      delay = Duration(
-        milliseconds: min(ms * 2, maxRetryDelay.inMilliseconds),
-      );
+      if (_attemptEstablished) {
+        // Came up and then dropped (resume from background, brief blip):
+        // reconnect almost immediately and reset the backoff, so a healthy
+        // link recovers in well under a second rather than after the full
+        // retry delay.
+        delay = initialRetryDelay;
+        await Future.delayed(quickRetryDelay);
+      } else {
+        // Never came up this attempt (server down/unreachable): back off,
+        // with ±20% jitter so sessions sharing a server don't reconnect in
+        // lockstep.
+        final ms = delay.inMilliseconds;
+        final jittered = (ms * (0.8 + rand.nextDouble() * 0.4)).round();
+        await Future.delayed(Duration(milliseconds: jittered));
+        delay = Duration(
+          milliseconds: min(ms * 2, maxRetryDelay.inMilliseconds),
+        );
+      }
     }
   }
 
@@ -76,6 +91,7 @@ class SseClient {
     void Function()? onConnected,
     Duration connectTimeout,
   ) async {
+    _attemptEstablished = false;
     final httpClient = http.Client();
     _streamHttp = httpClient;
     try {
@@ -87,6 +103,7 @@ class SseClient {
         throw ApiException(streamed.statusCode, null, body);
       }
       onConnected?.call();
+      _attemptEstablished = true;
 
       final lines = streamed.stream
           .transform(utf8.decoder)

@@ -8,6 +8,18 @@ import '../ffi/models.dart';
 import '../util/freizone_address.dart';
 import 'message_content.dart';
 
+/// What kind of transcript line a [StoredMessage] is. [normal] is an ordinary
+/// chat message (rendered as a bubble); [systemInfo] is a local, non-encrypted
+/// info line rendered centered (e.g. "Secure session was reset"), never
+/// transmitted.
+enum StoredMessageKind { normal, systemInfo }
+
+StoredMessageKind _storedMessageKindFromJson(String? v) =>
+    StoredMessageKind.values.firstWhere(
+      (k) => k.name == v,
+      orElse: () => StoredMessageKind.normal,
+    );
+
 /// One decrypted (or about-to-be-sent) chat line, persisted locally --
 /// the server never stores plaintext or keeps history. [id] identifies
 /// this message for replies/delete/pin; messages from before those
@@ -25,7 +37,19 @@ class StoredMessage {
     this.replyToId,
     this.replyPreviewText,
     this.replyPreviewMine,
+    this.kind = StoredMessageKind.normal,
   }) : id = id ?? generateMessageId();
+
+  /// A local, non-encrypted info line shown centered in the transcript
+  /// (e.g. "Secure session was reset"). Never transmitted; see
+  /// chat_screen.dart's _SystemMessage renderer.
+  factory StoredMessage.system(String text, DateTime timestamp) =>
+      StoredMessage(
+        text: text,
+        mine: false,
+        timestamp: timestamp,
+        kind: StoredMessageKind.systemInfo,
+      );
 
   factory StoredMessage.fromJson(Map<String, dynamic> j) => StoredMessage(
     id: j['id'] as String? ?? generateMessageId(),
@@ -38,6 +62,7 @@ class StoredMessage {
     replyToId: j['reply_to_id'] as String?,
     replyPreviewText: j['reply_preview_text'] as String?,
     replyPreviewMine: j['reply_preview_mine'] as bool?,
+    kind: _storedMessageKindFromJson(j['kind'] as String?),
   );
 
   Map<String, dynamic> toJson() => {
@@ -49,12 +74,17 @@ class StoredMessage {
     if (replyToId != null) 'reply_to_id': replyToId,
     if (replyPreviewText != null) 'reply_preview_text': replyPreviewText,
     if (replyPreviewMine != null) 'reply_preview_mine': replyPreviewMine,
+    if (kind != StoredMessageKind.normal) 'kind': kind.name,
   };
 
   final String id;
   final String text;
   final bool mine;
   final DateTime timestamp;
+
+  /// Whether this is an ordinary chat message or a local system/info line
+  /// (see [StoredMessageKind]).
+  final StoredMessageKind kind;
 
   /// For a RECEIVED message: the sender's own clock reading at send time,
   /// carried inside the encrypted content (message_content.dart's sentAt)

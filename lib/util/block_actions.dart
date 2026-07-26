@@ -41,3 +41,38 @@ Future<void> confirmAndBlock(
     await session.setBlocked(convo.peerAccountId, true);
   }
 }
+
+/// Shared "reset secure session" confirmation -- used from
+/// peer_profile_screen.dart's Protection section and chat_list_screen.dart's
+/// long-press chat options. A recovery action (not destructive), so it uses
+/// default button styling rather than the error color.
+Future<void> confirmAndResetSession(
+  BuildContext context,
+  AppSession session,
+  Conversation convo,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Reset secure session?'),
+      content: Text(
+        'Use this only if messages with ${convo.titleFor(session.state.server)} have '
+        'stopped arriving or can no longer be read. Your next message re-establishes '
+        'encryption. Message history is kept, and the other side is not notified.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Reset'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed == true) {
+    await session.resetSecureSession(convo.peerAccountId);
+  }
+}

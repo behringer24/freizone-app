@@ -234,6 +234,38 @@ class PeerProfileScreen extends StatelessWidget {
                         label: const Text('Block this contact'),
                       ),
               ),
+              const SizedBox(height: 24),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  'Encryption',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  'If messages with this contact stop arriving or can no longer be read, the '
+                  'secure session may be out of sync. Resetting re-establishes encryption on your '
+                  'next message -- history is kept and the other side is not notified.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: OutlinedButton.icon(
+                  onPressed: () =>
+                      confirmAndResetSession(context, session, convo),
+                  icon: const Icon(Icons.lock_reset),
+                  label: const Text('Reset secure session'),
+                ),
+              ),
             ],
           ),
         );

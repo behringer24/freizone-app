@@ -90,32 +90,83 @@ Future<IncomingMessageResult?> processIncomingMessage(
   String? openConversationPeerId,
 }) async {
   final parsed = core.parseEnvelope(msg.payload);
+  final initial = parsed.initial;
 
-  var session = state.sessions[msg.senderAccountId];
-  if (session == null) {
-    final initial = parsed.initial;
-    if (initial == null) return null; // no way to start a session -- drop.
-
-    Uint8List? otpkPriv;
+  // Any one-time prekey the initial references -- looked up but NOT consumed
+  // yet, so a failed responder attempt (a duplicate/redelivered or stale
+  // initial) never burns a prekey. Consumed only once a responder session
+  // built from it actually decrypts this envelope (see below).
+  int? consumeOtpkId;
+  Uint8List? otpkPriv;
+  if (initial != null) {
     final otpkId = initial.oneTimePrekeyId;
     if (otpkId != null && state.oneTimePrekeys.containsKey(otpkId)) {
+      consumeOtpkId = otpkId;
       otpkPriv = state.oneTimePrekeys[otpkId]!.priv;
-      state.oneTimePrekeys.remove(otpkId);
     }
+  }
+
+  var session = state.sessions[msg.senderAccountId];
+  DecryptResult? dec;
+  var usedResponder = false; // adopted a fresh responder session (X3DH)
+  var didRekey = false; // ...replacing an existing one (the peer reset theirs)
+
+  if (session == null) {
+    // First contact: an initial is required to establish a responder session.
+    if (initial == null) return null; // no way to start a session -- drop.
     session = core.respondToSession(
       localDhIdentityPriv: state.dhIdentityPriv!,
       signedPrekeyPriv: state.signedPrekeyPriv!,
       oneTimePrekeyPriv: otpkPriv,
       initial: initial,
     );
+    dec = core.sessionDecrypt(
+      session: session,
+      header: parsed.header,
+      ciphertext: parsed.ciphertext,
+    ); // may throw -> propagates to _handleIncoming's catch
+    usedResponder = true;
+  } else if (initial != null) {
+    // A session already exists yet the peer sent a fresh X3DH initial: they
+    // reset their secure session (see resetSecureSession) and re-keyed.
+    // Accept it -- build a fresh responder session and adopt it ONLY if it
+    // actually decrypts this envelope. The core's session calls are pure, so
+    // a failed attempt leaves the live session intact; fall back to it for a
+    // merely-redelivered initial whose real session is still the current one.
+    try {
+      final fresh = core.respondToSession(
+        localDhIdentityPriv: state.dhIdentityPriv!,
+        signedPrekeyPriv: state.signedPrekeyPriv!,
+        oneTimePrekeyPriv: otpkPriv,
+        initial: initial,
+      );
+      dec = core.sessionDecrypt(
+        session: fresh,
+        header: parsed.header,
+        ciphertext: parsed.ciphertext,
+      );
+      session = fresh;
+      usedResponder = true;
+      didRekey = true;
+    } catch (_) {
+      dec = null; // not a genuine re-key for us -- fall back below.
+    }
   }
 
-  final dec = core.sessionDecrypt(
-    session: session,
+  // Ongoing message, or the re-key attempt didn't apply: decrypt with the
+  // existing session.
+  dec ??= core.sessionDecrypt(
+    session: session!,
     header: parsed.header,
     ciphertext: parsed.ciphertext,
-  );
+  ); // may throw -> propagates
+
   state.sessions[msg.senderAccountId] = dec.session;
+  // A one-time prekey is consumed only now that a responder session built
+  // from the initial has successfully decrypted -- never on a failed attempt.
+  if (usedResponder && consumeOtpkId != null) {
+    state.oneTimePrekeys.remove(consumeOtpkId);
+  }
 
   final receipt = ReceiptSignal.tryDecode(dec.plaintext);
   if (receipt != null) {
@@ -189,6 +240,15 @@ Future<IncomingMessageResult?> processIncomingMessage(
   // the caller) but dropped here rather than stored or notified -- see
   // setBlocked.
   if (!convo.blocked) {
+    // The peer reset their secure session and we accepted the re-key above:
+    // mark it in the transcript, just before the first recovered message, so
+    // the recovery is visible on this side too (the resetting side shows its
+    // own marker via resetSecureSession).
+    if (didRekey) {
+      convo.messages.add(
+        StoredMessage.system('Secure session was reset', now),
+      );
+    }
     convo.messages.add(
       StoredMessage(
         id: content.id,
@@ -389,6 +449,13 @@ class AppSession extends ChangeNotifier {
   /// back, the next reconnect flips this to [online] and the UI follows.
   ServerReachability reachability = ServerReachability.connecting;
 
+  /// How long a dropped-but-previously-online connection may spend
+  /// reconnecting before the UI is told the server is [unreachable]. Covers
+  /// the sub-second reconnect after a background resume or a brief blip (see
+  /// SseClient's quick retry) without flickering the whole account grey.
+  static const _reachabilityGrace = Duration(seconds: 2);
+  Timer? _reachabilityGraceTimer;
+
   /// Result of the most recent push registration (see push_manager). The
   /// chat-list one-time hint uses this to tell "pick a distributor" apart
   /// from "nothing available".
@@ -553,7 +620,14 @@ class AppSession extends ChangeNotifier {
   Future<void> setForeground(bool value) async {
     if (_appInForeground == value) return;
     _appInForeground = value;
-    if (!value) return;
+    if (!value) {
+      // Cancel any pending reachability grace: Android freezes us while
+      // backgrounded, so a timer armed now would fire the instant we resume
+      // and flash the account grey. Reachability is re-evaluated on resume.
+      _reachabilityGraceTimer?.cancel();
+      _reachabilityGraceTimer = null;
+      return;
+    }
     await _reloadVolatileStateFromDisk();
     if (_openConversationPeerId != null) {
       unawaited(enterConversation(_openConversationPeerId!));
@@ -747,19 +821,63 @@ class AppSession extends ChangeNotifier {
     await LocalStateStore.saveProfile(state);
   }
 
+  /// The stream dropped or a reconnect attempt failed. Don't flip straight to
+  /// [ServerReachability.unreachable] (which greys the account in the UI) when
+  /// we were online: a resume from background or a brief blip reconnects in
+  /// well under a second (see SseClient's quick retry), and greying the whole
+  /// account for that is just noise. A drop from [online] sits in [connecting]
+  /// (visually identical to online) and only escalates to [unreachable] after
+  /// [_reachabilityGrace] with no reconnect. A failure while never-online
+  /// (cold start) or already-offline surfaces immediately -- the connect /
+  /// request timeout was the wait there.
+  void _markStreamDropped() {
+    if (!_appInForeground) {
+      // Backgrounded: the UI is hidden and Android will freeze us, so a grace
+      // timer armed now would fire the instant we resume and flash the
+      // account grey. Just drop the "confirmed online" claim (still visually
+      // like online); resume re-evaluates from scratch via the reconnect.
+      if (reachability == ServerReachability.online) {
+        reachability = ServerReachability.connecting;
+      }
+      return;
+    }
+    if (reachability == ServerReachability.unreachable) return; // already off
+    if (_reachabilityGraceTimer != null) return; // grace already deciding
+    // First drop while in the foreground: stay visually online for the grace
+    // window and only escalate to `unreachable` if nothing reconnects within
+    // it. A background resume reconnects in well under a second (SseClient's
+    // quick retry), so the grey never shows.
+    reachability = ServerReachability.connecting;
+    _reachabilityGraceTimer = Timer(_reachabilityGrace, () {
+      _reachabilityGraceTimer = null;
+      reachability = ServerReachability.unreachable;
+      notifyListeners();
+    });
+  }
+
+  /// A (re)connect succeeded: cancel any pending grace escalation and go
+  /// online. (online == connecting visually, so this only actually redraws
+  /// when coming back from [unreachable].)
+  void _markStreamConnected() {
+    _reachabilityGraceTimer?.cancel();
+    _reachabilityGraceTimer = null;
+    if (reachability != ServerReachability.online) {
+      reachability = ServerReachability.online;
+      notifyListeners();
+    }
+  }
+
   void _startStream() {
     _sse = SseClient(apiClient: api, creds: state.credentials);
     unawaited(
       _sse!.connect(
         onMessage: _handleIncoming,
         onError: (e) {
-          reachability = ServerReachability.unreachable;
           lastError = 'stream error: $e';
-          notifyListeners();
+          _markStreamDropped();
         },
         onConnected: () {
-          reachability = ServerReachability.online;
-          notifyListeners();
+          _markStreamConnected();
           unawaited(topUpOneTimePrekeysIfNeeded(state, core, api));
           // Re-register push on every (re)connect: a server that was down at
           // startup (or when the endpoint first arrived) never got this
@@ -771,6 +889,14 @@ class AppSession extends ChangeNotifier {
       ),
     );
   }
+
+  /// Per-message decrypt-failure counter (in memory). An envelope that can't
+  /// be decrypted (e.g. an old-chain message left over after a secure-session
+  /// reset) fails deterministically every time and would otherwise be
+  /// re-fetched and re-fail on every reconnect, clogging the queue. After
+  /// [_maxDecryptAttempts] failures it is dropped from the server queue.
+  final Map<String, int> _decryptFailures = {};
+  static const _maxDecryptAttempts = 3;
 
   Future<void> _handleIncoming(MessageResponse msg) async {
     try {
@@ -842,10 +968,24 @@ class AppSession extends ChangeNotifier {
 
       await LocalStateStore.saveProfile(state);
       unawaited(api.deleteMessage(msg.messageId, state.credentials));
+      _decryptFailures.remove(msg.messageId);
 
       lastError = null;
       notifyListeners();
     } catch (e) {
+      // A decrypt failure is deterministic (same session + ciphertext fails
+      // identically), so a poison envelope -- e.g. an old-chain message left
+      // over after a secure-session reset -- would re-fetch and re-fail on
+      // every reconnect forever. After a few attempts drop it from the server
+      // queue so it stops clogging; the counter is in memory, so a restart
+      // simply grants a few more attempts (still bounded).
+      final attempts = (_decryptFailures[msg.messageId] ?? 0) + 1;
+      if (attempts >= _maxDecryptAttempts) {
+        _decryptFailures.remove(msg.messageId);
+        unawaited(api.deleteMessage(msg.messageId, state.credentials));
+      } else {
+        _decryptFailures[msg.messageId] = attempts;
+      }
       lastError = 'decrypt error: $e';
       notifyListeners();
     }
@@ -1085,6 +1225,31 @@ class AppSession extends ChangeNotifier {
     await LocalStateStore.saveProfile(state);
     if (removed.hasUnread && !hasAnyUnread)
       unawaited(clearMessageNotification(state.accountId));
+    notifyListeners();
+  }
+
+  /// Discards the ratchet session with [peerAccountId] so the NEXT outgoing
+  /// message re-runs X3DH as initiator (see [_getOrCreateCryptoSession]) and
+  /// carries a fresh `initial` -- which the peer's receive path now accepts to
+  /// replace their stale session (see processIncomingMessage). Recovers a
+  /// conversation whose Double Ratchet has desynced (messages silently fail to
+  /// decrypt). Purely local: the conversation, its history and the
+  /// known/blocked status are all kept, and the peer is not told; a local
+  /// system marker is added to the transcript for transparency. Recovery
+  /// completes when the next real message is sent (nothing is auto-sent).
+  Future<void> resetSecureSession(String peerAccountId) async {
+    await _withPeerSessionLock(peerAccountId, () async {
+      state.sessions.remove(peerAccountId);
+    });
+    final convo = state.conversations[peerAccountId];
+    if (convo != null) {
+      final now = DateTime.now().toUtc();
+      convo.messages.add(
+        StoredMessage.system('Secure session was reset', now),
+      );
+      convo.lastActivityAt = now;
+    }
+    await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
 
@@ -1404,6 +1569,7 @@ class AppSession extends ChangeNotifier {
 
   @override
   void dispose() {
+    _reachabilityGraceTimer?.cancel();
     _sse?.close();
     api.close();
     for (final client in _peerApiClients.values) {

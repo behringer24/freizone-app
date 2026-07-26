@@ -225,6 +225,12 @@ class _ChatScreenState extends State<ChatScreen> {
         items.add(_DateDivider(label: _dayLabel(day)));
         lastDay = day;
       }
+      if (m.kind == StoredMessageKind.systemInfo) {
+        // Local, non-encrypted info line (e.g. "Secure session was reset") --
+        // centered, no bubble, no delivery status, not pin/long-press eligible.
+        items.add(_SystemMessage(label: m.text));
+        continue;
+      }
       items.add(
         _MessageBubble(
           key: _keyFor(m.id),
@@ -676,6 +682,51 @@ class _DateDivider extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
           ),
           child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ),
+    );
+  }
+}
+
+/// A centered, non-bubble transcript line for a local system/info message
+/// (see StoredMessageKind.systemInfo) -- e.g. "Secure session was reset".
+class _SystemMessage extends StatelessWidget {
+  const _SystemMessage({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 24),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.lock_reset,
+                size: 14,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
