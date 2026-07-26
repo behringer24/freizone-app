@@ -21,6 +21,7 @@ import (
 	"github.com/behringer24/freizone-server/pkg/address"
 	"github.com/behringer24/freizone-server/pkg/devicecert"
 	"github.com/behringer24/freizone-server/pkg/httpsig"
+	"github.com/behringer24/freizone-server/pkg/mnemonic"
 	"github.com/behringer24/freizone-server/pkg/ratchet"
 	"github.com/behringer24/freizone-server/pkg/wire"
 )
@@ -435,4 +436,81 @@ func doSignHTTPRequest(req signHTTPRequestRequest) (any, error) {
 		httpsig.HeaderNonce:     nonce,
 		httpsig.HeaderSignature: sig,
 	}}, nil
+}
+
+// --- Recovery seed phrase (APP-01) -----------------------------------------
+
+type revealRecoveryPhraseRequest struct {
+	RootPriv ed25519.PrivateKey `json:"root_priv"`
+}
+
+type recoveryPhraseResponse struct {
+	Words []string `json:"words"`
+}
+
+// doRevealRecoveryPhrase turns the account's Ed25519 root private key into its
+// 24-word BIP-39 backup phrase. The phrase encodes only the 32-byte key seed
+// (an Ed25519 private key is seed||pub), which is all that is needed to rebuild
+// the identity -- account_id == hash(root_pubkey), so the same seed restores
+// the same account id and short id.
+func doRevealRecoveryPhrase(req revealRecoveryPhraseRequest) (any, error) {
+	if len(req.RootPriv) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("root_priv must be %d bytes, got %d", ed25519.PrivateKeySize, len(req.RootPriv))
+	}
+	words, err := mnemonic.Encode(req.RootPriv.Seed())
+	if err != nil {
+		return nil, err
+	}
+	return recoveryPhraseResponse{Words: words}, nil
+}
+
+type restoreIdentityFromSeedRequest struct {
+	Words []string `json:"words"`
+}
+
+// doRestoreIdentityFromSeed rebuilds an identity from a 24-word recovery
+// phrase: it restores the exact same root key (and therefore the same account
+// id) and mints a *fresh* device keypair, since the phrase carries the root
+// key only. Returns the same shape as doGenerateIdentity so the caller's
+// registration/recovery path is identical. A malformed phrase (unknown word or
+// bad checksum) surfaces as a call error.
+func doRestoreIdentityFromSeed(req restoreIdentityFromSeedRequest) (any, error) {
+	seed, err := mnemonic.Decode(req.Words)
+	if err != nil {
+		return nil, err
+	}
+	rootPriv := ed25519.NewKeyFromSeed(seed)
+	rootPub := rootPriv.Public().(ed25519.PublicKey)
+
+	devicePub, devicePriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating device key: %w", err)
+	}
+	deviceID, err := devicecert.NewDeviceID()
+	if err != nil {
+		return nil, err
+	}
+	accountID, err := address.DeriveID(rootPub)
+	if err != nil {
+		return nil, fmt.Errorf("deriving account id: %w", err)
+	}
+
+	return &generateIdentityResponse{
+		AccountID:  accountID,
+		RootPub:    rootPub,
+		RootPriv:   rootPriv,
+		DeviceID:   deviceID,
+		DevicePub:  devicePub,
+		DevicePriv: devicePriv,
+	}, nil
+}
+
+type recoveryWordlistResponse struct {
+	Words []string `json:"words"`
+}
+
+// doRecoveryWordlist returns the full BIP-39 English wordlist so the client can
+// drive recovery-phrase autocomplete and per-word validation entirely offline.
+func doRecoveryWordlist() (*recoveryWordlistResponse, error) {
+	return &recoveryWordlistResponse{Words: mnemonic.Wordlist()}, nil
 }

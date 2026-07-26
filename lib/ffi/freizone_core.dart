@@ -242,6 +242,29 @@ class FreizoneCore {
     );
   }
 
+  // --- Recovery seed phrase (APP-01) ---------------------------------------
+
+  /// Reveals the 24-word BIP-39 backup phrase for an account's root key.
+  /// Anyone with this phrase can restore (and thus control) the account.
+  List<String> revealRecoveryPhrase(Uint8List rootPriv) {
+    final data = _call(_bindings.revealRecoveryPhrase, {
+      'root_priv': encodeB64(rootPriv),
+    });
+    return (data['words'] as List).cast<String>();
+  }
+
+  /// Rebuilds an identity from a 24-word recovery phrase: the same root key
+  /// (hence the same account id and short id) plus a *fresh* device keypair.
+  /// Throws [FreizoneCoreException] if the phrase has an unknown word or a
+  /// bad checksum.
+  Identity restoreIdentityFromSeed(List<String> words) =>
+      Identity.fromJson(_call(_bindings.restoreIdentityFromSeed, {'words': words}));
+
+  /// The full BIP-39 English wordlist (2048 words), for driving recovery-phrase
+  /// autocomplete and per-word validation entirely offline.
+  List<String> recoveryWordlist() =>
+      (_callNoArg(_bindings.recoveryWordlist)['words'] as List).cast<String>();
+
   // --- boilerplate ---------------------------------------------------------
 
   Map<String, dynamic> _callNoArg(Pointer<Utf8> Function() fn) =>

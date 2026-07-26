@@ -1623,6 +1623,16 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Records that the user has dealt with the recovery-phrase backup prompt
+  /// (either backed the phrase up or dismissed the nudge), so the one-time
+  /// post-setup nudge on the chat list stops showing for this account.
+  Future<void> markRecoveryBackupDone() async {
+    if (state.recoveryBackupDone) return;
+    state.recoveryBackupDone = true;
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+  }
+
   String _randomHex(int byteLen) {
     final rnd = Random.secure();
     final buf = StringBuffer();

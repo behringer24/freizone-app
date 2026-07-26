@@ -211,6 +211,41 @@ class ApiClient {
     return AccountResponse.fromJson(_decodeObject(resp, {200}));
   }
 
+  /// Recovers an existing account after total device loss (APP-01 / SRV-06):
+  /// attaches [cert]'s freshly minted device to [identity]'s account,
+  /// authenticated by a **root-key** signature (Signature-Key-Id =
+  /// base64(root_pubkey)) rather than a device key -- recovery happens
+  /// precisely when no device survives. On success the server marks the new
+  /// device active and revokes every previous device. [identity] must be the
+  /// one produced by `core.restoreIdentityFromSeed` (same account id, fresh
+  /// device keypair). See docs/PROTOCOL.md §3's self-describing-key variant.
+  Future<AccountResponse> recoverAccount({
+    required Identity identity,
+    required DeviceCertificate cert,
+  }) async {
+    final path = '/v1/accounts/${identity.accountId}/recover';
+    final body = {
+      'device_id': identity.deviceId,
+      'device_pubkey': encodeB64(identity.devicePub),
+      'device_cert_issued_at': encodeTime(cert.issuedAt),
+      'device_cert_signature': encodeB64(cert.signature),
+    };
+    final bodyBytes = Uint8List.fromList(utf8.encode(json.encode(body)));
+    final headers = core.signHTTPRequest(
+      method: 'POST',
+      path: path,
+      body: bodyBytes,
+      deviceId: encodeB64(identity.rootPub),
+      devicePriv: identity.rootPriv,
+    );
+    final req = http.Request('POST', _uri(path));
+    req.headers['Content-Type'] = 'application/json';
+    headers.forEach((key, value) => req.headers[key] = value);
+    req.bodyBytes = bodyBytes;
+    final resp = await _send(req);
+    return AccountResponse.fromJson(_decodeObject(resp, {201}));
+  }
+
   // --- Push -------------------------------------------------------------------
 
   /// Returns this server's VAPID public key (not secret) -- pass this to
