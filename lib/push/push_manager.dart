@@ -41,13 +41,6 @@ import 'notification_navigation.dart';
 
 const _messagesChannelId = 'freizone_messages';
 
-/// Fixed id for the generic FCM wake notification -- unlike UnifiedPush's
-/// per-account notifications (see _notificationIdFor), FCM issues one
-/// token per app install, not per account, so a wake can't be attributed
-/// to a specific account (see registerForPush's doc comment). One shared
-/// notification for "something needs syncing" is the honest UI for that.
-const _fcmNotificationId = 0x46434d; // 'FCM' in hex, arbitrary but stable
-
 final FlutterLocalNotificationsPlugin _notifications =
     FlutterLocalNotificationsPlugin();
 
@@ -283,29 +276,37 @@ Future<void> _onFcmMessage(RemoteMessage message) async {
 /// decrypt whatever's actually queued, top up prekeys if needed, and
 /// only then decide whether to show anything. [instance], when known
 /// (UnifiedPush always provides one), limits the sync to that one
-/// account; null (FCM, which can't attribute a wake to a specific
-/// account -- see registerForPush's doc comment) syncs every locally
-/// stored profile instead, same iteration pattern as
+/// account; null (FCM, whose one-token-per-install model can't attribute
+/// the *wake* to a specific account -- see registerForPush's doc comment)
+/// syncs every locally stored profile instead, same iteration pattern as
 /// _onFcmTokenRefresh.
+///
+/// Either way the notification itself is per-account: FCM's missing
+/// attribution applies only to the incoming wake, and by the time a
+/// profile has been synced we know exactly which account received what.
+/// So both paths notify identically, naming the account and carrying the
+/// peer id for tap-navigation -- an FCM wake for several accounts at once
+/// simply produces one notification each (distinct ids, see
+/// _notificationIdFor), rather than a single unattributed "New message(s)".
 Future<void> _syncAndMaybeNotify(String? instance) async {
+  final List<AppState> profiles;
   if (instance != null) {
     final state = await LocalStateStore.loadProfile(instance);
     if (state == null) return;
-    final peerAccountId = await _syncProfile(state);
-    if (peerAccountId != null) {
-      await showMessageNotification(instance, peerAccountId: peerAccountId);
-    }
-    return;
+    profiles = [state];
+  } else {
+    profiles = await LocalStateStore.listProfiles();
   }
 
-  // No per-account attribution possible here (see above) -- one shared
-  // notification if ANY profile turned up a genuine message, same as
-  // before this rework, just now actually confirmed rather than assumed.
-  var anyGenuine = false;
-  for (final state in await LocalStateStore.listProfiles()) {
-    if (await _syncProfile(state) != null) anyGenuine = true;
+  for (final state in profiles) {
+    final peerAccountId = await _syncProfile(state);
+    if (peerAccountId != null) {
+      await showMessageNotification(
+        state.accountId,
+        peerAccountId: peerAccountId,
+      );
+    }
   }
-  if (anyGenuine) await showGenericWakeNotification();
 }
 
 /// Runs the same decrypt-and-store logic as AppSession._handleIncoming,
@@ -423,14 +424,6 @@ Future<void> showMessageNotification(
     ),
   );
 }
-
-/// The FCM counterpart to [showMessageNotification]: shown when a wake
-/// arrives with no way to know which account it was for (see
-/// registerForPush's doc comment on FCM's one-token-per-install model),
-/// so the text can't name a specific account the way UnifiedPush's can --
-/// nor, therefore, is there anything to encode into a tap payload.
-Future<void> showGenericWakeNotification() =>
-    _show(id: _fcmNotificationId, body: 'New message(s)');
 
 Future<void> _show({
   required int id,
