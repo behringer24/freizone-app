@@ -76,22 +76,62 @@ class ProfileScreen extends StatelessWidget {
         await _offerOrphanedRemoval(context);
         return;
       }
+      // The server was never reached at all (offline, DNS failure,
+      // timeout). Unlike the 401 case we learned nothing about the
+      // account's real server-side state, so a local-only removal might
+      // leave a live remnant behind if the server is only temporarily
+      // down. Still offer it -- it's the only way to clear an account
+      // whose server is gone for good (a decommissioned test server, say)
+      // without first recovering from the seed phrase -- but behind a
+      // dialog that spells out that trade-off.
+      if (isServerUnreachable(e)) {
+        await _offerUnreachableRemoval(context);
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Delete failed: ${describeError(e)}')),
       );
     }
   }
 
-  Future<void> _offerOrphanedRemoval(BuildContext context) async {
+  Future<void> _offerOrphanedRemoval(BuildContext context) =>
+      _confirmLocalRemoval(
+        context,
+        title: 'Account not recognized by server',
+        content:
+            'The server rejected this device\'s credentials for ${formatAccountIdForDisplay(session.state.accountId)} -- '
+            'this usually means the account no longer exists there. It can never be deleted server-side from here, '
+            'since no request this device signs will be accepted. Remove it from this device only?',
+      );
+
+  Future<void> _offerUnreachableRemoval(BuildContext context) =>
+      _confirmLocalRemoval(
+        context,
+        title: 'Server not reachable',
+        content:
+            'Couldn\'t reach ${session.state.server} to delete ${formatAccountIdForDisplay(session.state.accountId)} there. '
+            'If the server is only temporarily down, removing the account here now leaves it alive on the server -- '
+            'to clear it you would have to recover from your seed phrase and delete again once it is back. If the '
+            'server is gone for good, this is the only way to get the account out of your list. Remove from this '
+            'device only?',
+      );
+
+  /// Confirmation for the local-only escape hatch: on confirmation, forgets
+  /// the account on this device (no server delete) and closes the profile
+  /// screen. Shared by the two cases where a server-side delete can't be
+  /// carried out from here -- [_offerOrphanedRemoval] (a 401) and
+  /// [_offerUnreachableRemoval] (an unreachable server) -- which differ only
+  /// in their [title] and [content] wording.
+  Future<void> _confirmLocalRemoval(
+    BuildContext context, {
+    required String title,
+    required String content,
+  }) async {
     final removeLocally = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Account not recognized by server'),
-        content: Text(
-          'The server rejected this device\'s credentials for ${formatAccountIdForDisplay(session.state.accountId)} -- '
-          'this usually means the account no longer exists there. It can never be deleted server-side from here, '
-          'since no request this device signs will be accepted. Remove it from this device only?',
-        ),
+        title: Text(title),
+        content: Text(content),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -109,7 +149,7 @@ class ProfileScreen extends StatelessWidget {
     );
     if (removeLocally != true || !context.mounted) return;
 
-    await manager.removeOrphanedAccount(session.state.accountId);
+    await manager.forgetAccountLocally(session.state.accountId);
     if (context.mounted) Navigator.of(context).pop();
   }
 

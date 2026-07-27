@@ -121,7 +121,7 @@ class AccountManager extends ChangeNotifier {
   /// error or the last-admin conflict, in which case nothing local is
   /// touched either, so a failed attempt never leaves the account
   /// orphaned -- gone locally but still alive and unreachable on the
-  /// server), then the same local cleanup [removeOrphanedAccount] does on
+  /// server), then the same local cleanup [forgetAccountLocally] does on
   /// its own. There is no path back to this identity afterward, on this
   /// or any other device -- unlike removing a device from an account you
   /// keep, deleting the account itself is final.
@@ -131,17 +131,28 @@ class AccountManager extends ChangeNotifier {
     await _removeLocalProfile(accountId);
   }
 
-  /// Removes an account from this device WITHOUT trying to delete it
-  /// server-side first -- the deliberate escape hatch for an already
-  /// -orphaned account: [deleteAccount] above rejected it with a 401 (the
-  /// server no longer recognizes this device/account at all, e.g. its
-  /// data was reset independently), so there is no valid request this
-  /// device could ever sign that the server would accept, and the normal
-  /// delete flow can never succeed. This is the one case where "just
-  /// forget it locally" is the only remaining option, not a routine
-  /// alternative to [deleteAccount] -- see profile_screen.dart's
-  /// fallback dialog, the only caller.
-  Future<void> removeOrphanedAccount(String accountId) =>
+  /// Forgets an account on this device only, WITHOUT trying to delete it
+  /// server-side first -- the deliberate escape hatch for the two cases
+  /// where a proper [deleteAccount] can never be carried out from here:
+  ///
+  ///   * an already-orphaned account -- [deleteAccount] got a 401: the
+  ///     server no longer recognizes this device/account at all (e.g. its
+  ///     data was reset independently), so no request this device could
+  ///     sign would ever be accepted and the normal delete can never
+  ///     succeed. The account is provably gone server-side.
+  ///   * an unreachable server -- [deleteAccount] failed at the transport
+  ///     level (offline, DNS failure, timeout -- see errors.dart's
+  ///     isServerUnreachable), so the delete could not be confirmed
+  ///     server-side. Unlike the 401
+  ///     case the account *may* still be alive there, so this is offered
+  ///     only behind a dialog that spells out the remnant-left-behind risk
+  ///     -- its one real use is clearing an account whose server is gone
+  ///     for good (e.g. a decommissioned test server) without first
+  ///     recovering from the seed phrase.
+  ///
+  /// Not a routine alternative to [deleteAccount] -- see profile_screen.dart's
+  /// two fallback dialogs, the only callers.
+  Future<void> forgetAccountLocally(String accountId) =>
       _removeLocalProfile(accountId);
 
   Future<void> _removeLocalProfile(String accountId) async {

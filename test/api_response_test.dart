@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:freizone/net/api_client.dart';
 import 'package:freizone/util/errors.dart';
@@ -53,6 +56,30 @@ void main() {
       expect(
         describeError(ApiException(404, 'not_found', 'no such account')),
         'no such account',
+      );
+    });
+  });
+
+  group('isServerUnreachable', () {
+    // Guards profile_screen's delete flow: only a transport-level failure
+    // (the server was never reached) may fall back to a local-only removal.
+    // A server that answered -- an ApiException, or a non-Freizone reply --
+    // must not, since it tells us the account's real server-side state.
+    test('is true for transport-level failures', () {
+      expect(isServerUnreachable(const SocketException('refused')), isTrue);
+      expect(isServerUnreachable(http.ClientException('closed')), isTrue);
+      expect(isServerUnreachable(const HandshakeException('tls')), isTrue);
+      expect(isServerUnreachable(TimeoutException('timed out')), isTrue);
+    });
+
+    test('is false when the server actually answered', () {
+      expect(
+        isServerUnreachable(ApiException(401, 'unauthorized', 'nope')),
+        isFalse,
+      );
+      expect(
+        isServerUnreachable(NotFreizoneServerException(404, 'google.com')),
+        isFalse,
       );
     });
   });
