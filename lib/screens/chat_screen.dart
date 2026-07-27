@@ -5,8 +5,10 @@
 // ChatListScreen's "new chat" flow -- by the time this screen opens,
 // the conversation's peer device is already resolved and cached.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../state/app_session.dart';
+import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../state/receipt_signal.dart';
 import '../util/block_actions.dart';
@@ -22,10 +24,12 @@ class ChatScreen extends StatefulWidget {
     super.key,
     required this.session,
     required this.peerAccountId,
+    required this.settings,
   });
 
   final AppSession session;
   final String peerAccountId;
+  final AppSettings settings;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -82,6 +86,26 @@ class _ChatScreenState extends State<ChatScreen> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  /// Hardware-keyboard handling for the composer: when "send with Enter"
+  /// is on, a bare Enter/Return sends and is swallowed so no newline is
+  /// inserted; Shift+Enter (and the whole feature when off) falls through
+  /// to the normal newline behavior. Soft keyboards are handled instead
+  /// via the field's textInputAction, so this only matters for physical
+  /// keyboards.
+  KeyEventResult _handleComposerKey(KeyEvent event, bool enterSends) {
+    if (!enterSends || event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    final isEnter =
+        event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (isEnter && !HardwareKeyboard.instance.isShiftPressed) {
+      _send();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   void _scrollToBottom() {
@@ -398,26 +422,43 @@ class _ChatScreenState extends State<ChatScreen> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Expanded(
-                          child: TextField(
-                            controller: _messageController,
-                            decoration: InputDecoration(
-                              hintText: 'Message',
-                              filled: true,
-                              fillColor: colorScheme.surfaceContainerHighest,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 12,
-                              ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(24),
-                                borderSide: BorderSide.none,
-                              ),
-                            ),
-                            minLines: 1,
-                            maxLines: 5,
-                            textCapitalization: TextCapitalization.sentences,
-                            onChanged: (_) => setState(() {}),
-                            onSubmitted: (_) => _send(),
+                          child: ListenableBuilder(
+                            listenable: widget.settings,
+                            builder: (context, _) {
+                              final enterSends =
+                                  widget.settings.enterSendsMessage;
+                              return Focus(
+                                onKeyEvent: (node, event) =>
+                                    _handleComposerKey(event, enterSends),
+                                child: TextField(
+                                  controller: _messageController,
+                                  decoration: InputDecoration(
+                                    hintText: 'Message',
+                                    filled: true,
+                                    fillColor:
+                                        colorScheme.surfaceContainerHighest,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 12,
+                                    ),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(24),
+                                      borderSide: BorderSide.none,
+                                    ),
+                                  ),
+                                  minLines: 1,
+                                  maxLines: 5,
+                                  keyboardType: TextInputType.multiline,
+                                  textInputAction: enterSends
+                                      ? TextInputAction.send
+                                      : TextInputAction.newline,
+                                  textCapitalization:
+                                      TextCapitalization.sentences,
+                                  onChanged: (_) => setState(() {}),
+                                  onSubmitted: (_) => _send(),
+                                ),
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(width: 8),

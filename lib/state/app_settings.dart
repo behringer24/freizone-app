@@ -62,6 +62,7 @@ class AppSettings extends ChangeNotifier {
     required bool notificationVibration,
     required PushPreference pushPreference,
     required bool readReceiptsEnabled,
+    required bool enterSendsMessage,
     String? lastActiveAccountId,
   }) : _themeMode = themeMode,
        _accentPreset = accentPreset,
@@ -70,6 +71,7 @@ class AppSettings extends ChangeNotifier {
        _notificationVibration = notificationVibration,
        _pushPreference = pushPreference,
        _readReceiptsEnabled = readReceiptsEnabled,
+       _enterSendsMessage = enterSendsMessage,
        _lastActiveAccountId = lastActiveAccountId;
 
   ThemeMode _themeMode;
@@ -79,6 +81,7 @@ class AppSettings extends ChangeNotifier {
   bool _notificationVibration;
   PushPreference _pushPreference;
   bool _readReceiptsEnabled;
+  bool _enterSendsMessage;
   String? _lastActiveAccountId;
 
   ThemeMode get themeMode => _themeMode;
@@ -97,6 +100,12 @@ class AppSettings extends ChangeNotifier {
   /// directions, so turning it off is reciprocal: you neither tell others
   /// you've read their messages, nor see whether they've read yours.
   bool get readReceiptsEnabled => _readReceiptsEnabled;
+
+  /// Whether pressing Enter in the chat composer sends the message
+  /// immediately. When false (the default), Enter inserts a line break
+  /// and the send button sends. With a hardware keyboard, Shift+Enter
+  /// always inserts a line break regardless of this setting.
+  bool get enterSendsMessage => _enterSendsMessage;
 
   /// The account id AccountManager should activate on the next app
   /// start, so a multi-account setup doesn't fall back to an
@@ -123,6 +132,7 @@ class AppSettings extends ChangeNotifier {
         notificationVibration: true,
         pushPreference: PushPreference.automatic,
         readReceiptsEnabled: true,
+        enterSendsMessage: false,
       );
     }
     final j = json.decode(await file.readAsString()) as Map<String, dynamic>;
@@ -143,6 +153,7 @@ class AppSettings extends ChangeNotifier {
         orElse: () => PushPreference.automatic,
       ),
       readReceiptsEnabled: j['read_receipts_enabled'] as bool? ?? true,
+      enterSendsMessage: j['enter_sends_message'] as bool? ?? false,
       lastActiveAccountId: j['last_active_account_id'] as String?,
     );
   }
@@ -158,6 +169,7 @@ class AppSettings extends ChangeNotifier {
         'notification_vibration': _notificationVibration,
         'push_preference': _pushPreference.name,
         'read_receipts_enabled': _readReceiptsEnabled,
+        'enter_sends_message': _enterSendsMessage,
         if (_lastActiveAccountId != null)
           'last_active_account_id': _lastActiveAccountId,
       }),
@@ -209,6 +221,13 @@ class AppSettings extends ChangeNotifier {
   Future<void> setReadReceiptsEnabled(bool value) async {
     if (_readReceiptsEnabled == value) return;
     _readReceiptsEnabled = value;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setEnterSendsMessage(bool value) async {
+    if (_enterSendsMessage == value) return;
+    _enterSendsMessage = value;
     await _save();
     notifyListeners();
   }

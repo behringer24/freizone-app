@@ -146,8 +146,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     navigator.popUntil((route) => route.isFirst);
     navigator.push(
       MaterialPageRoute(
-        builder: (_) =>
-            ChatScreen(session: session, peerAccountId: peerAccountId),
+        builder: (_) => ChatScreen(
+          session: session,
+          peerAccountId: peerAccountId,
+          settings: widget.settings,
+        ),
       ),
     );
   }
