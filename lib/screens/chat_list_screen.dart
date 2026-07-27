@@ -154,8 +154,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
       ),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) =>
-              ChatScreen(session: session, peerAccountId: convo.peerAccountId),
+          builder: (_) => ChatScreen(
+            session: session,
+            peerAccountId: convo.peerAccountId,
+            settings: widget.settings,
+          ),
         ),
       ),
       onLongPress: () => _showChatOptions(context, session, convo),
@@ -318,8 +321,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
     if (peerAccountId == null || !context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) =>
-            ChatScreen(session: widget.session, peerAccountId: peerAccountId),
+        builder: (_) => ChatScreen(
+          session: widget.session,
+          peerAccountId: peerAccountId,
+          settings: widget.settings,
+        ),
       ),
     );
   }

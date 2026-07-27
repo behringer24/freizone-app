@@ -144,6 +144,19 @@ class SettingsScreen extends StatelessWidget {
                 value: settings.readReceiptsEnabled,
                 onChanged: settings.setReadReceiptsEnabled,
               ),
+              const Divider(height: 32),
+              _sectionTitle(context, 'Chat'),
+              SwitchListTile(
+                title: const Text('Send with Enter'),
+                subtitle: const Text(
+                  'When on, Enter sends the message. With an external '
+                  'keyboard, Shift+Enter still inserts a line break. When '
+                  'off, Enter inserts a line break and you send with the '
+                  'button.',
+                ),
+                value: settings.enterSendsMessage,
+                onChanged: settings.setEnterSendsMessage,
+              ),
             ],
           );
         },
