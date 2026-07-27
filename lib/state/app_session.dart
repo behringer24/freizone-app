@@ -660,9 +660,20 @@ class AppSession extends ChangeNotifier {
       // and flash the account grey. Reachability is re-evaluated on resume.
       _reachabilityGraceTimer?.cancel();
       _reachabilityGraceTimer = null;
+      // Tear down the live SSE stream. Holding it open in the background keeps
+      // this device registered as a live subscriber on the server, and the
+      // server only sends a push wake when NO subscriber is connected (see
+      // queueAndNotify in freizone-server). Leaving the stream up therefore
+      // silently suppressed every FCM/UnifiedPush background notification --
+      // the whole point of releasing it here is to let push take over once
+      // the app is no longer on screen.
+      _stopStream();
       return;
     }
     await _reloadVolatileStateFromDisk();
+    // Reopen the live stream that backgrounding closed, so the foregrounded
+    // app is back on the fast path (and the server stops pushing to it).
+    _startStream();
     // Re-check server-status on resume so an admin's federation (or
     // registration-policy) change made while the app was backgrounded shows
     // up promptly -- the lock UI and outbound guard depend on this flag, and
@@ -907,6 +918,7 @@ class AppSession extends ChangeNotifier {
   }
 
   void _startStream() {
+    if (_sse != null) return; // already streaming (or restarted before stop)
     _sse = SseClient(apiClient: api, creds: state.credentials);
     unawaited(
       _sse!.connect(
@@ -930,6 +942,18 @@ class AppSession extends ChangeNotifier {
         },
       ),
     );
+  }
+
+  /// Closes the live SSE stream and releases this device's subscriber slot on
+  /// the server, so a message arriving while the app is backgrounded triggers
+  /// a push wake instead of being delivered into a stream nobody is reading
+  /// (see [setForeground]). Closing is a clean disconnect -- SseClient.close
+  /// marks itself closed before tearing down, so its reconnect loop exits
+  /// without reporting an error, and reachability is left untouched. Safe to
+  /// call when no stream is open.
+  void _stopStream() {
+    _sse?.close();
+    _sse = null;
   }
 
   /// Per-message decrypt-failure counter (in memory). An envelope that can't
