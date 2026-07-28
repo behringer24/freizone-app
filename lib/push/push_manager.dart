@@ -41,6 +41,21 @@ import 'notification_navigation.dart';
 
 const _messagesChannelId = 'freizone_messages';
 
+/// Logs a push-path diagnostic to BOTH the VM service and stdout.
+///
+/// Everything in this file can run in a background isolate (FCM's own
+/// dispatch isolate, UnifiedPush's `--unifiedpush-bg` relaunch), where
+/// nothing is attached to the VM service -- so [developer.log] alone goes
+/// nowhere and a wake that fails silently is undiagnosable on a real
+/// device. print() reaches logcat as `I/flutter`, which is the only
+/// channel that survives a background wake, so failures on this path are
+/// deliberately logged there too rather than only to the debugger.
+void _log(String message) {
+  developer.log(message, name: 'push');
+  // ignore: avoid_print
+  print('[freizone/push] $message');
+}
+
 final FlutterLocalNotificationsPlugin _notifications =
     FlutterLocalNotificationsPlugin();
 
@@ -193,7 +208,7 @@ Future<PushRegistration> _registerUnifiedPush(
   try {
     vapidKey = await api.getVAPIDPublicKey();
   } catch (e) {
-    developer.log('fetching vapid public key failed: $e', name: 'push');
+    _log('fetching vapid public key failed: $e');
   }
   await UnifiedPush.register(instance: instance, vapid: vapidKey);
   return PushRegistration.registered;
@@ -206,7 +221,7 @@ Future<bool> _registerFcm(ApiClient api, DeviceCredentials creds) async {
     await api.setPushTarget(creds: creds, platform: 'fcm', token: token);
     return true;
   } catch (e) {
-    developer.log('registering fcm push target failed: $e', name: 'push');
+    _log('registering fcm push target failed: $e');
     return false;
   }
 }
@@ -225,14 +240,14 @@ Future<void> _onNewEndpoint(PushEndpoint endpoint, String instance) async {
       auth: keySet.auth,
     );
   } catch (e) {
-    developer.log('registering push endpoint failed: $e', name: 'push');
+    _log('registering push endpoint failed: $e');
   } finally {
     api.close();
   }
 }
 
 Future<void> _onRegistrationFailed(FailedReason reason, String instance) async {
-  developer.log('push registration failed: $reason', name: 'push');
+  _log('push registration failed: $reason');
 }
 
 Future<void> _onUnregistered(String instance) async {
@@ -243,14 +258,14 @@ Future<void> _onUnregistered(String instance) async {
   try {
     await api.clearPushEndpoint(state.credentials);
   } catch (e) {
-    developer.log('clearing push endpoint failed: $e', name: 'push');
+    _log('clearing push endpoint failed: $e');
   } finally {
     api.close();
   }
 }
 
 Future<void> _onTempUnavailable(String instance) async {
-  developer.log('push distributor temporarily unavailable', name: 'push');
+  _log('push distributor temporarily unavailable');
 }
 
 Future<void> _onMessage(PushMessage message, String instance) async {
@@ -298,6 +313,7 @@ Future<void> _syncAndMaybeNotify(String? instance) async {
     profiles = await LocalStateStore.listProfiles();
   }
 
+  _log('wake received (${instance ?? 'fcm/all'}): ${profiles.length} profile(s)');
   for (final state in profiles) {
     final peerAccountId = await _syncProfile(state);
     if (peerAccountId != null) {
@@ -305,6 +321,7 @@ Future<void> _syncAndMaybeNotify(String? instance) async {
         state.accountId,
         peerAccountId: peerAccountId,
       );
+      _log('wake notified ${state.accountId} (peer $peerAccountId)');
     }
   }
 }
@@ -332,16 +349,25 @@ Future<String?> _syncProfile(AppState state) async {
   String? notifyPeerAccountId;
   try {
     final messages = await api.listMessages(state.credentials);
+    _log('wake sync ${state.accountId}: ${messages.length} queued');
     var changed = false;
     for (final msg in messages) {
       try {
         final result = await processIncomingMessage(state, msg, core);
-        if (result == null) continue;
+        if (result == null) {
+          // Unprocessable: no session for this sender and no X3DH initial to
+          // start one (see processIncomingMessage). Left on the server rather
+          // than deleted, but log it -- silently skipping made a message that
+          // can never be processed look identical to "nothing new", while it
+          // sat in the queue re-failing on every future wake.
+          _log('wake sync ${state.accountId}: unprocessable message, skipped');
+          continue;
+        }
         changed = true;
         if (result.shouldNotify) notifyPeerAccountId = result.peerAccountId;
         unawaited(api.deleteMessage(msg.messageId, state.credentials));
       } catch (e) {
-        developer.log('background message decrypt failed: $e', name: 'push');
+        _log('background message decrypt failed: $e');
       }
     }
     if (changed) await LocalStateStore.saveProfile(state);
@@ -349,10 +375,10 @@ Future<String?> _syncProfile(AppState state) async {
     try {
       await topUpOneTimePrekeysIfNeeded(state, core, api);
     } catch (e) {
-      developer.log('background prekey top-up failed: $e', name: 'push');
+      _log('background prekey top-up failed: $e');
     }
   } catch (e) {
-    developer.log('background sync failed: $e', name: 'push');
+    _log('background sync failed: $e');
   } finally {
     api.close();
   }
@@ -382,7 +408,7 @@ Future<void> _onFcmTokenRefresh(String newToken) async {
         token: newToken,
       );
     } catch (e) {
-      developer.log('updating fcm push target failed: $e', name: 'push');
+      _log('updating fcm push target failed: $e');
     } finally {
       api.close();
     }
