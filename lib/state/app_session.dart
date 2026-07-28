@@ -89,6 +89,21 @@ Future<IncomingMessageResult?> processIncomingMessage(
   FreizoneCore core, {
   String? openConversationPeerId,
 }) async {
+  // Already handled: acknowledge it (so the caller clears it from the server
+  // queue) without touching the ratchet. Delivery is at-least-once and the
+  // delete is best-effort, so the same envelope legitimately arrives twice --
+  // via a reconnecting stream, or a push wake racing the live one. Processing
+  // it again is actively destructive: it advances the ratchet a second time
+  // for one message, and a redelivered X3DH initial rebuilds the responder
+  // session and overwrites the advanced one, breaking the conversation for
+  // good. See AppState.processedMessageIds.
+  if (state.processedMessageIds.contains(msg.messageId)) {
+    return IncomingMessageResult(
+      peerAccountId: msg.senderAccountId,
+      shouldNotify: false,
+    );
+  }
+
   final parsed = core.parseEnvelope(msg.payload);
   final initial = parsed.initial;
 
@@ -162,6 +177,11 @@ Future<IncomingMessageResult?> processIncomingMessage(
   ); // may throw -> propagates
 
   state.sessions[msg.senderAccountId] = dec.session;
+  // Recorded here, the moment the ratchet has actually advanced -- before any
+  // of the return paths below (receipt, blocked, stored message) diverge, and
+  // never for a failed decrypt, which leaves the session untouched and must
+  // stay retryable.
+  state.markMessageProcessed(msg.messageId);
   // A one-time prekey is consumed only now that a responder session built
   // from the initial has successfully decrypted -- never on a failed attempt.
   if (usedResponder && consumeOtpkId != null) {
@@ -367,7 +387,12 @@ Future<void> topUpOneTimePrekeysIfNeeded(
     ),
     oneTimePrekeys: otpkDtos,
   );
-  await LocalStateStore.saveProfile(state);
+  // Only when this actually minted keys. Saving unconditionally meant every
+  // reconnect and every push wake wrote the whole profile back -- including,
+  // from a stale in-memory copy, ratchet state another isolate had advanced
+  // in the meantime. Nothing to persist when no new prekey was generated: the
+  // upload above merely re-asserts existing material.
+  if (otpkDtos.isNotEmpty) await LocalStateStore.saveProfile(state);
 }
 
 /// Whether this session's own home server is currently reachable. Drives
@@ -700,7 +725,13 @@ class AppSession extends ChangeNotifier {
   /// a plain "disk wins": a frozen isolate produces no in-memory changes,
   /// so its memory can never be newer than disk.
   Future<void> _reloadVolatileStateFromDisk() async {
-    final fresh = await LocalStateStore.loadProfile(state.accountId);
+    // Taken under the profile lock so a push wake that is mid-sync finishes
+    // first: reading while it still had its advance in memory gave us the
+    // pre-wake ratchet, which our next save then wrote back over its result.
+    final fresh = await LocalStateStore.withProfileLock(
+      state.accountId,
+      () => LocalStateStore.loadProfile(state.accountId),
+    );
     if (fresh == null) return;
     state.sessions = fresh.sessions;
     state.conversations = fresh.conversations;
@@ -714,6 +745,11 @@ class AppSession extends ChangeNotifier {
     state.dhIdentityPriv = fresh.dhIdentityPriv;
     state.knownPeerIds = fresh.knownPeerIds;
     state.blockedPeers = fresh.blockedPeers;
+    // Adopted along with the ratchet state they belong to: keeping our own
+    // stale copies would forget what the push isolate just processed (letting
+    // those messages be decrypted a second time) and reset its failure counts.
+    state.processedMessageIds = fresh.processedMessageIds;
+    state.decryptFailures = fresh.decryptFailures;
     notifyListeners();
   }
 
@@ -956,14 +992,6 @@ class AppSession extends ChangeNotifier {
     _sse = null;
   }
 
-  /// Per-message decrypt-failure counter (in memory). An envelope that can't
-  /// be decrypted (e.g. an old-chain message left over after a secure-session
-  /// reset) fails deterministically every time and would otherwise be
-  /// re-fetched and re-fail on every reconnect, clogging the queue. After
-  /// [_maxDecryptAttempts] failures it is dropped from the server queue.
-  final Map<String, int> _decryptFailures = {};
-  static const _maxDecryptAttempts = 3;
-
   Future<void> _handleIncoming(MessageResponse msg) async {
     try {
       // Serialized against any in-flight send to this same peer (see
@@ -1034,7 +1062,6 @@ class AppSession extends ChangeNotifier {
 
       await LocalStateStore.saveProfile(state);
       unawaited(api.deleteMessage(msg.messageId, state.credentials));
-      _decryptFailures.remove(msg.messageId);
 
       lastError = null;
       notifyListeners();
@@ -1043,15 +1070,14 @@ class AppSession extends ChangeNotifier {
       // identically), so a poison envelope -- e.g. an old-chain message left
       // over after a secure-session reset -- would re-fetch and re-fail on
       // every reconnect forever. After a few attempts drop it from the server
-      // queue so it stops clogging; the counter is in memory, so a restart
-      // simply grants a few more attempts (still bounded).
-      final attempts = (_decryptFailures[msg.messageId] ?? 0) + 1;
-      if (attempts >= _maxDecryptAttempts) {
-        _decryptFailures.remove(msg.messageId);
+      // queue so it stops clogging. The count lives in the profile, shared
+      // with the background push isolate (see AppState.recordDecryptFailure):
+      // both consumers see the same envelope, so counting per-isolate let it
+      // survive far longer than the limit suggests.
+      if (state.recordDecryptFailure(msg.messageId)) {
         unawaited(api.deleteMessage(msg.messageId, state.credentials));
-      } else {
-        _decryptFailures[msg.messageId] = attempts;
       }
+      await LocalStateStore.saveProfile(state);
       lastError = 'decrypt error: $e';
       notifyListeners();
     }

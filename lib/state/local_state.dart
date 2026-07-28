@@ -63,6 +63,18 @@ class BlockedPeer {
   final String? displayName;
 }
 
+/// How many processed message ids [AppState.processedMessageIds] keeps.
+/// Generous enough to cover a backlog that built up while the device was
+/// offline (the server caps a device's queue well below this), small enough
+/// to stay negligible in the profile file.
+const int maxProcessedMessageIds = 500;
+
+/// How many times a message may fail to decrypt before it is given up on and
+/// dropped from the server queue (see [AppState.recordDecryptFailure]). An
+/// envelope that fails once may just have raced a session change; one that
+/// fails repeatedly never will, and must not block the queue forever.
+const int maxDecryptAttempts = 3;
+
 /// The app's entire local identity and conversation state for one
 /// account.
 class AppState {
@@ -86,12 +98,16 @@ class AppState {
     Map<String, Conversation>? conversations,
     Set<String>? knownPeerIds,
     Map<String, BlockedPeer>? blockedPeers,
+    Set<String>? processedMessageIds,
+    Map<String, int>? decryptFailures,
     this.recoveryBackupDone = false,
   }) : oneTimePrekeys = oneTimePrekeys ?? {},
        sessions = sessions ?? {},
        conversations = conversations ?? {},
        knownPeerIds = knownPeerIds ?? {},
-       blockedPeers = blockedPeers ?? {};
+       blockedPeers = blockedPeers ?? {},
+       processedMessageIds = processedMessageIds ?? {},
+       decryptFailures = decryptFailures ?? {};
 
   factory AppState.fromJson(Map<String, dynamic> j) => AppState(
     server: j['server'] as String,
@@ -137,6 +153,12 @@ class AppState {
           m[p.peerAccountId] = p;
           return m;
         }),
+    processedMessageIds: (j['processed_message_ids'] as List<dynamic>?)
+        ?.cast<String>()
+        .toSet(),
+    decryptFailures: (j['decrypt_failures'] as Map<String, dynamic>?)?.map(
+      (k, v) => MapEntry(k, v as int),
+    ),
     recoveryBackupDone: j['recovery_backup_done'] as bool? ?? false,
   );
 
@@ -183,11 +205,63 @@ class AppState {
   /// un-block them.
   Map<String, BlockedPeer> blockedPeers;
 
+  /// Ids of messages already decrypted and stored, newest last.
+  ///
+  /// Delivery is at-least-once: the server keeps a message queued until the
+  /// client explicitly deletes it, and that delete can be lost (offline, a
+  /// killed process, a wake that raced the SSE stream). Re-processing a
+  /// message is not harmless -- it advances the Double Ratchet a second time
+  /// for one message, and a redelivered X3DH initial would rebuild the
+  /// responder session and overwrite the advanced one, permanently desyncing
+  /// the conversation. Checked in [processIncomingMessage], so both the live
+  /// stream and the background push sync are covered.
+  ///
+  /// Bounded to [maxProcessedMessageIds] (insertion-ordered, oldest evicted
+  /// first) -- redelivery happens within a queue's lifetime, so remembering
+  /// the recent past is enough and the profile can't grow without limit.
+  Set<String> processedMessageIds;
+
+  /// How often each still-undelivered message has failed to decrypt, so a
+  /// permanently undecryptable one can be dropped instead of blocking the
+  /// queue forever. See [recordDecryptFailure].
+  Map<String, int> decryptFailures;
+
   /// True once the user has backed up (or explicitly dismissed the prompt to
   /// back up) this account's recovery phrase (APP-01). Drives the one-time
   /// post-setup backup nudge on the chat list; set for a *recovered* account
   /// from the start, since the user already holds the phrase.
   bool recoveryBackupDone;
+
+  /// Records messageId as handled, evicting the oldest entries past the cap.
+  void markMessageProcessed(String messageId) {
+    processedMessageIds.add(messageId);
+    while (processedMessageIds.length > maxProcessedMessageIds) {
+      processedMessageIds.remove(processedMessageIds.first);
+    }
+    // A message that finally succeeded needs no failure history any more.
+    decryptFailures.remove(messageId);
+  }
+
+  /// Counts one failed decrypt of messageId and reports whether it should now
+  /// be given up on (dropped from the server queue).
+  ///
+  /// Persisted rather than in-memory because the background push isolate is
+  /// torn down between wakes: a counter living only in RAM would restart at
+  /// zero every time and never reach the limit, so an envelope that can never
+  /// be decrypted would be re-fetched and re-fail on every single wake,
+  /// forever.
+  bool recordDecryptFailure(String messageId) {
+    final attempts = (decryptFailures[messageId] ?? 0) + 1;
+    if (attempts >= maxDecryptAttempts) {
+      decryptFailures.remove(messageId);
+      return true;
+    }
+    decryptFailures[messageId] = attempts;
+    while (decryptFailures.length > maxProcessedMessageIds) {
+      decryptFailures.remove(decryptFailures.keys.first);
+    }
+    return false;
+  }
 
   DeviceCredentials get credentials =>
       DeviceCredentials(deviceId: deviceId, devicePriv: devicePriv);
@@ -219,6 +293,9 @@ class AppState {
     if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
     if (blockedPeers.isNotEmpty)
       'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),
+    if (processedMessageIds.isNotEmpty)
+      'processed_message_ids': processedMessageIds.toList(),
+    if (decryptFailures.isNotEmpty) 'decrypt_failures': decryptFailures,
     if (recoveryBackupDone) 'recovery_backup_done': true,
   };
 }
@@ -276,6 +353,29 @@ class LocalStateStore {
   }
 
   /// Loads one profile by account id, or null if it doesn't exist.
+  /// The account id of every locally stored profile, read from the file names
+  /// alone. For a caller that will load each profile itself anyway (under
+  /// [withProfileLock], so it gets a snapshot that can't already be stale),
+  /// this avoids parsing every profile up front only to throw the result away.
+  static Future<List<String>> listProfileIds() async {
+    final dir = await _dir();
+    await _migrateLegacyIfNeeded(dir);
+
+    const prefix = 'freizone_profile_';
+    const suffix = '.json';
+    final ids = <String>[];
+    for (final entity in dir.listSync()) {
+      final name = entity.path.split(Platform.pathSeparator).last;
+      if (entity is! File ||
+          !name.startsWith(prefix) ||
+          !name.endsWith(suffix)) {
+        continue;
+      }
+      ids.add(name.substring(prefix.length, name.length - suffix.length));
+    }
+    return ids;
+  }
+
   static Future<AppState?> loadProfile(String accountId) async {
     final file = await _profileFile(accountId);
     if (!file.existsSync()) return null;
@@ -305,5 +405,82 @@ class LocalStateStore {
   static Future<void> deleteProfile(String accountId) async {
     final file = await _profileFile(accountId);
     if (file.existsSync()) await file.delete();
+  }
+
+  /// Runs [action] holding an exclusive, cross-isolate lock on accountId's
+  /// profile, so a load-modify-save sequence can't interleave with another
+  /// one and lose the other's changes.
+  ///
+  /// [saveProfile] is a whole-file overwrite: it makes a write atomic, but
+  /// two writers still resolve as last-writer-wins. That is fine for a single
+  /// field, and fatal for the Double Ratchet -- the background push isolate
+  /// loads a profile, spends seconds on network I/O and decryption, then
+  /// saves; if the foreground isolate loads and saves anywhere in that
+  /// window, one side's ratchet advance is silently reverted and every
+  /// subsequent message from that peer fails to authenticate, permanently.
+  /// Serialising the whole sequence is what actually prevents that.
+  ///
+  /// Implemented by exclusively creating a lock file rather than with
+  /// [RandomAccessFile.lock]: both isolates live in the same OS process, and
+  /// POSIX advisory locks are held per process, so a file lock would not see
+  /// them as distinct holders at all. An exclusive create is atomic in the
+  /// filesystem and therefore does distinguish them.
+  ///
+  /// Waits up to [timeout] for the holder to finish. A lock file older than
+  /// [_lockStaleAfter] is treated as abandoned (the holding isolate was
+  /// killed mid-sync, which Android does routinely) and taken over, so a
+  /// crash can never wedge an account permanently.
+  static Future<T> withProfileLock<T>(
+    String accountId,
+    Future<T> Function() action, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final file = await _profileFile(accountId);
+    final lock = File('${file.path}.lock');
+    final deadline = DateTime.now().add(timeout);
+
+    while (true) {
+      try {
+        await lock.create(exclusive: true);
+        break;
+      } on FileSystemException {
+        // Held by someone else -- unless it was abandoned, or we've waited
+        // long enough that proceeding is better than dropping the work.
+        final abandoned = await _lockIsStale(lock);
+        if (abandoned || DateTime.now().isAfter(deadline)) {
+          try {
+            await lock.delete();
+          } catch (_) {
+            // Raced another waiter to the takeover; retry either way.
+          }
+          continue;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+
+    try {
+      return await action();
+    } finally {
+      try {
+        await lock.delete();
+      } catch (_) {
+        // Already taken over by a waiter that judged us stale; nothing to do.
+      }
+    }
+  }
+
+  /// How long a lock file may sit untouched before it's considered abandoned
+  /// by a killed isolate. Comfortably longer than a real sync (a fetch plus a
+  /// handful of decrypts), short enough not to strand an account.
+  static const _lockStaleAfter = Duration(minutes: 2);
+
+  static Future<bool> _lockIsStale(File lock) async {
+    try {
+      return DateTime.now().difference(await lock.lastModified()) >
+          _lockStaleAfter;
+    } on FileSystemException {
+      return false; // vanished under us -- the create retry will settle it
+    }
   }
 }
