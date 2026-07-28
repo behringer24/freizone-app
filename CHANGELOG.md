@@ -1,0 +1,68 @@
+# Changelog
+
+User-facing changes to the Freizone Android app, newest first. Each entry
+covers everything since the previous one and is written to be usable
+as-is (or lightly trimmed) for a Play Store / App Store release listing.
+Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
+to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
+`freizone-server/docs/ROADMAP.md`.
+
+## 0.11.8+8 — 2026-07-28
+
+### Fixed
+- Some conversations could permanently stop receiving new messages after a
+  connection hiccup, showing no error but never decrypting anything from
+  that contact again. Message delivery is now resilient to the redelivery,
+  timing, and race conditions that caused this, so a conversation should no
+  longer break like this in the first place. (SRV-03)
+- Push notifications delivered via Firebase (FCM) now name the account
+  they're for, matching what UnifiedPush notifications already showed.
+
+### Added
+- New **Send with Enter** option (Settings → Chat): press Enter to send a
+  message instead of starting a new line. Off by default. With a hardware
+  keyboard, Shift+Enter still inserts a line break either way.
+
+### Other
+- Assorted reliability and diagnostic-logging improvements, and dependency
+  maintenance.
+
+## 1.0.6+6 — 2026-07-27
+
+### Added
+- **Account recovery from a seed phrase** (Settings → Recovery phrase to
+  back up; "Recover an existing account" during setup to restore): losing
+  your device no longer means losing your identity. Back up a 24-word
+  recovery phrase once, and restore it later — even on a server that
+  currently has new registrations closed — to get back your exact same
+  address; your other devices on the account are signed out automatically.
+  Chat history itself isn't recovered (the server never keeps it), but
+  existing conversations re-establish themselves automatically once you're
+  back. (APP-01)
+- A one-time reminder on the chat list nudges you to back up your recovery
+  phrase after creating a new account.
+- If several UnifiedPush apps (distributors) are installed, you can now
+  choose which one delivers your notifications (Settings → Push delivery).
+
+### Fixed
+- **Broken/undecryptable conversations can now be recovered manually:**
+  long-press a chat (or use its contact profile) to reset the secure
+  session, which quietly re-establishes encryption with that contact.
+  (SRV-03)
+- The app no longer freezes at startup if one of your accounts' home
+  servers is unreachable — every account now connects independently, and
+  requests time out instead of hanging indefinitely.
+- Reconnecting after the app was backgrounded is now near-instant, and a
+  home server that's actually offline is retried with backoff instead of
+  hammered.
+- The app now releases its live connection while in the background, so
+  background push notifications (both Firebase and UnifiedPush) are
+  delivered reliably again instead of only arriving once the app is
+  reopened.
+- You can no longer accidentally start a chat with your own address.
+- Clearer error message when trying to recover an account that doesn't (or
+  no longer) exist on the given server.
+- If your account's home server is gone for good (not just temporarily
+  down), you can now remove it from this device instead of it being stuck
+  in the account switcher forever.
+- Various small polish items (e.g. peer profile screen layout).

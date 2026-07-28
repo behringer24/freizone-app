@@ -18,7 +18,7 @@ Status values: `planned` · `in progress` · `done` · `deferred`.
 ## Planned
 
 ### APP-01 — Recovery seed phrase
-Status: in progress · Depends on: SRV-06 · Also affects: shared Go core, freizone-server
+Status: done · Depends on: SRV-06 · Also affects: shared Go core, freizone-server
 Back up the identity **root key** as a recovery seed phrase (~24 words), so
 losing the phone without a second device no longer means permanent identity
 loss. Because `account_id == hash(root_pubkey)`, restoring the same root key
@@ -53,8 +53,10 @@ plus a one-time post-setup nudge on the chat list (dismissible, tracked by an
 `AppState.recoveryBackupDone` flag). Restore UI: a "Recover an existing account"
 branch in the setup wizard (server + QR-scan or manual 24-word entry) that calls
 the SRV-06 endpoint via `ApiClient.recoverAccount` (root-key-signed request).
-**Still open:** on-device end-to-end verification (create → back up → wipe →
-restore → same id, old device revoked, messaging heals via SRV-03).
+**Verified end-to-end 2026-07-27** (emulator and real device): create → back
+up → wipe/lose the device → restore with the phrase → same account id/short
+id, old device revoked server-side, account role (admin/moderator) intact,
+messaging heals via SRV-03.
 
 ### APP-02 — Multi-device history transfer
 Status: planned · Also affects: shared Go core · Depends on: SRV-02
