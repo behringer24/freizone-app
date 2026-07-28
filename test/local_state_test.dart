@@ -59,4 +59,48 @@ void main() {
       },
     );
   });
+
+  group('AppState.processedMessageIds', () {
+    test('defaults to empty and stays out of toJson while empty', () {
+      final state = _minimalState();
+      expect(state.processedMessageIds, isEmpty);
+      expect(state.toJson().containsKey('processed_message_ids'), isFalse);
+    });
+
+    test('round-trips through toJson/fromJson', () {
+      final state = _minimalState();
+      state.markMessageProcessed('msg-1');
+      state.markMessageProcessed('msg-2');
+
+      final restored = AppState.fromJson(state.toJson());
+      expect(restored.processedMessageIds, {'msg-1', 'msg-2'});
+    });
+
+    test('recording the same id twice keeps a single entry', () {
+      final state = _minimalState();
+      state.markMessageProcessed('msg-1');
+      state.markMessageProcessed('msg-1');
+      expect(state.processedMessageIds, hasLength(1));
+    });
+
+    test('evicts oldest entries past the cap, keeping the newest', () {
+      final state = _minimalState();
+      for (var i = 0; i < maxProcessedMessageIds + 10; i++) {
+        state.markMessageProcessed('msg-$i');
+      }
+
+      expect(state.processedMessageIds, hasLength(maxProcessedMessageIds));
+      // The 10 oldest are gone, the newest are retained -- redelivery happens
+      // close in time, so recency is what matters.
+      expect(state.processedMessageIds.contains('msg-0'), isFalse);
+      expect(state.processedMessageIds.contains('msg-9'), isFalse);
+      expect(state.processedMessageIds.contains('msg-10'), isTrue);
+      expect(
+        state.processedMessageIds.contains(
+          'msg-${maxProcessedMessageIds + 9}',
+        ),
+        isTrue,
+      );
+    });
+  });
 }

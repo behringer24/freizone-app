@@ -304,24 +304,25 @@ Future<void> _onFcmMessage(RemoteMessage message) async {
 /// simply produces one notification each (distinct ids, see
 /// _notificationIdFor), rather than a single unattributed "New message(s)".
 Future<void> _syncAndMaybeNotify(String? instance) async {
-  final List<AppState> profiles;
-  if (instance != null) {
-    final state = await LocalStateStore.loadProfile(instance);
-    if (state == null) return;
-    profiles = [state];
-  } else {
-    profiles = await LocalStateStore.listProfiles();
-  }
+  final accountIds = instance != null
+      ? [instance]
+      : await LocalStateStore.listProfileIds();
 
-  _log('wake received (${instance ?? 'fcm/all'}): ${profiles.length} profile(s)');
-  for (final state in profiles) {
-    final peerAccountId = await _syncProfile(state);
+  _log('wake received (${instance ?? 'fcm/all'}): ${accountIds.length} profile(s)');
+  for (final accountId in accountIds) {
+    // Load, decrypt and save as one locked unit, per account. Loading up
+    // front and saving much later is what let the foreground isolate slip in
+    // between and revert the ratchet -- and with several accounts, each
+    // profile's snapshot aged through every preceding account's network sync
+    // before finally being written back over whatever had changed since.
+    final peerAccountId = await LocalStateStore.withProfileLock(accountId, () async {
+      final state = await LocalStateStore.loadProfile(accountId);
+      if (state == null) return null;
+      return _syncProfile(state);
+    });
     if (peerAccountId != null) {
-      await showMessageNotification(
-        state.accountId,
-        peerAccountId: peerAccountId,
-      );
-      _log('wake notified ${state.accountId} (peer $peerAccountId)');
+      await showMessageNotification(accountId, peerAccountId: peerAccountId);
+      _log('wake notified $accountId (peer $peerAccountId)');
     }
   }
 }
@@ -351,23 +352,47 @@ Future<String?> _syncProfile(AppState state) async {
     final messages = await api.listMessages(state.credentials);
     _log('wake sync ${state.accountId}: ${messages.length} queued');
     var changed = false;
+    // Collected and awaited together below rather than fired off and
+    // forgotten: a delete that silently failed left the message queued, to be
+    // fetched and decrypted again on the next wake.
+    final deletions = <Future<void>>[];
     for (final msg in messages) {
       try {
         final result = await processIncomingMessage(state, msg, core);
         if (result == null) {
-          // Unprocessable: no session for this sender and no X3DH initial to
-          // start one (see processIncomingMessage). Left on the server rather
-          // than deleted, but log it -- silently skipping made a message that
-          // can never be processed look identical to "nothing new", while it
-          // sat in the queue re-failing on every future wake.
-          _log('wake sync ${state.accountId}: unprocessable message, skipped');
+          // Can't be processed: no session for this sender and no X3DH
+          // initial to start one (see processIncomingMessage). Count it --
+          // once it has failed enough times it is dropped, since it will
+          // never become decryptable and would otherwise be re-fetched on
+          // every wake for as long as the server keeps it.
+          changed = true;
+          if (state.recordDecryptFailure(msg.messageId)) {
+            _log('wake sync ${state.accountId}: giving up on a message');
+            deletions.add(api.deleteMessage(msg.messageId, state.credentials));
+          } else {
+            _log('wake sync ${state.accountId}: unprocessable, will retry');
+          }
           continue;
         }
         changed = true;
         if (result.shouldNotify) notifyPeerAccountId = result.peerAccountId;
-        unawaited(api.deleteMessage(msg.messageId, state.credentials));
+        deletions.add(api.deleteMessage(msg.messageId, state.credentials));
       } catch (e) {
         _log('background message decrypt failed: $e');
+        changed = true;
+        if (state.recordDecryptFailure(msg.messageId)) {
+          _log('wake sync ${state.accountId}: giving up after repeated failures');
+          deletions.add(api.deleteMessage(msg.messageId, state.credentials));
+        }
+      }
+    }
+    // Before saving, so a delete that fails leaves the failure count on disk
+    // and the message is retried rather than silently forgotten.
+    for (final deletion in deletions) {
+      try {
+        await deletion;
+      } catch (e) {
+        _log('deleting a processed message failed: $e');
       }
     }
     if (changed) await LocalStateStore.saveProfile(state);
