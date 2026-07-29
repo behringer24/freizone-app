@@ -11,10 +11,16 @@
         android:label="Freizone"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- launchMode singleTask (NOT singleInstance): both make a second
+             launch return to the existing instance instead of duplicating
+             the task, but singleInstance forbids any other activity in the
+             same task, which silently discards startActivityForResult
+             results: the photo picker (image_picker) always returned
+             null. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleInstance"
+            android:launchMode="singleTask"
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"

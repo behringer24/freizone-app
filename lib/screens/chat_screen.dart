@@ -99,12 +99,22 @@ class _ChatScreenState extends State<ChatScreen> {
   /// quality prompt, matching what other chat apps do.
   Future<void> _pickAndSendImage() async {
     if (_sending) return;
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      maxWidth: maxSentImageEdge.toDouble(),
-      maxHeight: maxSentImageEdge.toDouble(),
-      imageQuality: sentImageQuality,
-    );
+    final XFile? picked;
+    try {
+      picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: maxSentImageEdge.toDouble(),
+        maxHeight: maxSentImageEdge.toDouble(),
+        imageQuality: sentImageQuality,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Picker failed: ${describeError(e)}')),
+        );
+      }
+      return;
+    }
     if (picked == null || !mounted) return;
 
     setState(() => _sending = true);
