@@ -124,4 +124,138 @@ void main() {
       expect(RegExp(r'^[0-9a-f]+$').hasMatch(a), isTrue);
     });
   });
+
+  group('attachments', () {
+    MessageAttachment sampleAttachment({Uint8List? thumb}) => MessageAttachment(
+      kind: 'image',
+      blobId: 'a' * 64,
+      key: Uint8List.fromList(List.generate(32, (i) => i)),
+      mimeType: 'image/jpeg',
+      byteSize: 184320,
+      width: 1600,
+      height: 1200,
+      thumb: thumb,
+    );
+
+    test('round-trip through encode/decode', () {
+      final content = MessageContent(
+        id: 'msg1',
+        text: 'look at this',
+        attachments: [sampleAttachment()],
+      );
+
+      final decoded = MessageContent.decode(content.encode(), fallbackId: 'x');
+
+      expect(decoded.text, 'look at this');
+      expect(decoded.attachments, hasLength(1));
+      final a = decoded.attachments.first;
+      expect(a.kind, 'image');
+      expect(a.isImage, isTrue);
+      expect(a.blobId, 'a' * 64);
+      expect(a.key, sampleAttachment().key);
+      expect(a.mimeType, 'image/jpeg');
+      expect(a.byteSize, 184320);
+      expect(a.width, 1600);
+      expect(a.height, 1200);
+      expect(a.algorithm, MessageAttachment.defaultAlgorithm);
+    });
+
+    test('a thumbnail survives the round-trip', () {
+      final thumb = Uint8List.fromList(List.filled(500, 7));
+      final content = MessageContent(
+        id: 'm',
+        text: '',
+        attachments: [sampleAttachment(thumb: thumb)],
+      );
+
+      final decoded = MessageContent.decode(content.encode(), fallbackId: 'x');
+      expect(decoded.attachments.first.thumb, thumb);
+    });
+
+    test('an oversized thumbnail is dropped on both encode and decode', () {
+      // The cap has to hold on the receiving side too: a peer must not be
+      // able to inflate our stored history with a huge inline preview.
+      final huge = Uint8List.fromList(
+        List.filled(maxAttachmentThumbBytes + 1, 9),
+      );
+      final content = MessageContent(
+        id: 'm',
+        text: '',
+        attachments: [sampleAttachment(thumb: huge)],
+      );
+
+      final encoded = utf8.decode(content.encode());
+      expect(encoded.contains('thumb'), isFalse);
+      expect(
+        MessageContent.decode(content.encode(), fallbackId: 'x').attachments.first.thumb,
+        isNull,
+      );
+    });
+
+    test('stays version 1, so older builds still read the text', () {
+      // The whole point of reusing the reserved "attachments" field instead
+      // of bumping the version: an older client ignores the unknown entry
+      // and still renders the caption, rather than showing the
+      // "newer app feature" placeholder for every picture.
+      final content = MessageContent(
+        id: 'm',
+        text: 'caption',
+        attachments: [sampleAttachment()],
+      );
+      final raw = jsonDecode(utf8.decode(content.encode())) as Map<String, dynamic>;
+      expect(raw['v'], 1);
+      expect(raw['text'], 'caption');
+    });
+
+    test('a message with no attachments decodes to an empty list', () {
+      final decoded = MessageContent.decode(
+        const MessageContent(id: 'm', text: 'plain').encode(),
+        fallbackId: 'x',
+      );
+      expect(decoded.attachments, isEmpty);
+    });
+
+    test('a malformed attachment is skipped, keeping the message', () {
+      // Missing blob_id/key -- unusable, but the text must still arrive.
+      final raw = utf8.encode(jsonEncode({
+        'v': 1,
+        'id': 'm',
+        'text': 'still readable',
+        'attachments': [
+          {'kind': 'image', 'mime': 'image/jpeg'},
+          'not even an object',
+        ],
+      }));
+
+      final decoded = MessageContent.decode(Uint8List.fromList(raw), fallbackId: 'x');
+      expect(decoded.text, 'still readable');
+      expect(decoded.attachments, isEmpty);
+    });
+
+    test('an unknown kind is preserved rather than dropped', () {
+      // Forward compatibility: a future video attachment must reach the UI
+      // so it can show "unsupported", not vanish silently.
+      final raw = utf8.encode(jsonEncode({
+        'v': 1,
+        'id': 'm',
+        'text': '',
+        'attachments': [
+          {
+            'kind': 'video',
+            'blob_id': 'b' * 64,
+            'key': base64Encode(List.filled(32, 1)),
+            'mime': 'video/mp4',
+            'size': 1,
+            'w': 1,
+            'h': 1,
+          },
+        ],
+      }));
+
+      final decoded = MessageContent.decode(Uint8List.fromList(raw), fallbackId: 'x');
+      expect(decoded.attachments, hasLength(1));
+      expect(decoded.attachments.first.kind, 'video');
+      expect(decoded.attachments.first.isImage, isFalse);
+    });
+  });
 }

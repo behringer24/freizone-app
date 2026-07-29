@@ -15,6 +15,7 @@ import '../util/server_url.dart';
 import 'app_session.dart';
 import 'app_settings.dart';
 import 'local_state.dart';
+import 'media_store.dart';
 
 class AccountManager extends ChangeNotifier {
   AccountManager._(this._sessions, this._activeAccountId, this._settings);
@@ -170,6 +171,14 @@ class AccountManager extends ChangeNotifier {
     session.dispose();
     _sessions.remove(accountId);
     await LocalStateStore.deleteProfile(accountId);
+    // The account's pictures go with it -- they live outside the profile
+    // file, so deleting that alone would leave them behind forever.
+    try {
+      final media = await MediaStore.instance();
+      await media.deleteAccountMedia(accountId);
+    } catch (_) {
+      // Best effort, like the rest of this cleanup.
+    }
 
     if (_activeAccountId == accountId) {
       _activeAccountId = _sessions.keys.isEmpty ? null : _sessions.keys.first;

@@ -450,6 +450,119 @@ class ApiClient {
     _checkStatus(resp, {200});
   }
 
+  // --- Attachment blobs (SRV-07) --------------------------------------------
+
+  /// Uploads an attachment's ciphertext for [recipientDeviceID], returning
+  /// the blob id to put in the message. See docs/PROTOCOL.md §10.
+  ///
+  /// A blob always goes to the RECIPIENT's server -- point this client at
+  /// that server (for a federated peer, the one from
+  /// AppSession._clientFor). The recipient then fetches from its own server
+  /// and never has to contact a stranger's.
+  ///
+  /// The body is raw ciphertext, and the signature covers [digest] rather
+  /// than the bytes, so the server can authenticate the upload before
+  /// reading it (PROTOCOL §3's streamed-body variant). Signing over the
+  /// bytes produces the identical canonical string, since that digest *is*
+  /// their SHA-256 -- so the ordinary signer is used, plus the header.
+  Future<String> uploadBlob({
+    required Uint8List ciphertext,
+    required String digest,
+    required String recipientDeviceId,
+    required DeviceCredentials creds,
+  }) async {
+    const path = '/v1/blobs';
+    final rawQuery = 'recipient_device_id=$recipientDeviceId';
+    final headers = core.signHTTPRequest(
+      method: 'POST',
+      path: path,
+      rawQuery: rawQuery,
+      body: ciphertext,
+      deviceId: creds.deviceId,
+      devicePriv: creds.devicePriv,
+    );
+
+    final req = http.Request('POST', _uri('$path?$rawQuery'));
+    req.headers['Content-Type'] = 'application/octet-stream';
+    req.headers['Blob-Digest'] = 'sha256=$digest';
+    headers.forEach((key, value) => req.headers[key] = value);
+    req.bodyBytes = ciphertext;
+
+    final resp = await _send(req);
+    final data = _decodeObject(resp, {201});
+    return data['blob_id'] as String;
+  }
+
+  /// Uploads an attachment to a peer on a DIFFERENT server, where we have no
+  /// device row to be looked up. Same self-describing-key convention as
+  /// [sendFederatedMessage]: the key id is the device public key itself, and
+  /// the identity chain travels in headers (the body is raw ciphertext, so
+  /// it has nowhere else to go). See docs/PROTOCOL.md §10.
+  Future<String> uploadFederatedBlob({
+    required Uint8List ciphertext,
+    required String digest,
+    required String recipientDeviceId,
+    required Uint8List devicePriv,
+    required Uint8List rootPub,
+    required String senderAccountId,
+    required DeviceCertificate cert,
+  }) async {
+    const path = '/v1/federation/blobs';
+    final rawQuery = 'recipient_device_id=$recipientDeviceId';
+    final keyId = encodeB64(cert.devicePubKey);
+    final headers = core.signHTTPRequest(
+      method: 'POST',
+      path: path,
+      rawQuery: rawQuery,
+      body: ciphertext,
+      deviceId: keyId,
+      devicePriv: devicePriv,
+    );
+
+    final req = http.Request('POST', _uri('$path?$rawQuery'));
+    req.headers['Content-Type'] = 'application/octet-stream';
+    req.headers['Blob-Digest'] = 'sha256=$digest';
+    req.headers['Freizone-Sender-Account-Id'] = senderAccountId;
+    req.headers['Freizone-Sender-Root-Pub-Key'] = encodeB64(rootPub);
+    req.headers['Freizone-Sender-Device-Id'] = cert.deviceId;
+    req.headers['Freizone-Sender-Device-Pub-Key'] = encodeB64(cert.devicePubKey);
+    req.headers['Freizone-Sender-Cert-Issued-At'] = encodeTime(cert.issuedAt);
+    req.headers['Freizone-Sender-Cert-Signature'] = encodeB64(cert.signature);
+    headers.forEach((key, value) => req.headers[key] = value);
+    req.bodyBytes = ciphertext;
+
+    final resp = await _send(req);
+    final data = _decodeObject(resp, {201});
+    return data['blob_id'] as String;
+  }
+
+  /// Downloads an attachment's ciphertext. Only the recipient device can
+  /// fetch it; anything else answers 404 (deliberately indistinguishable
+  /// from "no such blob", so ids can't be probed).
+  Future<Uint8List> downloadBlob(String blobId, DeviceCredentials creds) async {
+    final path = '/v1/blobs/$blobId';
+    final headers = core.signHTTPRequest(
+      method: 'GET',
+      path: path,
+      body: Uint8List(0),
+      deviceId: creds.deviceId,
+      devicePriv: creds.devicePriv,
+    );
+    final req = http.Request('GET', _uri(path));
+    headers.forEach((key, value) => req.headers[key] = value);
+
+    final resp = await _send(req);
+    _checkStatus(resp, {200});
+    return resp.bodyBytes;
+  }
+
+  /// Drops a blob the recipient no longer needs, freeing its quota before
+  /// the retention window would.
+  Future<void> deleteBlob(String blobId, DeviceCredentials creds) async {
+    final resp = await _signedRequest('DELETE', '/v1/blobs/$blobId', null, creds);
+    _checkStatus(resp, {204});
+  }
+
   // --- Server admin ---------------------------------------------------------
 
   /// Lists every registered account. Admin or moderator only -- a 403

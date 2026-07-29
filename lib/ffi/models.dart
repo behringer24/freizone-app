@@ -331,3 +331,22 @@ class ParsedEnvelope {
 /// outgoing authenticated request -- see docs/PROTOCOL.md in
 /// freizone-server.
 typedef SignedHeaders = Map<String, String>;
+
+/// An attachment's ciphertext plus the key that decrypts it -- the result of
+/// [FreizoneCore.encryptBlob]. The ciphertext is uploaded to the recipient's
+/// blob store; the key goes into the message, inside its own end-to-end
+/// encryption, so the server storing the blob can never read it.
+class EncryptedBlob {
+  const EncryptedBlob({
+    required this.key,
+    required this.ciphertext,
+    required this.digest,
+  });
+
+  final Uint8List key;
+  final Uint8List ciphertext;
+
+  /// Hex SHA-256 of [ciphertext], for the upload's Blob-Digest header --
+  /// computed in the core, which already holds the bytes.
+  final String digest;
+}
