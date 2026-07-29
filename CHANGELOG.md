@@ -7,6 +7,16 @@ Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
 to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 `freizone-server/docs/ROADMAP.md`.
 
+## 0.12.0+9 — 2026-07-29
+
+### Added
+- **Send pictures.** Tap the image button in a chat to pick a photo from
+  your gallery and send it, with an optional caption. Pictures are
+  compressed automatically before sending, so they arrive quickly without
+  eating your data. Tap a received picture to view it full-screen and zoom
+  in. Like everything else in Freizone, images are end-to-end encrypted —
+  the server stores them without ever being able to see them. (APP-04)
+
 ## 0.11.8+8 — 2026-07-28
 
 ### Fixed
