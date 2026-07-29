@@ -7,6 +7,19 @@ Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
 to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 `freizone-server/docs/ROADMAP.md`.
 
+## 0.12.1+10 — 2026-07-30
+
+### Fixed
+- **Sending a picture works.** Choosing a photo from the gallery did
+  nothing at all: the picker closed and the chat stayed empty, with no
+  error to explain it. Pictures now send as intended, and a picture you
+  sent appears in the conversation right away instead of occasionally
+  showing a "tap to retry" placeholder. (APP-04)
+- Received pictures no longer take up space on your server after they
+  arrive. Once a picture is safely on your device it is removed from the
+  server, so your storage allowance isn't slowly used up by images you
+  already have. (APP-04, SRV-07)
+
 ## 0.12.0+9 — 2026-07-29
 
 ### Added
