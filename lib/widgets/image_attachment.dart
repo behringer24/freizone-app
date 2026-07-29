@@ -73,6 +73,10 @@ class _ImageAttachmentState extends State<ImageAttachment> {
     });
 
     if (haveFull) return;
+    // Our own sent picture with no local file left: the blob belongs to the
+    // recipient's device, so there is nothing we could fetch back. Retrying
+    // would only ever 404, so don't offer it.
+    if (widget.message.mine) return;
     // A previous failure isn't retried on its own -- the user taps to retry,
     // so a dead server can't turn into a silent loop.
     if (!force && media.stateFor(widget.message.id) == MediaFetchState.failed) {
@@ -141,7 +145,11 @@ class _ImageAttachmentState extends State<ImageAttachment> {
           )
         else
           ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest),
-        if (failed)
+        if (widget.message.mine)
+          // Nothing to fetch back (see ensureAttachmentDownloaded), so say
+          // so instead of spinning or offering a retry that cannot work.
+          const _GoneOverlay()
+        else if (failed)
           _RetryOverlay(onTap: () => _resolve(force: true))
         else if (!_resolving)
           const Center(
@@ -152,6 +160,29 @@ class _ImageAttachmentState extends State<ImageAttachment> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// A picture we sent whose local copy is gone. Not recoverable: the blob is
+/// owned by the recipient's device.
+class _GoneOverlay extends StatelessWidget {
+  const _GoneOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.black.withValues(alpha: 0.45),
+      child: const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12),
+          child: Text(
+            'Picture no longer on this device',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white, fontSize: 12),
+          ),
+        ),
+      ),
     );
   }
 }

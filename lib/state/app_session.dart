@@ -1532,6 +1532,10 @@ class AppSession extends ChangeNotifier {
   /// sender uploaded it here (see docs/PROTOCOL.md §10), precisely so a
   /// recipient never has to contact a stranger's server. Hence [api], not
   /// [_clientFor].
+  ///
+  /// Only ever downloads a RECEIVED attachment. A blob is owned by the
+  /// recipient device, so the sender's own upload is not retrievable by them
+  /// on any server -- their copy is the local one written at send time.
   Future<File?> ensureAttachmentDownloaded({
     required String peerAccountId,
     required StoredMessage message,
@@ -1546,6 +1550,7 @@ class AppSession extends ChangeNotifier {
       messageId: message.id,
     );
     if (await target.exists()) return target;
+    if (message.mine) return null;
 
     if (media.stateFor(message.id) == MediaFetchState.downloading) return null;
     media.markFetching(message.id);
@@ -1560,6 +1565,14 @@ class AppSession extends ChangeNotifier {
       );
       await media.writeFile(target, plaintext);
       media.clearFetchState(message.id);
+      // The file is safely on disk, so the server copy has served its
+      // purpose: free the quota now rather than waiting for the retention
+      // sweep. Best effort -- if it fails, the TTL cleanup gets it later.
+      unawaited(
+        api
+            .deleteBlob(attachment.blobId, state.credentials)
+            .catchError((_) {}),
+      );
       return target;
     } catch (e) {
       // Left as failed rather than retried automatically: the picture gets a
@@ -1725,6 +1738,15 @@ class AppSession extends ChangeNotifier {
 
     await _encryptAndSend(convo, content.encode());
 
+    // Our own copy of the picture, so the sender sees it in the transcript
+    // without downloading back what they just uploaded. Written BEFORE the
+    // message joins the transcript: any rebuild in between (an incoming
+    // receipt for this very message notifies listeners) would otherwise
+    // render a bubble whose file does not exist yet.
+    if (attachment != null) {
+      await _storeOwnAttachment(peerAccountId, content.id, attachment);
+    }
+
     convo.messages.add(
       StoredMessage(
         id: content.id,
@@ -1737,11 +1759,6 @@ class AppSession extends ChangeNotifier {
         attachments: attachments,
       ),
     );
-    // Our own copy of the picture, so the sender sees it in the transcript
-    // without downloading back what they just uploaded.
-    if (attachment != null) {
-      await _storeOwnAttachment(peerAccountId, content.id, attachment);
-    }
     convo.lastActivityAt = now;
     await LocalStateStore.saveProfile(state);
 
