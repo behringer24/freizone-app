@@ -174,4 +174,14 @@ func RecoveryWordlist() *C.char {
 	return toCResult(resp, err)
 }
 
+//export EncryptBlob
+func EncryptBlob(cReq *C.char) *C.char {
+	return jsonCall(cReq, doEncryptBlob)
+}
+
+//export DecryptBlob
+func DecryptBlob(cReq *C.char) *C.char {
+	return jsonCall(cReq, doDecryptBlob)
+}
+
 func main() {}

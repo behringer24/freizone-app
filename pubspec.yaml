@@ -40,6 +40,9 @@ dependencies:
   flutter_local_notifications: ^22.0.1
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.3.0
+  # Picks an image AND downscales/re-encodes it natively (maxWidth/maxHeight
+  # + imageQuality), so attachment compression needs no second package.
+  image_picker: ^1.1.2
   share_plus: ^13.2.1
   firebase_core: ^4.12.1
   firebase_messaging: ^16.4.3

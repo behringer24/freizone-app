@@ -9,9 +9,12 @@ package main
 // all without a connected device.
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -513,4 +516,112 @@ type recoveryWordlistResponse struct {
 // drive recovery-phrase autocomplete and per-word validation entirely offline.
 func doRecoveryWordlist() (*recoveryWordlistResponse, error) {
 	return &recoveryWordlistResponse{Words: mnemonic.Wordlist()}, nil
+}
+
+// --- Attachment blob encryption (APP-04 / SRV-07) ---------------------------
+
+// Attachments are encrypted with a fresh random key per blob rather than
+// with ratchet material: the blob outlives the message on the server, and a
+// user who resets a secure session (SRV-03) must still be able to re-download
+// pictures they already received. The key travels inside the message's own
+// end-to-end encrypted payload, so the server storing the blob never sees it.
+//
+// AES-256-GCM with a random 96-bit nonce prefixed to the ciphertext. Kept in
+// the shared Go core rather than done in Dart so all cryptography stays in
+// one audited place.
+
+type encryptBlobRequest struct {
+	Plaintext []byte `json:"plaintext"`
+}
+
+type encryptBlobResponse struct {
+	Key        []byte `json:"key"`
+	Ciphertext []byte `json:"ciphertext"`
+	// Digest is the hex SHA-256 of Ciphertext, for the upload's Blob-Digest
+	// header (see docs/PROTOCOL.md §3's streamed-body variant). Returned
+	// here because the core already holds the bytes -- the alternative
+	// would be hashing a multi-megabyte buffer a second time in Dart.
+	Digest string `json:"digest"`
+}
+
+// doEncryptBlob generates a fresh key and encrypts plaintext with it.
+func doEncryptBlob(req encryptBlobRequest) (any, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generating blob key: %w", err)
+	}
+	ciphertext, err := sealBlob(key, req.Plaintext)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(ciphertext)
+	return encryptBlobResponse{
+		Key:        key,
+		Ciphertext: ciphertext,
+		Digest:     hex.EncodeToString(sum[:]),
+	}, nil
+}
+
+type decryptBlobRequest struct {
+	Key        []byte `json:"key"`
+	Ciphertext []byte `json:"ciphertext"`
+}
+
+type decryptBlobResponse struct {
+	Plaintext []byte `json:"plaintext"`
+}
+
+// doDecryptBlob reverses doEncryptBlob. A wrong key, a truncated blob or any
+// tampering surfaces as an authentication failure rather than garbage bytes.
+func doDecryptBlob(req decryptBlobRequest) (any, error) {
+	plaintext, err := openBlob(req.Key, req.Ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	return decryptBlobResponse{Plaintext: plaintext}, nil
+}
+
+func sealBlob(key, plaintext []byte) ([]byte, error) {
+	gcm, err := blobAEAD(key)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generating blob nonce: %w", err)
+	}
+	// Nonce prefixed to the ciphertext: it isn't secret, and carrying it
+	// inline keeps a blob a single self-contained byte string.
+	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+func openBlob(key, ciphertext []byte) ([]byte, error) {
+	gcm, err := blobAEAD(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(ciphertext) < gcm.NonceSize() {
+		return nil, fmt.Errorf("blob: ciphertext too short")
+	}
+	nonce, sealed := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, sealed, nil)
+	if err != nil {
+		return nil, fmt.Errorf("blob: decryption failed: %w", err)
+	}
+	return plaintext, nil
+}
+
+func blobAEAD(key []byte) (cipher.AEAD, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("blob: key must be 32 bytes, got %d", len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("blob: creating cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("blob: creating gcm: %w", err)
+	}
+	return gcm, nil
 }

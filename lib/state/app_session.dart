@@ -10,6 +10,7 @@
 // screens rebuild via ListenableBuilder, the same primitive already
 // used everywhere else in this codebase.
 import 'dart:async';
+import 'dart:io';
 import 'dart:developer' as developer;
 import 'dart:math';
 
@@ -26,7 +27,9 @@ import '../util/freizone_address.dart';
 import '../util/server_url.dart';
 import 'app_settings.dart';
 import 'conversation.dart';
+import 'media_store.dart';
 import 'message_content.dart';
+import 'outgoing_attachment.dart';
 import 'local_state.dart';
 import 'receipt_signal.dart';
 
@@ -279,8 +282,17 @@ Future<IncomingMessageResult?> processIncomingMessage(
         replyToId: content.replyToId,
         replyPreviewText: content.replyPreview?.text,
         replyPreviewMine: content.replyPreview?.mine,
+        attachments: content.attachments,
       ),
     );
+    // Only the tiny inline preview is written now -- a kilobyte, so it costs
+    // nothing even on the background push isolate, and it means a picture
+    // shows *something* the moment it arrives. The full blob is fetched
+    // lazily by the UI, which must not be blocked on here: a wake has no
+    // screen to draw on and must not delay its notification.
+    if (content.attachments.isNotEmpty) {
+      await _writeAttachmentThumbs(state, msg.senderAccountId, content);
+    }
     convo.lastActivityAt = now;
     if (msg.senderAccountId != openConversationPeerId) {
       convo.hasUnread = true;
@@ -303,6 +315,36 @@ Future<IncomingMessageResult?> processIncomingMessage(
     // fallback.
     deliveredUpTo: convo.blocked ? null : (content.sentAt ?? now),
   );
+}
+
+/// Persists the inline preview thumbnails an incoming message carried, so a
+/// picture can be shown before its blob has been downloaded.
+///
+/// Failures are swallowed on purpose: a missing thumbnail costs a preview,
+/// never the message itself, and this runs on the background push isolate
+/// too, where there is no one to report an error to.
+Future<void> _writeAttachmentThumbs(
+  AppState state,
+  String peerAccountId,
+  MessageContent content,
+) async {
+  try {
+    final media = await MediaStore.instance();
+    for (final attachment in content.attachments) {
+      final thumb = attachment.thumb;
+      if (thumb == null || thumb.isEmpty) continue;
+      await media.writeFile(
+        media.thumbFor(
+          accountId: state.accountId,
+          peerAccountId: peerAccountId,
+          messageId: content.id,
+        ),
+        thumb,
+      );
+    }
+  } catch (_) {
+    // See above: a preview is a nicety, not part of delivery.
+  }
 }
 
 /// Re-asserts [state]'s DH identity + signed-prekey certificates (using
@@ -817,6 +859,9 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
     _startStream();
     unawaited(refreshMyRole());
+    // Housekeeping, deliberately not awaited: it only touches files no
+    // message points at any more, so nothing depends on it finishing.
+    unawaited(sweepOrphanedMedia());
     unawaited(refreshRegistrationPolicy());
     unawaited(_registerPush());
   }
@@ -1326,6 +1371,9 @@ class AppSession extends ChangeNotifier {
     convo.messages.clear();
     final hadUnread = convo.hasUnread;
     convo.hasUnread = false;
+    // Pictures go with the history they belonged to -- clearing a chat but
+    // leaving its images on disk would be both surprising and a slow leak.
+    await _deleteConversationMedia(peerAccountId);
     await LocalStateStore.saveProfile(state);
     if (hadUnread && !hasAnyUnread)
       unawaited(clearMessageNotification(state.accountId));
@@ -1346,10 +1394,181 @@ class AppSession extends ChangeNotifier {
     if (removed == null) return;
     if (_openConversationPeerId == peerAccountId)
       _openConversationPeerId = null;
+    await _deleteConversationMedia(peerAccountId);
     await LocalStateStore.saveProfile(state);
     if (removed.hasUnread && !hasAnyUnread)
       unawaited(clearMessageNotification(state.accountId));
     notifyListeners();
+  }
+
+  /// Deletes one conversation's stored pictures. Best-effort: leftover files
+  /// waste space but break nothing, and this always runs alongside a more
+  /// important deletion that must not fail because of them.
+  Future<void> _deleteConversationMedia(String peerAccountId) async {
+    try {
+      final media = await MediaStore.instance();
+      await media.deleteConversationMedia(state.accountId, peerAccountId);
+    } catch (_) {
+      // See above.
+    }
+  }
+
+  /// Removes stored pictures that no message refers to any more -- history
+  /// deleted while the app was closed, or a send that failed after its file
+  /// was written. Called once at startup, after state is loaded.
+  Future<void> sweepOrphanedMedia() async {
+    try {
+      final media = await MediaStore.instance();
+      final live = <String>{};
+      for (final convo in state.conversations.values) {
+        for (final m in convo.messages) {
+          if (m.hasAttachments) live.add(m.id);
+        }
+      }
+      await media.sweepOrphans(accountId: state.accountId, liveMessageIds: live);
+    } catch (_) {
+      // Housekeeping only -- never worth surfacing or retrying.
+    }
+  }
+
+  /// Encrypts an outgoing attachment and uploads it to the RECIPIENT's
+  /// server, returning the reference to embed in the message.
+  ///
+  /// A blob lives where the recipient can fetch it without contacting a
+  /// stranger (docs/PROTOCOL.md §10), so for a federated peer this uploads
+  /// to *their* server -- where we have no device row, hence the
+  /// self-describing-key federated route.
+  Future<MessageAttachment> _uploadAttachment(
+    Conversation convo,
+    OutgoingAttachment attachment,
+  ) async {
+    final encrypted = core.encryptBlob(attachment.bytes);
+    final peerServer = convo.peerServer;
+    final recipientDeviceId = convo.peerDeviceId!;
+
+    final String blobId;
+    if (peerServer == null) {
+      blobId = await api.uploadBlob(
+        ciphertext: encrypted.ciphertext,
+        digest: encrypted.digest,
+        recipientDeviceId: recipientDeviceId,
+        creds: state.credentials,
+      );
+    } else {
+      // Freshly signed rather than cached, exactly as the federated message
+      // path does: the peer's server has no row for this device to check
+      // against, so the certificate travels with the request.
+      final cert = core.signDeviceCertificate(
+        accountId: state.accountId,
+        deviceId: state.deviceId,
+        devicePub: state.devicePub,
+        issuedAt: DateTime.now().toUtc(),
+        rootPriv: state.rootPriv,
+      );
+      blobId = await _clientFor(peerServer).uploadFederatedBlob(
+        ciphertext: encrypted.ciphertext,
+        digest: encrypted.digest,
+        recipientDeviceId: recipientDeviceId,
+        devicePriv: state.devicePriv,
+        rootPub: state.rootPub,
+        senderAccountId: state.accountId,
+        cert: cert,
+      );
+    }
+
+    return MessageAttachment(
+      kind: 'image',
+      blobId: blobId,
+      key: encrypted.key,
+      mimeType: attachment.mimeType,
+      byteSize: attachment.bytes.length,
+      width: attachment.width,
+      height: attachment.height,
+      thumb: attachment.thumb,
+    );
+  }
+
+  /// Saves the sender's own copy of a picture they just sent, so it renders
+  /// straight away instead of being downloaded back from the server.
+  Future<void> _storeOwnAttachment(
+    String peerAccountId,
+    String messageId,
+    OutgoingAttachment attachment,
+  ) async {
+    try {
+      final media = await MediaStore.instance();
+      await media.writeFile(
+        media.fileFor(
+          accountId: state.accountId,
+          peerAccountId: peerAccountId,
+          messageId: messageId,
+        ),
+        attachment.bytes,
+      );
+      final thumb = attachment.thumb;
+      if (thumb != null) {
+        await media.writeFile(
+          media.thumbFor(
+            accountId: state.accountId,
+            peerAccountId: peerAccountId,
+            messageId: messageId,
+          ),
+          thumb,
+        );
+      }
+    } catch (e) {
+      // The message is already sent and stored; failing to keep our own
+      // copy only means we'd re-download it, so it must not fail the send.
+      lastError = 'storing sent attachment failed: $e';
+    }
+  }
+
+  /// Fetches and decrypts one attachment, storing it as a local file, and
+  /// returns that file. If it is already downloaded the existing file is
+  /// returned untouched -- the filesystem is the record of what's local, so
+  /// this is safe to call whenever a bubble comes into view.
+  ///
+  /// A blob always lives on OUR OWN server, even for a federated peer: the
+  /// sender uploaded it here (see docs/PROTOCOL.md §10), precisely so a
+  /// recipient never has to contact a stranger's server. Hence [api], not
+  /// [_clientFor].
+  Future<File?> ensureAttachmentDownloaded({
+    required String peerAccountId,
+    required StoredMessage message,
+  }) async {
+    if (message.attachments.isEmpty) return null;
+    final attachment = message.attachments.first;
+
+    final media = await MediaStore.instance();
+    final target = media.fileFor(
+      accountId: state.accountId,
+      peerAccountId: peerAccountId,
+      messageId: message.id,
+    );
+    if (await target.exists()) return target;
+
+    if (media.stateFor(message.id) == MediaFetchState.downloading) return null;
+    media.markFetching(message.id);
+    try {
+      final ciphertext = await api.downloadBlob(
+        attachment.blobId,
+        state.credentials,
+      );
+      final plaintext = core.decryptBlob(
+        key: attachment.key,
+        ciphertext: ciphertext,
+      );
+      await media.writeFile(target, plaintext);
+      media.clearFetchState(message.id);
+      return target;
+    } catch (e) {
+      // Left as failed rather than retried automatically: the picture gets a
+      // tap-to-retry placeholder, so a dead server or a deleted blob doesn't
+      // turn into a silent retry loop.
+      lastError = 'downloading attachment failed: $e';
+      media.markFailed(message.id);
+      return null;
+    }
   }
 
   /// Discards the ratchet session with [peerAccountId] so the NEXT outgoing
@@ -1455,6 +1674,7 @@ class AppSession extends ChangeNotifier {
     String peerAccountId,
     String text, {
     String? replyToId,
+    OutgoingAttachment? attachment,
   }) async {
     final convo = state.conversations[peerAccountId];
     if (convo == null) {
@@ -1478,9 +1698,21 @@ class AppSession extends ChangeNotifier {
     // loses that race locally: the receiver can decrypt and stamp its
     // receipt before the sender's own post-send stamp is even taken.
     final now = DateTime.now().toUtc();
+    final messageId = generateMessageId();
+
+    // Uploaded BEFORE the message is sent: the message carries the blob id,
+    // so publishing it first would briefly point at something that doesn't
+    // exist yet. A failed upload therefore fails the whole send, leaving
+    // nothing half-delivered.
+    final attachments = <MessageAttachment>[];
+    if (attachment != null) {
+      attachments.add(await _uploadAttachment(convo, attachment));
+    }
+
     final content = MessageContent(
-      id: generateMessageId(),
+      id: messageId,
       text: text,
+      attachments: attachments,
       replyToId: quoted?.id,
       replyPreview: wirePreview,
       // Sent on every cross-server message (not just the first), so the
@@ -1502,8 +1734,14 @@ class AppSession extends ChangeNotifier {
         replyToId: quoted?.id,
         replyPreviewText: quoted?.text,
         replyPreviewMine: quoted?.mine,
+        attachments: attachments,
       ),
     );
+    // Our own copy of the picture, so the sender sees it in the transcript
+    // without downloading back what they just uploaded.
+    if (attachment != null) {
+      await _storeOwnAttachment(peerAccountId, content.id, attachment);
+    }
     convo.lastActivityAt = now;
     await LocalStateStore.saveProfile(state);
 

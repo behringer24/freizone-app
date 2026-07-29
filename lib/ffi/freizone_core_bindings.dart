@@ -53,7 +53,9 @@ class FreizoneCoreBindings {
       signHTTPRequest = _lookupWithReq(lib, 'SignHTTPRequest'),
       revealRecoveryPhrase = _lookupWithReq(lib, 'RevealRecoveryPhrase'),
       restoreIdentityFromSeed = _lookupWithReq(lib, 'RestoreIdentityFromSeed'),
-      recoveryWordlist = _lookupNoArg(lib, 'RecoveryWordlist');
+      recoveryWordlist = _lookupNoArg(lib, 'RecoveryWordlist'),
+      encryptBlob = _lookupWithReq(lib, 'EncryptBlob'),
+      decryptBlob = _lookupWithReq(lib, 'DecryptBlob');
 
   factory FreizoneCoreBindings.open() {
     final lib = Platform.isAndroid
@@ -90,4 +92,6 @@ class FreizoneCoreBindings {
   final WithReqFn revealRecoveryPhrase;
   final WithReqFn restoreIdentityFromSeed;
   final NoArgFn recoveryWordlist;
+  final WithReqFn encryptBlob;
+  final WithReqFn decryptBlob;
 }

@@ -265,6 +265,35 @@ class FreizoneCore {
   List<String> recoveryWordlist() =>
       (_callNoArg(_bindings.recoveryWordlist)['words'] as List).cast<String>();
 
+  /// Encrypts an attachment with a freshly generated key (AES-256-GCM),
+  /// returning both. The key is deliberately NOT derived from the ratchet:
+  /// the blob outlives the message on the server, so resetting a secure
+  /// session must not make already-received pictures undownloadable. It
+  /// travels to the recipient inside the message's own encryption, so the
+  /// server holding the blob never sees it.
+  EncryptedBlob encryptBlob(Uint8List plaintext) {
+    final data = _call(_bindings.encryptBlob, {
+      'plaintext': encodeB64(plaintext),
+    });
+    return EncryptedBlob(
+      key: decodeB64(data['key'] as String),
+      ciphertext: decodeB64(data['ciphertext'] as String),
+      digest: data['digest'] as String,
+    );
+  }
+
+  /// Decrypts an attachment fetched from the blob store. Throws
+  /// [FreizoneCoreException] for a wrong key or any tampering -- the
+  /// ciphertext is authenticated, so corrupt bytes are never returned as if
+  /// they were a picture.
+  Uint8List decryptBlob({required Uint8List key, required Uint8List ciphertext}) {
+    final data = _call(_bindings.decryptBlob, {
+      'key': encodeB64(key),
+      'ciphertext': encodeB64(ciphertext),
+    });
+    return decodeB64(data['plaintext'] as String);
+  }
+
   // --- boilerplate ---------------------------------------------------------
 
   Map<String, dynamic> _callNoArg(Pointer<Utf8> Function() fn) =>

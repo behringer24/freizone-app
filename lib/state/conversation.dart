@@ -20,6 +20,20 @@ StoredMessageKind _storedMessageKindFromJson(String? v) =>
       orElse: () => StoredMessageKind.normal,
     );
 
+/// Tolerant of anything unexpected, like the enum parse above: history
+/// written by an older build simply has no "attachments" key, and a
+/// malformed entry costs its own attachment rather than the whole message.
+List<MessageAttachment> _attachmentsFromJson(dynamic raw) {
+  if (raw is! List || raw.isEmpty) return const [];
+  final out = <MessageAttachment>[];
+  for (final entry in raw) {
+    if (entry is! Map<String, dynamic>) continue;
+    final parsed = MessageAttachment.fromJson(entry);
+    if (parsed != null) out.add(parsed);
+  }
+  return out;
+}
+
 /// One decrypted (or about-to-be-sent) chat line, persisted locally --
 /// the server never stores plaintext or keeps history. [id] identifies
 /// this message for replies/delete/pin; messages from before those
@@ -38,6 +52,7 @@ class StoredMessage {
     this.replyPreviewText,
     this.replyPreviewMine,
     this.kind = StoredMessageKind.normal,
+    this.attachments = const [],
   }) : id = id ?? generateMessageId();
 
   /// A local, non-encrypted info line shown centered in the transcript
@@ -63,6 +78,7 @@ class StoredMessage {
     replyPreviewText: j['reply_preview_text'] as String?,
     replyPreviewMine: j['reply_preview_mine'] as bool?,
     kind: _storedMessageKindFromJson(j['kind'] as String?),
+    attachments: _attachmentsFromJson(j['attachments']),
   );
 
   Map<String, dynamic> toJson() => {
@@ -75,6 +91,8 @@ class StoredMessage {
     if (replyPreviewText != null) 'reply_preview_text': replyPreviewText,
     if (replyPreviewMine != null) 'reply_preview_mine': replyPreviewMine,
     if (kind != StoredMessageKind.normal) 'kind': kind.name,
+    if (attachments.isNotEmpty)
+      'attachments': attachments.map((a) => a.toJson()).toList(),
   };
 
   final String id;
@@ -85,6 +103,15 @@ class StoredMessage {
   /// Whether this is an ordinary chat message or a local system/info line
   /// (see [StoredMessageKind]).
   final StoredMessageKind kind;
+
+  /// Files sent with this message (see [MessageAttachment]). Kept as the
+  /// attachment *metadata* only -- the blob reference, key and a tiny
+  /// preview thumbnail. The picture itself is a file on disk, never part of
+  /// the profile JSON: that whole file is rewritten on every single message,
+  /// so image bytes in here would make every chat write cost megabytes.
+  final List<MessageAttachment> attachments;
+
+  bool get hasAttachments => attachments.isNotEmpty;
 
   /// For a RECEIVED message: the sender's own clock reading at send time,
   /// carried inside the encrypted content (message_content.dart's sentAt)
@@ -237,7 +264,15 @@ class Conversation {
       displayName ??
       shortFreizoneAddress(id: peerAccountId, server: peerServer ?? localServer);
 
-  String get lastMessagePreview => messages.isEmpty ? '' : messages.last.text;
+  /// One-line summary for the chat list. An attachment gets a marker, since
+  /// a picture with no caption would otherwise show as a blank row.
+  String get lastMessagePreview {
+    if (messages.isEmpty) return '';
+    final last = messages.last;
+    if (!last.hasAttachments) return last.text;
+    final label = last.attachments.first.isImage ? '📷 Photo' : '📎 Attachment';
+    return last.text.isEmpty ? label : '$label  ${last.text}';
+  }
 
   /// Looks up a message by id, or null if it's not (or no longer) in
   /// local history -- e.g. it was deleted locally, or belongs to the

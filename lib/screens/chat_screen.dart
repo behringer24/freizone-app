@@ -6,11 +6,14 @@
 // the conversation's peer device is already resolved and cached.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
+import '../state/outgoing_attachment.dart';
 import '../state/receipt_signal.dart';
+import '../widgets/image_attachment.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
@@ -77,6 +80,48 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       _messageController.clear();
       setState(() => _replyingTo = null);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Send failed: ${describeError(e)}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// Picks a picture from the gallery and sends it, with the caption
+  /// currently typed in the composer (if any).
+  ///
+  /// image_picker does the downscale and JPEG re-encode natively as part of
+  /// picking, so there is no separate "compressing" step to show -- and no
+  /// quality prompt, matching what other chat apps do.
+  Future<void> _pickAndSendImage() async {
+    if (_sending) return;
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: maxSentImageEdge.toDouble(),
+      maxHeight: maxSentImageEdge.toDouble(),
+      imageQuality: sentImageQuality,
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() => _sending = true);
+    try {
+      final bytes = await picked.readAsBytes();
+      final attachment = await OutgoingAttachment.prepare(bytes);
+      if (attachment == null) {
+        throw StateError("That file doesn't look like an image.");
+      }
+      await widget.session.sendMessage(
+        widget.peerAccountId,
+        _messageController.text.trim(),
+        replyToId: _replyingTo?.id,
+        attachment: attachment,
+      );
+      _messageController.clear();
+      if (mounted) setState(() => _replyingTo = null);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -263,6 +308,8 @@ class _ChatScreenState extends State<ChatScreen> {
           peerTitle: convo.titleFor(widget.session.state.server),
           isPinned: convo.pinnedMessageIds.contains(m.id),
           deliveryStatus: _deliveryStatusFor(convo, m),
+          session: widget.session,
+          peerAccountId: widget.peerAccountId,
           onLongPress: () => _showMessageActions(context, convo, m),
           onTapQuote: m.replyToId == null
               ? null
@@ -421,6 +468,15 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
+                        // Inside the composer's own branch, so every state
+                        // that already hides the input (blocked, pending
+                        // approval, unreachable, federation-locked) hides
+                        // this too, with no extra condition to keep in sync.
+                        IconButton(
+                          icon: const Icon(Icons.image_outlined),
+                          tooltip: 'Send a picture',
+                          onPressed: _sending ? null : _pickAndSendImage,
+                        ),
                         Expanded(
                           child: ListenableBuilder(
                             listenable: widget.settings,
@@ -819,12 +875,19 @@ class _MessageBubble extends StatelessWidget {
     required this.peerTitle,
     required this.isPinned,
     required this.onLongPress,
+    required this.session,
+    required this.peerAccountId,
     this.deliveryStatus,
     this.onTapQuote,
   });
 
   final StoredMessage message;
   final String timeLabel;
+
+  /// Needed to fetch and decrypt an attachment on demand -- see
+  /// AppSession.ensureAttachmentDownloaded.
+  final AppSession session;
+  final String peerAccountId;
 
   /// The peer's display title, used to label a quoted message that was
   /// theirs ("Replying to X" reads the same way the composer bar does).
@@ -919,7 +982,18 @@ class _MessageBubble extends StatelessWidget {
                         ),
                       ),
                     ),
-                  Text(message.text, style: TextStyle(color: onBubble)),
+                  if (message.hasAttachments) ...[
+                    ImageAttachment(
+                      session: session,
+                      peerAccountId: peerAccountId,
+                      message: message,
+                    ),
+                    if (message.text.isNotEmpty) const SizedBox(height: 6),
+                  ],
+                  // Doubles as the caption when there's an attachment, so an
+                  // image with no text renders nothing extra.
+                  if (message.text.isNotEmpty)
+                    Text(message.text, style: TextStyle(color: onBubble)),
                   const SizedBox(height: 2),
                   Row(
                     mainAxisSize: MainAxisSize.min,
