@@ -159,7 +159,7 @@ before the network call and give it a per-message delivery state
 checkmarks already use in `chat_screen.dart`; clear the composer immediately
 and restore the text only if the send fails. This alone removes the "did it go
 out?" question and is the smaller change — but the message is then only in
-memory/local state, and a send that dies with the process is silently lost.
+memory/local state, and a send that dies with the process is silently lost. To avoid that the user already starts typing the next message, the composer needs to be disabled until the message is > sent and not failed - otherwise we cannot restore the unsent (failed) text in the composer.
 
 **Step 2 — a real outbox, worth considering.** A persisted queue would
 additionally survive app kill, allow composing while offline, and retry with
