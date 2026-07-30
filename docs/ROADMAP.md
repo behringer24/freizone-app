@@ -66,7 +66,7 @@ multi-device linking channel (SRV-02).
 ### APP-03 — iOS client
 Status: planned · Also affects: freizone-gateway (GAW-01)
 No `ios/` directory yet; only Android is built/tested. iOS push delivery needs
-the gateway's APNs path (GW-01).
+the gateway's APNs path (GAW-01).
 
 ### APP-04 — Multimedia messaging
 Status: in progress · Also affects: freizone-server (SRV-07)
@@ -301,7 +301,7 @@ is gone.
 Making it a real thumbnail means the reply has to *carry* one: add an
 optional `thumb` to `ReplyPreview` (`message_content.dart`), alongside the
 `text`/`mine` it already snapshots for exactly this reason. Trade-offs:
-- **Backward/forward compatible** per SRV-12: the field is additive, and
+- **Backward/forward compatible** per SRV-10: the field is additive, and
   `ReplyPreview.fromJson` reads only the keys it knows, so an older client
   ignores it rather than failing.
 - **Cost:** roughly 2 KB extra inside every reply to a picture (see

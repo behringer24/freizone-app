@@ -7,10 +7,14 @@
 // (pre-this-feature, bare-string) and newer (future "v" values this
 // build doesn't understand yet) plaintexts from other devices.
 //
-// "attachments" is reserved, always empty for now -- deliberately
-// modeled as a list from day one (rather than a single content "type")
-// so a future message can carry text plus one or more images/videos/
-// audio clips without a second breaking format change.
+// "attachments" was carried as a reserved, always-empty field from the day
+// this envelope was introduced, and APP-04 filled it without needing a
+// format change -- builds predating pictures ignore the entries and still
+// render the caption. Modeled as a list from day one (rather than a single
+// content "type") so a message can carry text plus one or more images and,
+// later, videos/audio clips without a second breaking change. Only one
+// attachment is actually rendered today; see docs/PROTOCOL.md §10 in
+// freizone-server for the wire contract.
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
