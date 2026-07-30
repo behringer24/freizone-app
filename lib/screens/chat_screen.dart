@@ -13,6 +13,7 @@ import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../state/outgoing_attachment.dart';
 import '../state/receipt_signal.dart';
+import '../widgets/attachment_thumbnail.dart';
 import '../widgets/image_attachment.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
@@ -46,6 +47,23 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Set while composing a reply -- shown as a preview bar above the
   /// input, cleared once the reply is sent or dismissed.
   StoredMessage? _replyingTo;
+
+  /// A picture staged for sending, shown as a preview bar above the input
+  /// (like [_replyingTo]) until the message is actually sent or the picture
+  /// is discarded. Picking one deliberately does NOT send: the caption is
+  /// typed afterwards, so firing the message off immediately would make a
+  /// caption impossible whenever the picture is chosen first.
+  ///
+  /// Single-valued rather than a list on purpose -- the wire format already
+  /// carries a list of attachments (see MessageContent), but nothing renders
+  /// several pictures per message yet, so the picker is locked while one is
+  /// staged instead of quietly dropping the extras.
+  OutgoingAttachment? _pendingAttachment;
+
+  /// True while a just-picked file is being read and measured. Distinct from
+  /// [_sending]: nothing has been sent yet, but the picture isn't ready to
+  /// send either, so both buttons have to wait for it.
+  bool _preparing = false;
 
   /// Index into a conversation's pinned ids *reversed* (so 0 is always
   /// the most recently pinned) -- clamped against the current list on
@@ -82,9 +100,15 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _attachmentsSupported = capability.enabled);
   }
 
+  /// Sends whatever is currently composed: the typed text, the staged
+  /// picture (see [_pendingAttachment]), or both -- the text doubles as the
+  /// picture's caption. A picture alone is a valid message, so an empty
+  /// composer only blocks the send when nothing is staged either.
   Future<void> _send() async {
     final text = _messageController.text.trim();
-    if (text.isEmpty || _sending) return;
+    final attachment = _pendingAttachment;
+    if (_sending || _preparing) return;
+    if (text.isEmpty && attachment == null) return;
 
     setState(() => _sending = true);
     try {
@@ -92,9 +116,15 @@ class _ChatScreenState extends State<ChatScreen> {
         widget.peerAccountId,
         text,
         replyToId: _replyingTo?.id,
+        attachment: attachment,
       );
       _messageController.clear();
-      setState(() => _replyingTo = null);
+      // Only cleared once the send actually succeeded, so a failed attempt
+      // leaves the picture and the reply staged and simply retryable.
+      setState(() {
+        _replyingTo = null;
+        _pendingAttachment = null;
+      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -106,14 +136,14 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Picks a picture from the gallery and sends it, with the caption
-  /// currently typed in the composer (if any).
+  /// Picks a picture from the gallery and stages it in the composer -- it is
+  /// sent by [_send], together with whatever caption is typed afterwards.
   ///
   /// image_picker does the downscale and JPEG re-encode natively as part of
   /// picking, so there is no separate "compressing" step to show -- and no
   /// quality prompt, matching what other chat apps do.
-  Future<void> _pickAndSendImage() async {
-    if (_sending) return;
+  Future<void> _pickImage() async {
+    if (_sending || _preparing || _pendingAttachment != null) return;
     final XFile? picked;
     try {
       picked = await ImagePicker().pickImage(
@@ -132,29 +162,23 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (picked == null || !mounted) return;
 
-    setState(() => _sending = true);
+    setState(() => _preparing = true);
     try {
       final bytes = await picked.readAsBytes();
       final attachment = await OutgoingAttachment.prepare(bytes);
       if (attachment == null) {
         throw StateError("That file doesn't look like an image.");
       }
-      await widget.session.sendMessage(
-        widget.peerAccountId,
-        _messageController.text.trim(),
-        replyToId: _replyingTo?.id,
-        attachment: attachment,
-      );
-      _messageController.clear();
-      if (mounted) setState(() => _replyingTo = null);
+      if (!mounted) return;
+      setState(() => _pendingAttachment = attachment);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Send failed: ${describeError(e)}')),
+          SnackBar(content: Text("Couldn't attach: ${describeError(e)}")),
         );
       }
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) setState(() => _preparing = false);
     }
   }
 
@@ -325,6 +349,12 @@ class _ChatScreenState extends State<ChatScreen> {
         items.add(_SystemMessage(label: m.text));
         continue;
       }
+      // Best-effort: whether the message this one quotes was a picture, which
+      // only the *original* knows -- the self-contained reply snapshot on the
+      // wire carries text only (see ReplyPreview). So this is resolved from
+      // local history and simply stays false once the original is gone,
+      // leaving the text-only quote that was rendered before.
+      final quoted = m.replyToId == null ? null : convo.messageById(m.replyToId!);
       items.add(
         _MessageBubble(
           key: _keyFor(m.id),
@@ -335,6 +365,10 @@ class _ChatScreenState extends State<ChatScreen> {
           deliveryStatus: _deliveryStatusFor(convo, m),
           session: widget.session,
           peerAccountId: widget.peerAccountId,
+          quotedHasImage:
+              quoted != null &&
+              quoted.hasAttachments &&
+              quoted.attachments.first.isImage,
           onLongPress: () => _showMessageActions(context, convo, m),
           onTapQuote: m.replyToId == null
               ? null
@@ -457,6 +491,22 @@ class _ChatScreenState extends State<ChatScreen> {
           _scrollToBottom();
           final unreachable =
               widget.session.reachability == ServerReachability.unreachable;
+          // A staged picture is a sendable message on its own, so the send
+          // button lights up for it even with an empty text field.
+          final canSend =
+              _messageController.text.trim().isNotEmpty ||
+              _pendingAttachment != null;
+          // Whether the composer itself is the last branch rendered below.
+          // The reply and staged-picture bars belong to the composer, so they
+          // follow this one condition instead of each repeating a subset of
+          // it -- which is how the reply bar could previously linger above a
+          // blocked or federation-locked chat that has no input at all.
+          final federationLocked = widget.session.federationLocked(convo);
+          final composerAvailable =
+              !convo.blocked &&
+              !convo.pendingApproval &&
+              !unreachable &&
+              !federationLocked;
           return Column(
             children: [
               if (convo.pinnedMessageIds.isNotEmpty)
@@ -470,17 +520,19 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
               ),
-              if (_replyingTo != null &&
-                  !convo.pendingApproval &&
-                  !unreachable)
+              if (_replyingTo != null && composerAvailable)
                 _buildReplyComposerBar(context, convo, _replyingTo!),
+              // Directly above the input, below any reply bar: the reply is
+              // context for the message, the picture is part of it.
+              if (_pendingAttachment != null && composerAvailable)
+                _buildAttachmentComposerBar(context, _pendingAttachment!),
               if (convo.blocked)
                 _buildBlockedBar(context, convo)
               else if (convo.pendingApproval)
                 _buildPendingRequestBar(context, convo)
               else if (unreachable)
                 _buildServerOfflineBar(context)
-              else if (widget.session.federationLocked(convo))
+              else if (federationLocked)
                 _buildFederationLockedBar(context)
               else
                 SafeArea(
@@ -500,11 +552,25 @@ class _ChatScreenState extends State<ChatScreen> {
                         // Dropped entirely when the receiving server has told
                         // us it stores no attachments -- offering a button
                         // that can only fail is worse than not having one.
+                        //
+                        // Greyed out while a picture is already staged: one
+                        // attachment per message is all that is rendered
+                        // today (no multi-image bubble, no gallery view on the
+                        // receiving side), so it goes dead until that picture
+                        // is sent or dismissed via the preview bar's X,
+                        // rather than silently replacing or dropping it.
                         if (_attachmentsSupported != false)
                           IconButton(
                             icon: const Icon(Icons.image_outlined),
-                            tooltip: 'Send a picture',
-                            onPressed: _sending ? null : _pickAndSendImage,
+                            tooltip: _pendingAttachment != null
+                                ? 'One picture per message'
+                                : 'Attach a picture',
+                            onPressed:
+                                _sending ||
+                                    _preparing ||
+                                    _pendingAttachment != null
+                                ? null
+                                : _pickImage,
                           ),
                         Expanded(
                           child: ListenableBuilder(
@@ -549,18 +615,17 @@ class _ChatScreenState extends State<ChatScreen> {
                         const SizedBox(width: 8),
                         CircleAvatar(
                           radius: 24,
-                          backgroundColor:
-                              _messageController.text.trim().isEmpty
-                              ? colorScheme.surfaceContainerHighest
-                              : colorScheme.primary,
+                          backgroundColor: canSend
+                              ? colorScheme.primary
+                              : colorScheme.surfaceContainerHighest,
                           child: IconButton(
                             icon: Icon(
                               Icons.send,
-                              color: _messageController.text.trim().isEmpty
-                                  ? colorScheme.onSurfaceVariant
-                                  : colorScheme.onPrimary,
+                              color: canSend
+                                  ? colorScheme.onPrimary
+                                  : colorScheme.onSurfaceVariant,
                             ),
-                            onPressed: _sending ? null : _send,
+                            onPressed: _sending || _preparing ? null : _send,
                           ),
                         ),
                       ],
@@ -737,9 +802,18 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               Icon(Icons.push_pin, size: 16, color: colorScheme.primary),
               const SizedBox(width: 8),
+              if (pinned != null && pinned.hasAttachments) ...[
+                AttachmentThumbnail(
+                  bytes: pinned.attachments.first.thumb,
+                  size: 26,
+                ),
+                const SizedBox(width: 8),
+              ],
               Expanded(
                 child: Text(
-                  pinned?.text ?? 'Pinned message no longer available',
+                  pinned == null
+                      ? 'Pinned message no longer available'
+                      : _referenceLabel(pinned),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
@@ -794,6 +868,13 @@ class _ChatScreenState extends State<ChatScreen> {
             color: colorScheme.primary,
             margin: const EdgeInsets.only(right: 8),
           ),
+          if (replyingTo.hasAttachments) ...[
+            AttachmentThumbnail(
+              bytes: replyingTo.attachments.first.thumb,
+              size: 32,
+            ),
+            const SizedBox(width: 8),
+          ],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -810,7 +891,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 Text(
-                  replyingTo.text,
+                  _referenceLabel(replyingTo),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
@@ -820,7 +901,81 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.close, size: 18),
+            tooltip: 'Cancel reply',
             onPressed: () => setState(() => _replyingTo = null),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One-line label for a message referenced somewhere compact (the pinned
+  /// bar, the reply preview). Same reasoning as
+  /// Conversation.lastMessagePreview: a picture with no caption would
+  /// otherwise render as a blank line. No emoji marker here, unlike the chat
+  /// list -- these bars show the actual thumbnail next to this text.
+  String _referenceLabel(StoredMessage message) {
+    if (message.text.isNotEmpty) return message.text;
+    if (!message.hasAttachments) return message.text;
+    return message.attachments.first.isImage ? 'Photo' : 'Attachment';
+  }
+
+  /// The picture staged for sending, previewed above the input the same way
+  /// a reply is -- so choosing a picture composes it into the message rather
+  /// than firing it off, leaving room to type a caption. The X discards it
+  /// and re-enables the picker button.
+  Widget _buildAttachmentComposerBar(
+    BuildContext context,
+    OutgoingAttachment attachment,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          // The full picked JPEG, drawn small (and decoded small, see
+          // AttachmentThumbnail) so the composer keeps its height no matter
+          // what was picked.
+          AttachmentThumbnail(bytes: attachment.bytes, size: 44),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Picture',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: colorScheme.primary,
+                  ),
+                ),
+                // Already downscaled and re-encoded by the picker, so this is
+                // what will actually be uploaded -- worth showing before the
+                // send rather than after.
+                Text(
+                  '${attachment.width}×${attachment.height} · '
+                  '${formatByteSize(attachment.bytes.length)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            tooltip: 'Remove picture',
+            // Held while a send is in flight: that send already owns these
+            // bytes, so dropping them mid-upload would only confuse.
+            onPressed: _sending
+                ? null
+                : () => setState(() => _pendingAttachment = null),
           ),
         ],
       ),
@@ -906,6 +1061,7 @@ class _MessageBubble extends StatelessWidget {
     required this.onLongPress,
     required this.session,
     required this.peerAccountId,
+    this.quotedHasImage = false,
     this.deliveryStatus,
     this.onTapQuote,
   });
@@ -923,6 +1079,14 @@ class _MessageBubble extends StatelessWidget {
   final String peerTitle;
   final bool isPinned;
   final VoidCallback onLongPress;
+
+  /// Whether the quoted message was a picture, so the quote can say so with
+  /// a small camera icon. An interim stand-in for showing the picture itself:
+  /// a real thumbnail would have to travel inside the reply (ReplyPreview
+  /// carries text only), so this is derived from local history instead and is
+  /// therefore best-effort -- false, and the quote looks exactly as it did
+  /// before, whenever the original is no longer stored on this device.
+  final bool quotedHasImage;
 
   /// Null for one of the peer's messages, or one of mine the peer hasn't
   /// confirmed at all yet -- see _ChatScreenState._deliveryStatusFor.
@@ -998,14 +1162,33 @@ class _MessageBubble extends StatelessWidget {
                                 color: onBubble,
                               ),
                             ),
-                            Text(
-                              message.replyPreviewText ?? '',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: onBubble.withValues(alpha: 0.8),
-                              ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (quotedHasImage) ...[
+                                  Icon(
+                                    Icons.photo_outlined,
+                                    size: 13,
+                                    color: onBubble.withValues(alpha: 0.8),
+                                  ),
+                                  const SizedBox(width: 4),
+                                ],
+                                // Flexible, not Expanded: with an empty
+                                // caption (a picture sent without one) the
+                                // row should shrink to just the icon rather
+                                // than stretch the quote to full width.
+                                Flexible(
+                                  child: Text(
+                                    message.replyPreviewText ?? '',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: onBubble.withValues(alpha: 0.8),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
