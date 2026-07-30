@@ -61,10 +61,25 @@ class _ChatScreenState extends State<ChatScreen> {
   GlobalKey _keyFor(String messageId) =>
       _messageKeys.putIfAbsent(messageId, () => GlobalKey());
 
+  /// Whether the server that would hold this conversation's pictures takes
+  /// them at all. Null while unknown -- the button stays available then, so
+  /// a slow or unreachable status call doesn't hide a working feature; the
+  /// send path re-checks and explains properly if it turns out not to work.
+  bool? _attachmentsSupported;
+
   @override
   void initState() {
     super.initState();
     widget.session.enterConversation(widget.peerAccountId);
+    _checkAttachmentSupport();
+  }
+
+  Future<void> _checkAttachmentSupport() async {
+    final convo = widget.session.state.conversations[widget.peerAccountId];
+    if (convo == null) return;
+    final capability = await widget.session.blobCapabilityFor(convo);
+    if (!mounted || capability == null) return;
+    setState(() => _attachmentsSupported = capability.enabled);
   }
 
   Future<void> _send() async {
@@ -482,11 +497,15 @@ class _ChatScreenState extends State<ChatScreen> {
                         // that already hides the input (blocked, pending
                         // approval, unreachable, federation-locked) hides
                         // this too, with no extra condition to keep in sync.
-                        IconButton(
-                          icon: const Icon(Icons.image_outlined),
-                          tooltip: 'Send a picture',
-                          onPressed: _sending ? null : _pickAndSendImage,
-                        ),
+                        // Dropped entirely when the receiving server has told
+                        // us it stores no attachments -- offering a button
+                        // that can only fail is worse than not having one.
+                        if (_attachmentsSupported != false)
+                          IconButton(
+                            icon: const Icon(Icons.image_outlined),
+                            tooltip: 'Send a picture',
+                            onPressed: _sending ? null : _pickAndSendImage,
+                          ),
                         Expanded(
                           child: ListenableBuilder(
                             listenable: widget.settings,
