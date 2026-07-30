@@ -7,6 +7,16 @@ Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
 to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 `freizone-server/docs/ROADMAP.md`.
 
+## 0.12.2+11 — 2026-07-30
+
+### Changed
+- Freizone now checks whether the person you're writing to can actually
+  receive pictures before offering to send one. Not every server stores
+  images, and servers can set their own size limits — so in a chat where
+  pictures aren't possible the image button simply isn't shown, and a
+  picture that's too large for the other side is refused right away,
+  telling you the actual limit, instead of failing mid-send. (APP-04)
+
 ## 0.12.1+10 — 2026-07-30
 
 ### Fixed
