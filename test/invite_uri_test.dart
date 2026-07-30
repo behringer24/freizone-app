@@ -23,6 +23,30 @@ void main() {
       expect(parsed?.code, isNull);
     });
 
+    test('puts the code in the QR compactly, without display grouping', () {
+      // The server issues codes grouped for humans ("ABCD-EFGH-JKMN"); the QR
+      // carries the compact form so it stays sparse. Purely a size choice --
+      // the server normalizes either form on redemption.
+      final uri = buildInviteUri(
+        server: 'https://chat.example.org',
+        code: 'ABCD-EFGH-JKMN',
+      );
+      expect(parseInviteUri(uri.toString())?.code, 'ABCDEFGHJKMN');
+    });
+
+    test('compactInviteCode strips grouping and uppercases', () {
+      expect(compactInviteCode('abcd-efgh-jkmn'), 'ABCDEFGHJKMN');
+      expect(compactInviteCode('ABCD EFGH JKMN'), 'ABCDEFGHJKMN');
+      expect(compactInviteCode('abcd_efgh\njkmn'), 'ABCDEFGHJKMN');
+      expect(compactInviteCode('ABCDEFGHJKMN'), 'ABCDEFGHJKMN');
+    });
+
+    test('a scanned code survives the round trip unchanged', () {
+      const compact = 'ABCDEFGHJKMN';
+      final uri = buildInviteUri(server: 'chat.example.org', code: compact);
+      expect(parseInviteUri(uri.toString())?.code, compact);
+    });
+
     test('rejects a non-join URI', () {
       expect(parseInviteUri('freizone://chat?id=q2xjx&server=chat.example.org'), isNull);
     });
