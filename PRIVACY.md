@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated: 2026-07-23**
+**Last updated: 2026-07-30**
 
 This Privacy Policy describes how the Freizone application ("Freizone," "the App," "we," "us") handles information. Freizone is currently available for Android, with an iOS release planned; this Policy applies to Freizone regardless of platform.
 
@@ -36,6 +36,7 @@ If you exchange messages with a user on a different server (see Section 5, Feder
 
 - Your account's public key and device credentials, which allow other users to verify your identity.
 - End-to-end encrypted message content. Messages are encrypted on your device before transmission using established end-to-end encryption techniques; the server you connect to stores and forwards this content without being able to read it.
+- End-to-end encrypted attachments. When you send a picture, it is encrypted on your device with a key of its own and uploaded as an opaque file to the server of the person you are sending it to — which, for a contact on another server, is that other operator's server rather than yours. That operator stores ciphertext it cannot read, subject to their own size limit and retention period, and the file is removed once the recipient's device has downloaded it. The key needed to decrypt it never reaches any server; it travels inside the end-to-end encrypted message itself.
 - Limited technical metadata the server requires to operate, such as which device a message is intended for and when it was sent.
 - If enabled, a push-notification identifier used solely to signal that new content is available (see Section 6).
 - Any administrative information your server's operator maintains about your account, such as its status or role.
@@ -58,11 +59,12 @@ To alert you to new messages while the App is not actively running, Freizone may
 
 Depending on your device's platform, Freizone may request access to:
 
-- **Camera**, used solely to scan an optional invite code when you choose to do so. No image or video is stored or transmitted.
+- **Camera**, used solely to scan an optional invite or contact code when you choose to do so. No photo or video is captured, stored, or transmitted through this.
+- **Photo selection**, when you choose to send a picture. Freizone requests no access to your photo library: the picture is chosen in your device's own system picker, and only the single file you select is handed to the App. Freizone cannot browse, read, or see anything else in your gallery.
 - **Notifications**, to alert you to new messages.
 - **Network access**, required to communicate with the server you configure.
 
-Freizone does not request access to your location, contacts, microphone, or stored files, and requests no permission beyond those necessary for the functionality described above.
+Freizone does not request access to your location, contacts, or microphone, and requests no permission beyond those necessary for the functionality described above. It does not request broad access to your stored files either — as described above, a picture you send reaches the App only because you selected that one file yourself.
 
 ## 8. What We Do Not Do
 
