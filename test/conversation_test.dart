@@ -105,4 +105,76 @@ void main() {
       expect(convo.lastMessagePreview, contains('with a caption'));
     });
   });
+
+  group('StoredMessage.sendState', () {
+    StoredMessage outgoing(String text, MessageSendState sendState) =>
+        StoredMessage(
+          text: text,
+          mine: true,
+          timestamp: DateTime.utc(2026, 1, 1),
+          sendState: sendState,
+        );
+
+    test('defaults to sent, so received and legacy history is unaffected', () {
+      final m = StoredMessage(
+        text: 'hi',
+        mine: false,
+        timestamp: DateTime.utc(2026, 1, 1),
+      );
+      expect(m.sendState, MessageSendState.sent);
+      expect(m.isPending, isFalse);
+      expect(m.hasFailed, isFalse);
+    });
+
+    test('a message read back from disk is always sent', () {
+      final restored = StoredMessage.fromJson({
+        'text': 'from disk',
+        'mine': true,
+        'timestamp': '2026-01-01T00:00:00.000Z',
+      });
+      expect(restored.sendState, MessageSendState.sent);
+    });
+
+    // The load-bearing invariant of APP-08 step 1: retrying a failed send
+    // needs the picture bytes AppSession only holds in memory, so a pending
+    // or failed message must never reach disk -- restored, it would be a
+    // bubble that can never be sent and never be cleared.
+    test('pending and failed messages are left out of toJson', () {
+      final convo = Conversation(peerAccountId: 'peer1');
+      convo.messages.addAll([
+        outgoing('delivered', MessageSendState.sent),
+        outgoing('in flight', MessageSendState.pending),
+        outgoing('never left', MessageSendState.failed),
+      ]);
+
+      final persisted = convo.toJson()['messages'] as List<dynamic>;
+      expect(persisted, hasLength(1));
+      expect((persisted.single as Map<String, dynamic>)['text'], 'delivered');
+
+      // ...while all three stay visible in the live transcript.
+      expect(convo.messages, hasLength(3));
+    });
+
+    test('a system info line still persists, since it defaults to sent', () {
+      final convo = Conversation(peerAccountId: 'peer1');
+      convo.messages.add(
+        StoredMessage.system('Secure session was reset', DateTime.utc(2026)),
+      );
+      expect(convo.toJson()['messages'], hasLength(1));
+    });
+
+    test('a resolved send survives the round trip through JSON', () {
+      final convo = Conversation(peerAccountId: 'peer1');
+      final message = outgoing('pending at first', MessageSendState.pending);
+      convo.messages.add(message);
+      expect(convo.toJson()['messages'], isEmpty);
+
+      // Exactly what AppSession._deliver does once the POST succeeds.
+      message.sendState = MessageSendState.sent;
+      final restored = Conversation.fromJson(convo.toJson());
+      expect(restored.messages, hasLength(1));
+      expect(restored.messages.single.text, 'pending at first');
+      expect(restored.messages.single.sendState, MessageSendState.sent);
+    });
+  });
 }
