@@ -14,6 +14,8 @@ class ServerStatus {
     required this.claimed,
     required this.registrationPolicy,
     this.federationEnabled = true,
+    this.blobsEnabled = false,
+    this.maxBlobBytes = 0,
   });
 
   factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
@@ -21,11 +23,22 @@ class ServerStatus {
     registrationPolicy: j['registration_policy'] as String,
     // Older servers don't send this; default to on (federation-open-by-design).
     federationEnabled: j['federation_enabled'] as bool? ?? true,
+    // Absent means OFF here, the opposite of federation above: attachments
+    // arrived with SRV-07, so a server that doesn't advertise the field
+    // predates them and has no blob endpoints to talk to.
+    blobsEnabled: j['blobs_enabled'] as bool? ?? false,
+    maxBlobBytes: (j['max_blob_bytes'] as num?)?.toInt() ?? 0,
   );
 
   final bool claimed;
   final String registrationPolicy;
   final bool federationEnabled;
+
+  /// Whether this server accepts encrypted attachment blobs (SRV-07).
+  final bool blobsEnabled;
+
+  /// Largest single blob this server accepts, or 0 if it didn't say.
+  final int maxBlobBytes;
 }
 
 class AccountResponse {

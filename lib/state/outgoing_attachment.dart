@@ -8,7 +8,40 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import '../net/dto.dart';
 import 'message_content.dart';
+
+/// What a given server will take as an attachment, read from its public
+/// status endpoint (SRV-07). Discovered rather than assumed, so a peer on
+/// an older or differently-configured server produces a clear explanation
+/// instead of a raw upload failure.
+class BlobCapability {
+  const BlobCapability({required this.enabled, required this.maxBytes});
+
+  factory BlobCapability.from(ServerStatus status) => BlobCapability(
+    enabled: status.blobsEnabled,
+    maxBytes: status.maxBlobBytes,
+  );
+
+  final bool enabled;
+
+  /// 0 when the server didn't state one -- then only [enabled] is enforced
+  /// and an oversized upload still fails server-side, as before.
+  final int maxBytes;
+
+  bool fits(int byteSize) => maxBytes <= 0 || byteSize <= maxBytes;
+}
+
+/// Renders a byte count the way a size limit reads to a person ("8 MB").
+/// Powers of 1024, since that is what the server's limits are expressed in,
+/// but without the pedantic MiB spelling.
+String formatByteSize(int bytes) {
+  if (bytes >= 1024 * 1024) {
+    final mb = bytes / (1024 * 1024);
+    return '${mb == mb.roundToDouble() ? mb.toStringAsFixed(0) : mb.toStringAsFixed(1)} MB';
+  }
+  return '${(bytes / 1024).round()} KB';
+}
 
 /// The longest edge a sent picture keeps. Comfortably sharp on a phone
 /// screen while keeping a photo well under a megabyte -- the same

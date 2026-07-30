@@ -571,10 +571,51 @@ class AppSession extends ChangeNotifier {
       final status = await api.getServerStatus();
       registrationPolicy = status.registrationPolicy;
       federationEnabled = status.federationEnabled;
+      _ownBlobs = BlobCapability.from(status);
     } catch (e) {
       lastError = 'checking registration policy failed: $e';
     }
     notifyListeners();
+  }
+
+  /// What our own home server will accept as an attachment. Null until the
+  /// first [refreshRegistrationPolicy] answers.
+  BlobCapability? _ownBlobs;
+
+  /// Same, per federated peer server, keyed by its URL. A remote server's
+  /// answer is cached for the session: it changes only when its operator
+  /// reconfigures, and [blobCapabilityFor] re-asks whenever the cache is
+  /// empty, so a restart or an account switch picks up a change.
+  final Map<String, BlobCapability> _peerBlobs = {};
+
+  /// What the server holding this conversation's attachments will accept.
+  ///
+  /// That is the RECIPIENT's server, not ours: a blob is uploaded to where
+  /// the recipient can fetch it from (docs/PROTOCOL.md §10), so for a
+  /// federated peer the remote operator's switch and size cap are the ones
+  /// that count. Returns null while unknown -- callers treat that as "don't
+  /// know yet" rather than "unsupported", so a slow status call doesn't
+  /// flicker the attachment button off.
+  Future<BlobCapability?> blobCapabilityFor(Conversation convo) async {
+    final peerServer = convo.peerServer;
+    if (peerServer == null) {
+      if (_ownBlobs == null) await refreshRegistrationPolicy();
+      return _ownBlobs;
+    }
+    final cached = _peerBlobs[peerServer];
+    if (cached != null) return cached;
+    try {
+      final status = await _clientFor(peerServer).getServerStatus();
+      final capability = BlobCapability.from(status);
+      _peerBlobs[peerServer] = capability;
+      return capability;
+    } catch (e) {
+      // Unreachable or erroring: unknown, not unsupported. Sending will
+      // surface the real failure rather than us pre-emptively lying about
+      // what the peer's server supports.
+      lastError = 'checking attachment support failed: $e';
+      return null;
+    }
   }
 
   /// A conversation is federation-locked when it lives on another server
@@ -1442,6 +1483,27 @@ class AppSession extends ChangeNotifier {
     Conversation convo,
     OutgoingAttachment attachment,
   ) async {
+    // Checked against the receiving server's own advertised limits, so an
+    // attachment it would refuse fails here with something explainable
+    // instead of as a bare 404/413 from the upload.
+    final capability = await blobCapabilityFor(convo);
+    if (capability != null) {
+      // "Their" server for a federated peer, ours otherwise -- the blob is
+      // stored wherever the recipient reads it from.
+      final whose = convo.peerServer == null
+          ? 'This server'
+          : "This contact's server";
+      if (!capability.enabled) {
+        throw StateError("$whose doesn't accept pictures.");
+      }
+      if (!capability.fits(attachment.bytes.length)) {
+        throw StateError(
+          '$whose allows at most '
+          '${formatByteSize(capability.maxBytes)} per picture.',
+        );
+      }
+    }
+
     final encrypted = core.encryptBlob(attachment.bytes);
     final peerServer = convo.peerServer;
     final recipientDeviceId = convo.peerDeviceId!;
