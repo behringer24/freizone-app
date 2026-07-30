@@ -20,6 +20,17 @@ StoredMessageKind _storedMessageKindFromJson(String? v) =>
       orElse: () => StoredMessageKind.normal,
     );
 
+/// How far one of our OWN outgoing messages has got (APP-08). A received
+/// message, and anything loaded back from disk, is always [sent]: the
+/// transcript is written only once a message is actually away (see
+/// Conversation.toJson), so no other value can survive a restart.
+///
+/// [pending] means the bubble is already in the transcript while the upload
+/// and/or the encrypted POST are still in flight -- that is the whole point,
+/// so the composer can be cleared the instant the user hits send instead of
+/// looking frozen on a slow connection.
+enum MessageSendState { pending, sent, failed }
+
 /// Tolerant of anything unexpected, like the enum parse above: history
 /// written by an older build simply has no "attachments" key, and a
 /// malformed entry costs its own attachment rather than the whole message.
@@ -53,6 +64,7 @@ class StoredMessage {
     this.replyPreviewMine,
     this.kind = StoredMessageKind.normal,
     this.attachments = const [],
+    this.sendState = MessageSendState.sent,
   }) : id = id ?? generateMessageId();
 
   /// A local, non-encrypted info line shown centered in the transcript
@@ -109,9 +121,30 @@ class StoredMessage {
   /// preview thumbnail. The picture itself is a file on disk, never part of
   /// the profile JSON: that whole file is rewritten on every single message,
   /// so image bytes in here would make every chat write cost megabytes.
-  final List<MessageAttachment> attachments;
+  ///
+  /// Reassignable for one reason only: an optimistically-appended outgoing
+  /// picture (see [sendState]) is in the transcript before its blob exists,
+  /// so it starts out with a placeholder entry carrying just the local
+  /// rendering metadata, and AppSession.sendMessage swaps in the real
+  /// reference once the upload returns a blob id.
+  List<MessageAttachment> attachments;
 
   bool get hasAttachments => attachments.isNotEmpty;
+
+  /// Where this message is on its way out (APP-08) -- mutable because the
+  /// bubble is rendered *before* the network work starts and has to be
+  /// updated in place as that work resolves. Always
+  /// [MessageSendState.sent] for received messages and for anything read
+  /// back from disk.
+  MessageSendState sendState;
+
+  /// Why the send failed, for the SnackBar shown alongside the failed
+  /// bubble -- the state alone can't say "this server doesn't accept
+  /// pictures". Null unless [sendState] is [MessageSendState.failed].
+  String? sendError;
+
+  bool get isPending => sendState == MessageSendState.pending;
+  bool get hasFailed => sendState == MessageSendState.failed;
 
   /// For a RECEIVED message: the sender's own clock reading at send time,
   /// carried inside the encrypted content (message_content.dart's sentAt)
@@ -291,7 +324,18 @@ class Conversation {
     if (peerDeviceId != null) 'peer_device_id': peerDeviceId,
     if (peerDevicePubKey != null)
       'peer_device_pub_key': encodeB64(peerDevicePubKey!),
-    'messages': messages.map((m) => m.toJson()).toList(),
+    // Only messages that actually left the device (APP-08). A pending or
+    // failed one is deliberately session-only: retrying it needs the
+    // original picture bytes, which live in memory (AppSession's outgoing
+    // attachment map), so a "failed" bubble restored after a restart could
+    // never be resent -- it would just be a dead end the user can't clear.
+    // Making them durable is exactly what step 2's real outbox is for.
+    // Filtered here rather than at the call site so an unrelated save (an
+    // incoming message, a receipt) can't persist one by accident either.
+    'messages': messages
+        .where((m) => m.sendState == MessageSendState.sent)
+        .map((m) => m.toJson())
+        .toList(),
     'last_activity_at': encodeTime(lastActivityAt),
     'has_unread': hasUnread,
     if (pinnedMessageIds.isNotEmpty) 'pinned_message_ids': pinnedMessageIds,

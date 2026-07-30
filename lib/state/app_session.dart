@@ -23,6 +23,7 @@ import '../net/dto.dart';
 import '../net/sse_client.dart';
 import '../push/push_manager.dart';
 import '../util/address_format.dart';
+import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/server_url.dart';
 import 'app_settings.dart';
@@ -587,6 +588,13 @@ class AppSession extends ChangeNotifier {
   /// reconfigures, and [blobCapabilityFor] re-asks whenever the cache is
   /// empty, so a restart or an account switch picks up a change.
   final Map<String, BlobCapability> _peerBlobs = {};
+
+  /// Picture bytes for outgoing messages not yet confirmed sent, keyed by
+  /// message id -- what [retrySend] re-uploads after a failure. Dropped as
+  /// soon as the send succeeds, and in memory only: that is precisely why an
+  /// unsent message is never persisted (see Conversation.toJson), since a
+  /// failed bubble restored from disk could never actually be resent.
+  final Map<String, OutgoingAttachment> _outgoingAttachments = {};
 
   /// What the server holding this conversation's attachments will accept.
   ///
@@ -1743,8 +1751,15 @@ class AppSession extends ChangeNotifier {
   /// that's currently on screen, so that's expected to be rare, not an
   /// error worth surfacing.
   ///
-  /// Throws on failure -- the calling screen decides how to surface that
-  /// (e.g. a SnackBar).
+  /// The bubble appears immediately, as [MessageSendState.pending], and only
+  /// then does the network work start (APP-08 step 1) -- so the composer can
+  /// be cleared the instant the user hits send instead of sitting frozen
+  /// through a slow prekey lookup, blob upload or cross-server POST.
+  ///
+  /// Throws on failure, after marking the message
+  /// [MessageSendState.failed] -- the bubble itself is the durable feedback,
+  /// the throw only lets the calling screen explain *why* (e.g. a SnackBar).
+  /// A failed message stays retryable for this session, see [retrySend].
   Future<void> sendMessage(
     String peerAccountId,
     String text, {
@@ -1755,15 +1770,8 @@ class AppSession extends ChangeNotifier {
     if (convo == null) {
       throw StateError('no conversation for $peerAccountId');
     }
-    await _ensurePeerDeviceResolved(convo);
 
     final quoted = replyToId == null ? null : convo.messageById(replyToId);
-    // Flipped relative to our own `quoted.mine`: the recipient reads this
-    // same field as "mine" from *their* perspective, where the roles are
-    // swapped (see message_content.dart).
-    final wirePreview = quoted == null
-        ? null
-        : ReplyPreview(text: quoted.text, mine: !quoted.mine);
 
     // Stamped ONCE, before the send: this exact instant goes out inside
     // the encrypted content (sentAt) AND becomes the local StoredMessage
@@ -1773,60 +1781,151 @@ class AppSession extends ChangeNotifier {
     // loses that race locally: the receiver can decrypt and stamp its
     // receipt before the sender's own post-send stamp is even taken.
     final now = DateTime.now().toUtc();
-    final messageId = generateMessageId();
 
-    // Uploaded BEFORE the message is sent: the message carries the blob id,
-    // so publishing it first would briefly point at something that doesn't
-    // exist yet. A failed upload therefore fails the whole send, leaving
-    // nothing half-delivered.
-    final attachments = <MessageAttachment>[];
-    if (attachment != null) {
-      attachments.add(await _uploadAttachment(convo, attachment));
-    }
-
-    final content = MessageContent(
-      id: messageId,
+    final message = StoredMessage(
+      id: generateMessageId(),
       text: text,
-      attachments: attachments,
+      mine: true,
+      timestamp: now,
       replyToId: quoted?.id,
-      replyPreview: wirePreview,
-      // Sent on every cross-server message (not just the first), so the
-      // recipient's knowledge of where to reach us for a reply
-      // self-heals even if their local state is ever lost -- see
-      // message_content.dart.
-      senderServer: convo.peerServer != null ? state.server : null,
-      sentAt: now,
+      replyPreviewText: quoted?.text,
+      replyPreviewMine: quoted?.mine,
+      // Stands in until the upload returns a blob id, so the pending bubble
+      // can already render the picture from our own local copy below.
+      attachments: attachment == null
+          ? const []
+          : [_placeholderAttachment(attachment)],
+      sendState: MessageSendState.pending,
     );
 
-    await _encryptAndSend(convo, content.encode());
-
-    // Our own copy of the picture, so the sender sees it in the transcript
-    // without downloading back what they just uploaded. Written BEFORE the
-    // message joins the transcript: any rebuild in between (an incoming
-    // receipt for this very message notifies listeners) would otherwise
-    // render a bubble whose file does not exist yet.
     if (attachment != null) {
-      await _storeOwnAttachment(peerAccountId, content.id, attachment);
+      // Held for a possible retry, and written to disk before the bubble is
+      // shown: ImageAttachment renders our own picture from this local file,
+      // so it has to exist by the time the transcript first paints it.
+      _outgoingAttachments[message.id] = attachment;
+      await _storeOwnAttachment(peerAccountId, message.id, attachment);
     }
 
-    convo.messages.add(
-      StoredMessage(
-        id: content.id,
-        text: text,
-        mine: true,
-        timestamp: now,
-        replyToId: quoted?.id,
-        replyPreviewText: quoted?.text,
-        replyPreviewMine: quoted?.mine,
-        attachments: attachments,
-      ),
-    );
+    convo.messages.add(message);
     convo.lastActivityAt = now;
+    // Not persisted yet -- an unsent message is deliberately session-only
+    // (see Conversation.toJson); this is purely so the bubble paints now.
+    notifyListeners();
+
+    await _deliver(convo, message, attachment);
+  }
+
+  /// Re-sends a message whose optimistic send failed. Only meaningful within
+  /// the session that composed it: a picture's bytes live in
+  /// [_outgoingAttachments], in memory, which is also why a failed message is
+  /// never written to disk (see Conversation.toJson). Durable retry across a
+  /// restart is APP-08 step 2's outbox.
+  Future<void> retrySend(String peerAccountId, String messageId) async {
+    final convo = state.conversations[peerAccountId];
+    if (convo == null) return;
+    final message = convo.messageById(messageId);
+    if (message == null || !message.hasFailed) return;
+
+    final attachment = _outgoingAttachments[messageId];
+    if (message.hasAttachments && attachment == null) {
+      // Can only happen if the bytes were dropped while the message stayed
+      // failed, which nothing does today -- but re-sending the caption alone
+      // would quietly deliver a different message than the user composed.
+      message.sendError = 'The picture is no longer available to resend.';
+      notifyListeners();
+      return;
+    }
+
+    message.sendState = MessageSendState.pending;
+    message.sendError = null;
+    notifyListeners();
+
+    await _deliver(convo, message, attachment);
+  }
+
+  /// The network half of a send, shared by [sendMessage] and [retrySend]:
+  /// resolve the peer, upload the picture if it hasn't been uploaded yet,
+  /// then encrypt and post -- resolving [message]'s send state either way.
+  Future<void> _deliver(
+    Conversation convo,
+    StoredMessage message,
+    OutgoingAttachment? attachment,
+  ) async {
+    try {
+      await _ensurePeerDeviceResolved(convo);
+
+      // Uploaded BEFORE the message is sent: the message carries the blob
+      // id, so publishing it first would briefly point at something that
+      // doesn't exist yet. Skipped when a previous attempt already got a
+      // blob id and only the POST failed, so a retry can't leak a second
+      // copy of the same picture onto the recipient's server.
+      final uploaded = message.attachments.isNotEmpty &&
+          message.attachments.first.blobId.isNotEmpty;
+      if (attachment != null && !uploaded) {
+        message.attachments = [await _uploadAttachment(convo, attachment)];
+      }
+
+      // Flipped relative to our own `replyPreviewMine`: the recipient reads
+      // this same field as "mine" from *their* perspective, where the roles
+      // are swapped (see message_content.dart).
+      final wirePreview = message.replyToId == null
+          ? null
+          : ReplyPreview(
+              text: message.replyPreviewText ?? '',
+              mine: !(message.replyPreviewMine ?? false),
+            );
+
+      final content = MessageContent(
+        id: message.id,
+        text: message.text,
+        attachments: message.attachments,
+        replyToId: message.replyToId,
+        replyPreview: wirePreview,
+        // Sent on every cross-server message (not just the first), so the
+        // recipient's knowledge of where to reach us for a reply
+        // self-heals even if their local state is ever lost -- see
+        // message_content.dart.
+        senderServer: convo.peerServer != null ? state.server : null,
+        sentAt: message.timestamp,
+      );
+
+      await _encryptAndSend(convo, content.encode());
+    } catch (e) {
+      message.sendState = MessageSendState.failed;
+      message.sendError = describeError(e);
+      lastError = 'send failed: ${describeError(e)}';
+      notifyListeners();
+      rethrow;
+    }
+
+    message.sendState = MessageSendState.sent;
+    message.sendError = null;
+    _outgoingAttachments.remove(message.id);
+    // First save of this message: Conversation.toJson skips anything not
+    // yet sent, so until now it existed only in memory.
     await LocalStateStore.saveProfile(state);
 
     lastError = null;
     notifyListeners();
   }
+
+  /// The attachment entry a still-uploading picture carries: everything the
+  /// bubble needs to render it from our own local copy (kind, mime, size,
+  /// dimensions, thumbnail), but no blob reference yet -- the server assigns
+  /// that on upload. Never persisted (a pending message is session-only) and
+  /// never used to fetch anything, since a picture of our own is never
+  /// downloaded back (see ImageAttachment).
+  MessageAttachment _placeholderAttachment(OutgoingAttachment attachment) =>
+      MessageAttachment(
+        kind: 'image',
+        blobId: '',
+        key: Uint8List(0),
+        mimeType: attachment.mimeType,
+        byteSize: attachment.bytes.length,
+        width: attachment.width,
+        height: attachment.height,
+        thumb: attachment.thumb,
+      );
 
   /// Resolves and caches convo's peer device, if it hasn't been already --
   /// a conversation that only ever received messages (never started via

@@ -42,7 +42,6 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
-  bool _sending = false;
 
   /// Set while composing a reply -- shown as a preview bar above the
   /// input, cleared once the reply is sent or dismissed.
@@ -60,9 +59,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// staged instead of quietly dropping the extras.
   OutgoingAttachment? _pendingAttachment;
 
-  /// True while a just-picked file is being read and measured. Distinct from
-  /// [_sending]: nothing has been sent yet, but the picture isn't ready to
-  /// send either, so both buttons have to wait for it.
+  /// True while a just-picked file is being read and measured. The only
+  /// thing that still blocks the send button: an in-flight send doesn't
+  /// (see [_send]), but a picture that isn't measured yet genuinely cannot
+  /// be handed over.
   bool _preparing = false;
 
   /// Index into a conversation's pinned ids *reversed* (so 0 is always
@@ -104,35 +104,58 @@ class _ChatScreenState extends State<ChatScreen> {
   /// picture (see [_pendingAttachment]), or both -- the text doubles as the
   /// picture's caption. A picture alone is a valid message, so an empty
   /// composer only blocks the send when nothing is staged either.
+  ///
+  /// The composer is emptied straight away and is NOT disabled while the
+  /// send is in flight (APP-08): the message is already in the transcript as
+  /// pending by then, and a failed one stays there with a retry, so there is
+  /// nothing that would need restoring into the composer afterwards --
+  /// which is what used to make blocking it necessary. Several sends can
+  /// therefore overlap; AppSession serializes them per peer, so the ratchet
+  /// is never entered twice at once.
   Future<void> _send() async {
     final text = _messageController.text.trim();
     final attachment = _pendingAttachment;
-    if (_sending || _preparing) return;
+    final replyToId = _replyingTo?.id;
+    if (_preparing) return;
     if (text.isEmpty && attachment == null) return;
 
-    setState(() => _sending = true);
+    _messageController.clear();
+    setState(() {
+      _replyingTo = null;
+      _pendingAttachment = null;
+    });
+
     try {
       await widget.session.sendMessage(
         widget.peerAccountId,
         text,
-        replyToId: _replyingTo?.id,
+        replyToId: replyToId,
         attachment: attachment,
       );
-      _messageController.clear();
-      // Only cleared once the send actually succeeded, so a failed attempt
-      // leaves the picture and the reply staged and simply retryable.
-      setState(() {
-        _replyingTo = null;
-        _pendingAttachment = null;
-      });
+    } catch (e) {
+      // The bubble already shows it failed and offers a retry; the SnackBar
+      // only adds the reason, which a status icon can't convey ("this
+      // server doesn't accept pictures", federation turned off, ...).
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Send failed: ${describeError(e)}')),
+        );
+      }
+    }
+  }
+
+  /// Re-sends a message whose send failed, from the retry chip on its own
+  /// bubble. Same error handling as [_send]: the bubble carries the state,
+  /// the SnackBar carries the reason.
+  Future<void> _retrySend(String messageId) async {
+    try {
+      await widget.session.retrySend(widget.peerAccountId, messageId);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Send failed: ${describeError(e)}')),
         );
       }
-    } finally {
-      if (mounted) setState(() => _sending = false);
     }
   }
 
@@ -143,7 +166,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// picking, so there is no separate "compressing" step to show -- and no
   /// quality prompt, matching what other chat apps do.
   Future<void> _pickImage() async {
-    if (_sending || _preparing || _pendingAttachment != null) return;
+    if (_preparing || _pendingAttachment != null) return;
     final XFile? picked;
     try {
       picked = await ImagePicker().pickImage(
@@ -373,6 +396,7 @@ class _ChatScreenState extends State<ChatScreen> {
           onTapQuote: m.replyToId == null
               ? null
               : () => _scrollToMessage(m.replyToId!),
+          onRetry: m.hasFailed ? () => _retrySend(m.id) : null,
         ),
       );
     }
@@ -566,9 +590,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ? 'One picture per message'
                                 : 'Attach a picture',
                             onPressed:
-                                _sending ||
-                                    _preparing ||
-                                    _pendingAttachment != null
+                                _preparing || _pendingAttachment != null
                                 ? null
                                 : _pickImage,
                           ),
@@ -625,7 +647,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                   ? colorScheme.onPrimary
                                   : colorScheme.onSurfaceVariant,
                             ),
-                            onPressed: _sending || _preparing ? null : _send,
+                            onPressed: _preparing ? null : _send,
                           ),
                         ),
                       ],
@@ -971,11 +993,7 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.close, size: 18),
             tooltip: 'Remove picture',
-            // Held while a send is in flight: that send already owns these
-            // bytes, so dropping them mid-upload would only confuse.
-            onPressed: _sending
-                ? null
-                : () => setState(() => _pendingAttachment = null),
+            onPressed: () => setState(() => _pendingAttachment = null),
           ),
         ],
       ),
@@ -1064,6 +1082,7 @@ class _MessageBubble extends StatelessWidget {
     this.quotedHasImage = false,
     this.deliveryStatus,
     this.onTapQuote,
+    this.onRetry,
   });
 
   final StoredMessage message;
@@ -1096,6 +1115,10 @@ class _MessageBubble extends StatelessWidget {
   /// target is still in local history -- null (and the quote becomes
   /// untappable) otherwise.
   final VoidCallback? onTapQuote;
+
+  /// Re-runs a failed send (APP-08). Only wired up for a message that
+  /// actually failed.
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -1217,7 +1240,61 @@ class _MessageBubble extends StatelessWidget {
                           color: onBubble.withValues(alpha: 0.7),
                         ),
                       ),
-                      if (deliveryStatus != null) ...[
+                      // One slot, three stages (APP-08): on its way out, out
+                      // but unconfirmed, or failed. The receipt checkmarks
+                      // only mean anything once it actually left, so a
+                      // pending or failed message shows its send state here
+                      // instead.
+                      if (message.isPending) ...[
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.schedule,
+                          size: 14,
+                          color: onBubble.withValues(alpha: 0.7),
+                        ),
+                      ] else if (message.hasFailed) ...[
+                        const SizedBox(width: 6),
+                        // Tappable rather than merely marked: without a
+                        // persistent outbox (step 2) this retry is the only
+                        // way the message ever gets out, so it has to be
+                        // reachable from the bubble itself. Rendered as a
+                        // chip carrying its own errorContainer colours,
+                        // because bare error red would sit on top of the
+                        // bubble's primary fill with no guaranteed contrast.
+                        Material(
+                          color: colorScheme.errorContainer,
+                          borderRadius: BorderRadius.circular(10),
+                          child: InkWell(
+                            onTap: onRetry,
+                            borderRadius: BorderRadius.circular(10),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.error_outline,
+                                    size: 13,
+                                    color: colorScheme.onErrorContainer,
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    'Tap to retry',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: colorScheme.onErrorContainer,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ] else if (deliveryStatus != null) ...[
                         const SizedBox(width: 4),
                         Icon(
                           deliveryStatus == ReceiptStatus.read
