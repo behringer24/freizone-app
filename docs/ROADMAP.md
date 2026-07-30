@@ -257,3 +257,32 @@ and is corrected here.
    Services'/the distributor's own background connection regardless of what
    this app does — mitigated only by user-facing guidance (e.g. a Settings
    hint to exempt the app from battery optimization), not by app code.
+
+### APP-13 — Picture thumbnail inside a reply quote
+Status: planned · Part of: APP-04
+A reply to a picture currently shows a small camera icon in the quote block
+inside the bubble (`_MessageBubble`, `chat_screen.dart`) rather than the
+picture itself. That icon is deliberately an interim stand-in, and it is
+**best-effort**: whether the quoted message was a picture is resolved from
+local history (`convo.messageById`, see `_buildItems`'s `quotedHasImage`), so
+it silently falls back to the plain text-only quote once the original is no
+longer stored on this device. The composer's own reply preview bar and the
+pinned-message bar *do* show a real thumbnail already — they read it straight
+off the referenced `StoredMessage` (`MessageAttachment.thumb`), which the
+bubble quote cannot do, because a quote has to render even when the original
+is gone.
+
+Making it a real thumbnail means the reply has to *carry* one: add an
+optional `thumb` to `ReplyPreview` (`message_content.dart`), alongside the
+`text`/`mine` it already snapshots for exactly this reason. Trade-offs:
+- **Backward/forward compatible** per SRV-12: the field is additive, and
+  `ReplyPreview.fromJson` reads only the keys it knows, so an older client
+  ignores it rather than failing.
+- **Cost:** roughly 2 KB extra inside every reply to a picture (see
+  `maxAttachmentThumbBytes`) — small, but it lands in the message queue,
+  which is precisely what SRV-07 moved attachments *out of*. Worth a
+  deliberate decision, not a silent addition; the same cap must be enforced
+  on decode, as `MessageAttachment.fromJson` already does, so a peer cannot
+  inflate our stored history through this path.
+- Would also make the quote correct for a recipient who never had the
+  original at all, which the local-history lookup can never cover.
