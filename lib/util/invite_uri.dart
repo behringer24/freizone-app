@@ -38,13 +38,25 @@ class InviteUri {
   final String? code;
 }
 
+/// Strips the cosmetic grouping a code is *displayed* with ("ABCD-EFGH-JKMN")
+/// down to the compact form ("ABCDEFGHJKMN") that goes into a QR code, and
+/// uppercases it.
+///
+/// Only a size optimisation, not a correctness requirement: the server
+/// normalizes a redeemed code anyway (case, hyphens, spaces, and the
+/// digit/letter confusions its alphabet avoids -- see pkg/humancode in
+/// freizone-server), so either form redeems fine. Fewer characters simply
+/// makes for a sparser, faster-scanning QR.
+String compactInviteCode(String code) =>
+    code.replaceAll(RegExp(r'[-_\s]'), '').toUpperCase();
+
 Uri buildInviteUri({required String server, String? code}) {
   return Uri(
     scheme: 'freizone',
     host: 'join',
     queryParameters: {
       'server': withoutDefaultScheme(server),
-      if (code != null && code.isNotEmpty) 'code': code,
+      if (code != null && code.isNotEmpty) 'code': compactInviteCode(code),
     },
   );
 }

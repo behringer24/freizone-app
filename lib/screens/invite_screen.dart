@@ -32,6 +32,13 @@ class _InviteScreenState extends State<InviteScreen> {
   bool _loading = true;
   String? _error;
   String? _code;
+
+  /// When the code stops working. Servers apply a default expiry (see
+  /// FREIZONE_INVITE_EXPIRY_DAYS), so this is normally set -- worth showing,
+  /// since otherwise someone hands out a code without knowing it has a
+  /// deadline. Null only if the server is configured to issue codes that
+  /// never expire.
+  DateTime? _expiresAt;
   bool _sharing = false;
 
   @override
@@ -50,6 +57,7 @@ class _InviteScreenState extends State<InviteScreen> {
       if (widget.session.registrationPolicy == 'invite') {
         final invite = await widget.session.createInvite();
         _code = invite.code;
+        _expiresAt = invite.expiresAt;
       }
       setState(() => _loading = false);
     } catch (e) {
@@ -91,6 +99,15 @@ class _InviteScreenState extends State<InviteScreen> {
     }
   }
 
+  /// Local date and time, to the minute -- an invite's deadline is days away,
+  /// so seconds would be noise.
+  String _formatExpiry(DateTime utc) {
+    final local = utc.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(local.day)}.${two(local.month)}.${local.year} '
+        '${two(local.hour)}:${two(local.minute)}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final server = widget.session.state.server;
@@ -123,10 +140,29 @@ class _InviteScreenState extends State<InviteScreen> {
                       SelectableText(server, textAlign: TextAlign.center),
                       if (_code != null) ...[
                         const SizedBox(height: 4),
+                        // Monospace and spaced out: this is the one thing on
+                        // the screen someone may have to read out over the
+                        // phone or copy onto paper, so the grouping the
+                        // server already applied ("ABCD-EFGH-JKMN") should
+                        // stay legible rather than blend into the prose.
                         SelectableText(
-                          'Invite code: $_code',
+                          _code!,
                           textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 18,
+                            letterSpacing: 1.5,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
+                        if (_expiresAt != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Valid until ${_formatExpiry(_expiresAt!)}',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
                       ],
                     ],
                   ),

@@ -561,7 +561,19 @@ class _SetupScreenState extends State<SetupScreen> {
           const SizedBox(height: 16),
           TextField(
             controller: _tokenController,
-            decoration: InputDecoration(labelText: tokenLabel),
+            decoration: InputDecoration(
+              labelText: tokenLabel,
+              // Both of these are short Crockford-Base32 codes and the
+              // server normalizes what it gets, so say so rather than
+              // letting someone retype a code they got right the first time.
+              helperText: 'Not case-sensitive; hyphens optional',
+              helperMaxLines: 2,
+            ),
+            // A code has no words in it: an uppercase keyboard matches how
+            // it is printed, and autocorrect/suggestions can only corrupt it.
+            textCapitalization: TextCapitalization.characters,
+            autocorrect: false,
+            enableSuggestions: false,
             enabled: !_submitting,
             onSubmitted: (_) => _submit(),
           ),
