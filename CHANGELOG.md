@@ -7,6 +7,24 @@ Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
 to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 `freizone-server/docs/ROADMAP.md`.
 
+## 0.12.3+12 — 2026-07-30
+
+### Changed
+- **Add a caption to a picture you're sending.** Choosing a photo no longer
+  sends it straight away. It now appears as a small preview above the input
+  field — with an X to remove it again — so you can type a caption first and
+  send both together. Picking the photo before writing anything works just as
+  well as the other way round. (APP-04)
+- **You can see that your message is on its way.** A message now appears in
+  the conversation the moment you send it, marked with a clock while it's
+  still going out, and the input field clears right away instead of looking
+  stuck on a slow connection. If a message can't be sent it stays visible
+  with a "Tap to retry" button rather than quietly disappearing, and you can
+  keep typing the next one while the previous is still in flight. Note that
+  an unsent message is not kept if you close the app. (APP-08)
+- Replying to a picture, and pinning one, now shows a small preview of that
+  picture instead of an empty line. (APP-04)
+
 ## 0.12.2+11 — 2026-07-30
 
 ### Changed
