@@ -13,17 +13,15 @@ import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
-import '../util/invite_uri.dart';
 import '../util/unread_dot.dart';
+import '../widgets/new_chat_sheet.dart';
 import '../widgets/peer_avatar.dart';
-import '../widgets/qr_scan_button.dart';
 import 'admin_screen.dart';
 import 'backup_screen.dart';
 import 'blocked_contacts_screen.dart';
 import 'chat_screen.dart';
 import 'invite_screen.dart';
 import 'my_address_screen.dart';
-import 'qr_scan_screen.dart';
 import 'settings_screen.dart';
 
 class ChatListScreen extends StatefulWidget {
@@ -316,7 +314,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final peerAccountId = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => _NewChatSheet(session: widget.session),
+      builder: (context) => NewChatSheet(session: widget.session),
     );
     if (peerAccountId == null || !context.mounted) return;
     Navigator.of(context).push(
@@ -634,178 +632,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
         backgroundColor: Theme.of(context).colorScheme.primary,
         foregroundColor: Theme.of(context).colorScheme.onPrimary,
         child: const Icon(Icons.chat),
-      ),
-    );
-  }
-}
-
-/// Bottom sheet form for starting a new conversation: enter a peer
-/// account id, resolve+verify their device (AppSession.startConversation),
-/// and pop with the resolved peer id on success.
-class _NewChatSheet extends StatefulWidget {
-  const _NewChatSheet({required this.session});
-
-  final AppSession session;
-
-  @override
-  State<_NewChatSheet> createState() => _NewChatSheetState();
-}
-
-class _NewChatSheetState extends State<_NewChatSheet> {
-  final _idController = TextEditingController();
-  final _nameController = TextEditingController();
-  final _greetingController = TextEditingController();
-  bool _loading = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _idController.dispose();
-    _nameController.dispose();
-    _greetingController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _start() async {
-    final peerAccountId = _idController.text.trim();
-    if (peerAccountId.isEmpty) return;
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final convo = await widget.session.startConversation(
-        peerAccountId,
-        displayName: _nameController.text,
-      );
-      final greeting = _greetingController.text.trim();
-      if (greeting.isNotEmpty) {
-        // Contact is already added either way -- a failed greeting send
-        // isn't worth blocking on, since it can just be retried manually
-        // from the chat that's about to open.
-        try {
-          await widget.session.sendMessage(convo.peerAccountId, greeting);
-        } catch (_) {
-          // ignore
-        }
-      }
-      if (!mounted) return;
-      Navigator.of(context).pop(convo.peerAccountId);
-    } catch (e) {
-      setState(() {
-        _error = describeError(e);
-        _loading = false;
-      });
-    }
-  }
-
-  /// Pushes the QR scanner and, on a recognizable freizone://chat result
-  /// (lib/util/invite_uri.dart), fills the address and name fields --
-  /// same pre-fill pattern as the setup wizard's own invite scan.
-  Future<void> _scanQr() async {
-    final raw = await Navigator.of(
-      context,
-    ).push<String>(MaterialPageRoute(builder: (_) => const QrScanScreen()));
-    if (raw == null || !mounted) return;
-
-    final invite = parseChatInviteUri(raw);
-    if (invite == null) {
-      setState(() => _error = 'That QR code is not a Freizone chat invite');
-      return;
-    }
-
-    setState(() {
-      _idController.text = '${invite.id}*${invite.server}';
-      if (invite.name != null) _nameController.text = invite.name!;
-      _error = null;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Start a new chat',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 16),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _idController,
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Peer account id',
-                  ),
-                  enabled: !_loading,
-                ),
-              ),
-              const SizedBox(width: 12),
-              QrScanButton(
-                onPressed: _loading ? null : _scanQr,
-                tooltip: 'Scan a chat invite QR code',
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Full id, first 5 characters, or a full address like id*server',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(labelText: 'Name (optional)'),
-            enabled: !_loading,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _greetingController,
-            decoration: const InputDecoration(
-              labelText: 'Add a message (optional)',
-              helperText:
-                  'Sent right away -- helps them recognize who\'s reaching out',
-            ),
-            enabled: !_loading,
-            minLines: 1,
-            maxLines: 3,
-            textCapitalization: TextCapitalization.sentences,
-            onSubmitted: (_) => _start(),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ],
-          const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: _loading ? null : _start,
-            child: _loading
-                ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Start chat'),
-          ),
-        ],
       ),
     );
   }

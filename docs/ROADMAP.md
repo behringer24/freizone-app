@@ -98,7 +98,7 @@ ratchet-derived, so pictures stay downloadable after a secure-session reset
 every message) and are removed with their conversation or account, plus an
 orphan sweep at startup.
 
-**Still open:** (0) clickable links, (1.5) camera capture, saving/sharing
+**Still open:** (1.5) camera capture, saving/sharing
 received pictures, and (2)-(4) video/audio/voice — video will also want
 resumable uploads, which SRV-07 does not do yet.
 
@@ -284,8 +284,13 @@ and is corrected here.
    this app does — mitigated only by user-facing guidance (e.g. a Settings
    hint to exempt the app from battery optimization), not by app code.
 
-### APP-13 — Picture thumbnail inside a reply quote
+### APP-13 — Replace the reply quote's camera icon with a real thumbnail
 Status: planned · Part of: APP-04
+Not to be confused with the two thumbnail spots that **are** done: the
+composer's reply preview bar and the pinned-message bar both show the real
+picture already. This entry is only about the quote block *inside* a bubble,
+which still shows a stand-in icon — see below for why it is the hard one.
+
 A reply to a picture currently shows a small camera icon in the quote block
 inside the bubble (`_MessageBubble`, `chat_screen.dart`) rather than the
 picture itself. That icon is deliberately an interim stand-in, and it is
@@ -312,3 +317,221 @@ optional `thumb` to `ReplyPreview` (`message_content.dart`), alongside the
   inflate our stored history through this path.
 - Would also make the quote correct for a recipient who never had the
   original at all, which the local-history lookup can never cover.
+
+### APP-14 — Clickable links in messages
+Status: done · Part of: APP-04 (item 0)
+Message text rendered as a flat `Text`, so a URL someone sent had to be
+selected and copied by hand. http(s), `www.`, email addresses and Freizone
+`id*server` addresses are now tappable.
+
+**Shipped 2026-07-31.** Detection lives in `lib/util/link_detection.dart` as a
+pure function (24 unit tests); rendering in `lib/widgets/message_text.dart`,
+which falls back to a plain `Text` when there is nothing to link, so ordinary
+bubbles keep the widget they had. The confirmation sheet is
+`lib/widgets/link_confirm_sheet.dart`, and `_NewChatSheet` moved to
+`lib/widgets/new_chat_sheet.dart` (gaining `initialId`) so a tapped address
+can pre-fill it from the chat screen.
+
+Verified on the emulator: all four kinds underlined in one message while
+`foto.png` stayed plain and a trailing sentence period stayed outside the
+link; a URL tap showed the sheet with the host called out and **Open**
+actually reached Chrome (which is what the manifest `<queries>` entries buy —
+without them that fails silently); an address tap opened the pre-filled
+new-chat sheet with no network access and no keyboard; and a long-press
+directly on a link still opened the message actions sheet.
+
+**No protocol involvement at all.** The text is already decrypted locally;
+detection is a pure rendering step on `StoredMessage.text`. Nothing changes on
+the wire, so an older build simply shows the same text unlinked — this is
+baseline per SRV-10 and needs no capability check. Implementation is
+`Text.rich` with a `TapGestureRecognizer` per link span, replacing the plain
+`Text` in `_MessageBubble` (`chat_screen.dart`); the bubble's existing
+`GestureDetector(onLongPress:)` keeps the actions sheet, since span
+recognizers only claim taps.
+
+Worth stating because it shapes everything below: we linkify **plain text, not
+markdown**, so the visible text always *is* the target. `[Your bank](https://evil.example)`
+spoofing is structurally impossible here — a good reason not to introduce
+markdown later either.
+
+#### What becomes a link
+- `http://…` and `https://…`.
+- `www.…` — opened as **https**, never http (upgrade, never downgrade).
+  Bare domains without `www.` are deliberately *not* matched: "photo.png",
+  "z.B", version numbers and sentence ends would all turn into links, and the
+  user could no longer see that a scheme was being invented for them.
+- Email addresses, opened via `mailto:`. Detected in bare form
+  (`someone@example.org`) since nobody types `mailto:` in a chat — flagged
+  here as the one sub-decision that goes slightly beyond "mailto only";
+  easy to drop if unwanted.
+- `tel:` is out: on some devices a tap places the call outright.
+- **`freizone://` stays plain text.** A tapped
+  `freizone://join?server=evil.example&code=…` could otherwise add an account
+  on someone else's server with one finger. The QR path is a deliberate
+  physical act; a tap on text is not. Today it would fail anyway (no `VIEW`
+  intent filter is registered), but this must stay a conscious rule for
+  whenever deep links do land.
+- Everything else — `javascript:`, `data:`, `file:`, `content:`, and above all
+  `intent://`, which on Android can address arbitrary app components — is
+  never launched. An **allowlist**, not a blocklist: `url_launcher` hands the
+  OS whatever it is given.
+
+#### Freizone addresses (`id*server.tld`) are links too
+An address quoted in a message ("schreib mal qh29f*chat.example.org") should
+start a chat, without copying it into the new-chat sheet by hand. This is an
+**in-app action, not a URL launch** — `url_launcher` is not involved and the
+address never leaves the app.
+
+- Detection reuses the existing `parseFreizoneAddress`
+  (`lib/util/freizone_address.dart`) rather than a second notion of what an
+  address is.
+- **A tap performs no network access.** It opens the existing new-chat sheet
+  pre-filled with the address; the user presses Start. That matters more than
+  it looks: resolving a peer contacts *that peer's server directly* (federation
+  is client-direct, PROTOCOL §9), so a tap that resolved immediately would
+  hand the user's IP to a server chosen by whoever wrote the message. Landing
+  in the pre-filled sheet makes that an explicit choice, and reuses the
+  confirmation UI that already exists instead of inventing another one.
+- If the address is already a known conversation, jump straight to it — no
+  network, nothing to confirm. If it is the user's own account, say so rather
+  than starting a chat with oneself.
+- Unlike `freizone://join`, this carries no secret and no capability: an
+  `id*server` address is already public (resolvable via the server's own
+  public `GET /v1/accounts/{id}`), which is why it can be tappable at all
+  while `freizone://` stays plain text.
+
+**Detection is heuristic, and that is worth stating.** Dart has no standalone
+checksum check: the Bech32m checksum lives in the Go core, and the one FFI
+export that touches it (`VerifyAddressID`) verifies an id against a *known
+root public key*, which we do not have for an id just found in text. The
+common display form is the 5-character short id anyway
+(`shortFreizoneAddress`), which carries no checksum at all. So matching rests
+on shape: a Bech32m-charset id part of at least 5 characters, a `*`, and a
+host-shaped remainder. Guard against the silly cases — a minimum id length
+keeps "2*3.5" from becoming an address. Adding a `NormalizeAddressID` FFI
+export would make the full 21-character form exactly verifiable; noted as
+optional hardening, not a prerequisite, since it would not help short ids.
+
+#### Detection details (the part that needs tests)
+A pure function in `lib/util/link_detection.dart` (text → spans with offsets),
+so all of this is unit-testable without a widget:
+- Trailing punctuation is trimmed: `.`, `,`, `!`, `?`, `:`, `;`, `"`, `'`, `»`
+  and an unbalanced `)`.
+- Balanced parentheses inside a URL survive, so
+  `…/wiki/Beispiel_(Begriffsklärung)` stays intact.
+- A run longer than ~2 KB is left as text rather than becoming one enormous
+  link (a paragraph without spaces should not be "a URL").
+- Bidi control characters (U+202A–U+202E, U+2066–U+2069) are stripped from a
+  link's rendered text and never trusted anywhere: U+202E can visually reverse
+  a URL.
+
+#### Opening a link: always confirmed
+A tap opens a bottom sheet rather than the browser directly. In a messenger
+where a stranger can send the first message, one extra tap is a fair price
+against phishing. The sheet shows:
+- the full URL, wrapped and legible;
+- the **host**, called out separately — if it contains non-ASCII characters,
+  say so and mark them, since `https://аpple.com` (Cyrillic `а`) is
+  indistinguishable otherwise. Deliberately *flagging* rather than converting
+  to punycode, to avoid a dependency for it;
+- a note when the scheme is plain `http` (unencrypted);
+- actions: **Open** · **Copy link** · **Cancel**.
+
+Launched with `LaunchMode.externalApplication` — the user's own browser, with
+whatever protections they have there. Explicitly not an in-app webview: that
+would add a browser surface to a privacy-focused app for no benefit.
+
+#### Link previews: not planned, on purpose
+A preview would contact the linked server when the message is *received or
+displayed*, handing that server the recipient's IP and the fact and time they
+read it — without the user having clicked anything. On a system that
+deliberately withholds metadata from its own server, that would be an own
+goal. Sender-side previews only move the leak to the sender and inflate the
+message. If this is ever wanted, it needs its own entry and its own argument.
+
+#### Work items
+- `pubspec.yaml`: add `url_launcher`.
+- `AndroidManifest.xml`: extend the existing `<queries>` block with `VIEW`
+  intents for `https` and `mailto` — Android 11+ hides other apps otherwise
+  and launching silently fails.
+- `lib/util/link_detection.dart` + `test/link_detection_test.dart`.
+- `lib/widgets/message_text.dart` (renders the spans) and a confirmation
+  sheet; link spans underlined **and** coloured, not coloured alone: the
+  bubble is `primary` for own messages and `surfaceContainerHighest` for the
+  peer's, so one colour cannot carry on both — and underlining is the more
+  accessible signal regardless.
+- Applied to the bubble body only (including an image caption). Reply quotes,
+  the pinned bar and the chat-list preview stay unlinked: they are truncated
+  one-liners where a tap target only produces mis-taps.
+- Verify on device that a long-press on a link still reaches the bubble's
+  actions sheet.
+
+Checked and unaffected: `PRIVACY.md` needs no change. The app itself never
+contacts a linked server (no previews), and opening happens in the user's own
+browser on their own initiative.
+
+### APP-15 — Receive shares from other apps (Freizone as a share target)
+Status: planned · Also relates to: APP-04 (images), SRV-07 (blob limits)
+Freizone can share *out* (`share_plus`, used by the invite/address screens)
+but cannot receive: it does not appear in Android's share sheet when another
+app shares a link or a picture. Two levels, worth keeping apart because the
+second one costs something the first does not.
+
+#### Level 1 — appear in the share sheet, pick the target in-app
+An `<intent-filter>` for `ACTION_SEND` with `text/plain` and `image/*` puts
+the app icon in the share sheet. The share carries **no target**, so the app
+opens a picker: which account, then which conversation. Text lands in that
+chat's composer (not sent — the user still presses send), an image lands
+staged in the composer exactly as a gallery pick does, so a caption can be
+added.
+
+Reuses what already exists: `OutgoingAttachment.prepare` for measuring and
+thumbnailing, and the staged-attachment composer from APP-04/APP-08.
+
+Details that will bite otherwise:
+- **The account choice has to come first, because it decides the size limit.**
+  A blob is uploaded to the *recipient's* server, so `blobCapabilityFor`
+  (SRV-07) can only be evaluated once the target conversation is known — an
+  image that fits for one contact may be refused for another. So: pick target,
+  *then* validate, and explain the limit if it does not fit.
+- **Cold start.** The intent can arrive with the app not running, so it has to
+  be handled in `main.dart` alongside the existing notification-launch path
+  (`consumeLaunchNotificationPayload`), and only once `AccountManager` is
+  ready — the picker cannot be shown before the accounts are loaded.
+- **Do not trust the sender's mime type.** A shared `content://` URI must be
+  read through the content resolver and validated as a decodable image;
+  `OutgoingAttachment.prepare` already returns null when it is not, so refuse
+  on null rather than uploading whatever arrived.
+- `ACTION_SEND_MULTIPLE` is deferred: only one attachment per message renders
+  today (see APP-13's sibling note in APP-04).
+- Needs a plugin or a small platform channel for the incoming intent
+  (`receive_sharing_intent` is the usual choice) — outgoing `share_plus` does
+  not cover this direction.
+
+#### Level 2 — the direct-share row (individual chats as targets)
+Appearing *as a contact* at the top of the share sheet, the way WhatsApp and
+Signal do, is a different mechanism: Android **Sharing Shortcuts**
+(`ShortcutManagerCompat.pushDynamicShortcut` with `setLongLived(true)`,
+`setPerson(...)`, categories matching a `<share-target>` in
+`res/xml/shortcuts.xml`). It also solves the ambiguity for free, since a
+shortcut can encode both account and conversation in its own intent — the
+share arrives already addressed.
+
+There is no usable Flutter plugin for this; it is native Kotlin work.
+
+**And it has a privacy cost that needs a deliberate decision.** Publishing
+sharing shortcuts hands each conversation's *label and icon* — contact name
+and avatar — to the system shortcut store, where the launcher and the system
+share sheet can read them. That is contact metadata leaving the app sandbox on
+a system whose whole point is that it does not hand out metadata. Signal makes
+this optional for exactly this reason. Options, in increasing order of
+exposure: don't publish shortcuts at all (Level 1 only); publish them but
+labelled with the short address rather than the alias and with a generic
+icon; publish full name and avatar for the WhatsApp-like experience. Whichever
+is chosen, it should be a setting the user can turn off, and off should mean
+"existing shortcuts are removed", not just "no new ones".
+
+Also worth noting for Level 2: shortcuts have to be kept in sync as
+conversations are renamed, blocked or deleted, and they must be cleared on
+account deletion — a shortcut outliving its account would leak a name that
+should be gone.
