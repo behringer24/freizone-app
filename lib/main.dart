@@ -7,8 +7,11 @@ import 'push/push_manager.dart';
 import 'screens/account_shell_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/setup_screen.dart';
+import 'screens/share_target_screen.dart';
 import 'state/account_manager.dart';
 import 'state/app_settings.dart';
+import 'util/share_intake.dart';
+import 'util/share_shortcuts.dart';
 
 /// UnifiedPush may relaunch this entrypoint in a background isolate,
 /// passing `--unifiedpush-bg`, purely to deliver a wake without ever
@@ -102,6 +105,12 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     for (final session in manager.sessions) {
       unawaited(session.setForeground(foreground));
     }
+    // Republished on resume rather than on every conversation change (APP-15):
+    // cheap enough here, and it keeps the share sheet roughly current without
+    // listeners on every session. See syncShareShortcuts.
+    if (foreground) {
+      unawaited(syncShareShortcuts(manager, widget.settings));
+    }
   }
 
   Future<void> _load() async {
@@ -118,6 +127,61 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // runs once this handler already exists.
     setNotificationTapHandler(_openChatFor);
     handleNotificationPayload(await consumeLaunchNotificationPayload());
+
+    // Same ordering reasoning as the notification handler above, and the
+    // reason the platform side is pull-based (APP-15): a share can be a cold
+    // start, so nothing may collect it until the accounts exist and a target
+    // picker can actually be shown.
+    onShareReceived(_collectPendingShare);
+    await _collectPendingShare();
+
+    unawaited(syncShareShortcuts(manager, widget.settings));
+  }
+
+  /// Takes whatever share the platform is holding and routes it: straight into
+  /// the conversation a sharing shortcut named, or to the picker otherwise.
+  Future<void> _collectPendingShare() async {
+    final share = await takePendingShare();
+    if (share == null || !mounted) return;
+
+    final manager = _manager;
+    if (manager == null) return;
+
+    final target = shortcutTarget(share.shortcutId);
+    if (target != null) {
+      final session = manager.sessionFor(target.accountId);
+      // A shortcut can outlive what it points at (account removed, chat
+      // deleted). Falling through to the picker is better than doing nothing.
+      if (session != null &&
+          session.conversation(target.peerAccountId) != null) {
+        manager.setActive(target.accountId);
+        if (!mounted) return;
+        final navigator = Navigator.of(context);
+        navigator.popUntil((route) => route.isFirst);
+        navigator.push(
+          MaterialPageRoute(
+            builder: (_) => ChatScreen(
+              session: session,
+              peerAccountId: target.peerAccountId,
+              settings: widget.settings,
+              sharedText: share.text,
+              sharedImagePath: share.imagePath,
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ShareTargetScreen(
+          manager: manager,
+          settings: widget.settings,
+          share: share,
+        ),
+      ),
+    );
   }
 
   /// Switches to the tapped notification's account and, if it named a

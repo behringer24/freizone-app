@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declares that our dynamic shortcuts (APP-15 level 2) are valid *share*
+     targets, which is what puts individual chats in the share sheet's
+     direct-share row rather than only in the launcher's long-press menu.
+
+     The category string is arbitrary but must match what
+     ShortcutInfoCompat.setCategories() sets in MainActivity, or the shortcuts
+     are published yet never offered for a share. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="de.behringer24.freizone.MainActivity">
+        <data android:mimeType="text/plain"/>
+        <data android:mimeType="image/*"/>
+        <category android:name="de.behringer24.freizone.category.SHARE_TARGET"/>
+    </share-target>
+</shortcuts>
