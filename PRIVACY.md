@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated: 2026-07-30**
+**Last updated: 2026-07-31**
 
 This Privacy Policy describes how the Freizone application ("Freizone," "the App," "we," "us") handles information. Freizone is currently available for Android, with an iOS release planned; this Policy applies to Freizone regardless of platform.
 
@@ -30,6 +30,8 @@ If you exchange messages with a user on a different server (see Section 5, Feder
 
 - **Cryptographic identity.** When you create an account, the App generates a cryptographic key pair on your device. Your account address is derived from this key; no email address, phone number, or other personally identifying information is required or requested to use Freizone.
 - **Message history, contacts, and preferences.** This information is stored locally within the App's private storage on your device. It is not additionally protected by a separate passphrase; it relies on the security of your device (such as your device lock and storage encryption), consistent with standard practice for locally stored application data.
+- **Content shared into Freizone from other apps.** When you share a link or a picture into Freizone, that content is copied into the App's own private storage so it can be prepared for sending; a picture is additionally reduced in size and re-encoded there, exactly as any picture you send is. This happens entirely on your device, and nothing leaves it until you press send.
+- **Chat shortcuts for sharing — off unless you turn it on.** Freizone can offer your most recent chats as targets in your device's system share sheet, so another app can share straight into one conversation. Because this is the one feature that would place information about your contacts outside the App's private storage, it is disabled by default. If you enable it under Settings → "Offer chats when sharing", those chats' names — the alias you gave them, or otherwise their Freizone address — and their generated avatar images are handed to Android's own shortcut store, which your launcher and the system share sheet can read. Nothing is transmitted off your device by this, and chats you have blocked or not yet accepted are never offered. Switching the setting back off removes the entries again, as does uninstalling the App.
 - Uninstalling the App removes this locally stored information. We do not maintain a backup copy of it.
 
 ### 3.2 Information Processed by the Server You Connect To
@@ -64,7 +66,7 @@ Depending on your device's platform, Freizone may request access to:
 - **Notifications**, to alert you to new messages.
 - **Network access**, required to communicate with the server you configure.
 
-Freizone does not request access to your location, contacts, or microphone, and requests no permission beyond those necessary for the functionality described above. It does not request broad access to your stored files either — as described above, a picture you send reaches the App only because you selected that one file yourself.
+Freizone does not request access to your location, contacts, or microphone, and requests no permission beyond those necessary for the functionality described above. It does not request broad access to your stored files either — a picture reaches the App only because you selected that one file yourself in the system picker, or because you deliberately shared it into Freizone from another app.
 
 ## 8. What We Do Not Do
 

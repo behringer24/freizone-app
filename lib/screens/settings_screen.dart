@@ -169,11 +169,14 @@ class SettingsScreen extends StatelessWidget {
               SwitchListTile(
                 title: const Text('Offer chats when sharing'),
                 subtitle: const Text(
-                  'Lets other apps share straight into a specific chat, so '
-                  'your recent contacts appear in the system share sheet. '
-                  'Their names and avatars are handed to Android for that, '
-                  'which is the one place Freizone passes contact details '
-                  'outside the app. Turning this off removes them again.',
+                  'Off by default. Turn this on to let other apps share '
+                  'straight into a specific chat, so your recent contacts '
+                  'appear in the system share sheet itself. Their names and '
+                  'avatars have to be handed to Android for that — the one '
+                  'place Freizone passes contact details outside the app. '
+                  'Switching it back off removes them again. Sharing into '
+                  'Freizone works either way; without this you pick the chat '
+                  'afterwards.',
                 ),
                 value: settings.directShareEnabled,
                 onChanged: _setDirectShareEnabled,

@@ -113,12 +113,17 @@ class AppSettings extends ChangeNotifier {
   /// Whether individual chats are offered in the system share sheet's
   /// direct-share row (APP-15).
   ///
-  /// On by default, but worth understanding before leaving it that way: making
-  /// a chat a share target means handing its label and avatar to the system
-  /// shortcut store, where the launcher and the share sheet can read them. So
-  /// contact names leave the app sandbox — the one place Freizone does that.
-  /// Turning this off removes what was already published, it doesn't merely
-  /// stop adding more.
+  /// **Off by default, deliberately.** Making a chat a share target means
+  /// handing its label and avatar to the system shortcut store, where the
+  /// launcher and the share sheet can read them — the one place Freizone lets
+  /// contact details out of its own sandbox. On an app whose whole point is
+  /// withholding metadata, that is a trade the user should opt into rather
+  /// than discover. Turning it back off removes what was already published, it
+  /// doesn't merely stop adding more.
+  ///
+  /// Note the default also applies to installs that predate the setting: their
+  /// stored preferences have no such key, so they read as off and
+  /// syncShareShortcuts clears anything an earlier build had published.
   bool get directShareEnabled => _directShareEnabled;
 
   /// The account id AccountManager should activate on the next app
@@ -147,7 +152,7 @@ class AppSettings extends ChangeNotifier {
         pushPreference: PushPreference.automatic,
         readReceiptsEnabled: true,
         enterSendsMessage: false,
-        directShareEnabled: true,
+        directShareEnabled: false,
       );
     }
     final j = json.decode(await file.readAsString()) as Map<String, dynamic>;
@@ -169,7 +174,7 @@ class AppSettings extends ChangeNotifier {
       ),
       readReceiptsEnabled: j['read_receipts_enabled'] as bool? ?? true,
       enterSendsMessage: j['enter_sends_message'] as bool? ?? false,
-      directShareEnabled: j['direct_share_enabled'] as bool? ?? true,
+      directShareEnabled: j['direct_share_enabled'] as bool? ?? false,
       lastActiveAccountId: j['last_active_account_id'] as String?,
     );
   }
