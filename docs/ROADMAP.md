@@ -511,6 +511,15 @@ for a photo is *larger* than the JPEG it started as; the limits are passed in
 from Dart so `maxSentImageEdge`/`sentImageQuality` stay the single source of
 truth.
 
+**The direct-share row is off by default**, decided once the privacy-policy
+wording made the trade-off plain to read: it is the only feature that puts
+information about contacts outside the App's private storage, so it is
+something to opt into rather than discover. The default also reaches installs
+that predate the setting — their stored preferences have no such key, so they
+read as off and `syncShareShortcuts` clears whatever an earlier build had
+published. Sharing *into* Freizone works either way; without the setting the
+target is picked afterwards.
+
 Worth recording, since it cost a debugging detour: a share driven from
 `adb shell am start --grant-read-uri-permission` **cannot** be read — the shell
 does not own the MediaStore row, so the grant never reaches the app
