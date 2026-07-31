@@ -471,9 +471,58 @@ contacts a linked server (no previews), and opening happens in the user's own
 browser on their own initiative.
 
 ### APP-15 — Receive shares from other apps (Freizone as a share target)
-Status: planned · Also relates to: APP-04 (images), SRV-07 (blob limits)
+Status: done (both levels) · Also relates to: APP-04 (images), SRV-07 (blob limits)
+
+**Shipped 2026-07-31, both levels.** Implemented with an own platform channel
+rather than `receive_sharing_intent`: MainActivity already had one
+(`freizone/secure_screen`), so this follows an established pattern, adds no
+dependency that has to keep pace with Flutter releases, and keeps the
+security-relevant part — reading the sender's `content://` stream — under our
+own control.
+
+The native side is deliberately **pull-based**: it parks the share and waits to
+be asked, because a share is often a *cold start* where nothing in Dart is
+ready to show a picker yet. `onNewIntent` only nudges for the warm case.
+Files: `MainActivity.kt`, `lib/util/share_intake.dart`,
+`lib/screens/share_target_screen.dart`, `lib/util/share_shortcuts.dart`,
+`lib/util/avatar_bitmap.dart`, and `ChatScreen`'s `sharedText`/
+`sharedImagePath`.
+
+Verified on the emulator: a cold-start text share opened the picker with all
+accounts' chats grouped by server, and choosing one landed in that chat with
+the text in the composer; the direct-share row showed three chats with their
+real avatars and Freizone badges; tapping one skipped the picker entirely and
+staged the shared picture in the composer (`1136×1434 · 292 KB`, removable via
+its X), with nothing sent. `dumpsys shortcut` confirmed the published set
+carries the share-target category, a `Person`, the long-lived flag and an
+accepted icon bitmap.
+
+**A shared picture is normalized exactly like a gallery pick**, and that had
+to be added deliberately: `image_picker` downscales and JPEG-re-encodes a
+gallery pick (~1600px, quality 80) *before* Dart sees it, so the first version
+of this shipped a shared photo at full camera resolution — costing the
+recipient quota and bandwidth and running into the receiving server's
+`max_blob_bytes` (SRV-07) where a gallery pick never would. It is now brought
+to the same size and format in `MainActivity.normalizeImage`, including EXIF
+rotation (BitmapFactory ignores orientation, so a portrait photo would
+otherwise arrive on its side) and deleting the full-size original from the
+cache. Native rather than Dart because `dart:ui` can only encode PNG, which
+for a photo is *larger* than the JPEG it started as; the limits are passed in
+from Dart so `maxSentImageEdge`/`sentImageQuality` stay the single source of
+truth.
+
+Worth recording, since it cost a debugging detour: a share driven from
+`adb shell am start --grant-read-uri-permission` **cannot** be read — the shell
+does not own the MediaStore row, so the grant never reaches the app
+(`SecurityException: ... has no access to content://media/...`). The code
+handled it correctly by dropping the share, but the image path can only really
+be tested through a genuine app-to-app share. Sharing Freizone's own invite QR
+back into Freizone turned out to be the cleanest way to do that.
+
+The original plan follows.
+
 Freizone can share *out* (`share_plus`, used by the invite/address screens)
-but cannot receive: it does not appear in Android's share sheet when another
+but could not receive: it did not appear in Android's share sheet when another
 app shares a link or a picture. Two levels, worth keeping apart because the
 second one costs something the first does not.
 

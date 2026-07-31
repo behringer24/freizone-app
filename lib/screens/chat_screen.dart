@@ -4,6 +4,9 @@
 // forwards sends). Peer resolution now happens once, up front, in
 // ChatListScreen's "new chat" flow -- by the time this screen opens,
 // the conversation's peer device is already resolved and cached.
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -22,6 +25,7 @@ import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/link_detection.dart';
+import '../util/share_intake.dart';
 import '../widgets/pattern_background.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
@@ -33,11 +37,22 @@ class ChatScreen extends StatefulWidget {
     required this.session,
     required this.peerAccountId,
     required this.settings,
+    this.sharedText,
+    this.sharedImagePath,
   });
 
   final AppSession session;
   final String peerAccountId;
   final AppSettings settings;
+
+  /// Text handed over from another app's share (APP-15). Pre-fills the
+  /// composer; deliberately not sent, so the user can still edit or abandon it.
+  final String? sharedText;
+
+  /// A shared image, already copied into our cache by the platform side. Staged
+  /// in the composer like a gallery pick -- and refused if it turns out not to
+  /// be a decodable image, since the sending app's mime type isn't trusted.
+  final String? sharedImagePath;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -94,6 +109,47 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     widget.session.enterConversation(widget.peerAccountId);
     _checkAttachmentSupport();
+    if (widget.sharedText != null) {
+      _messageController.text = widget.sharedText!;
+    }
+    if (widget.sharedImagePath != null) {
+      unawaited(_stageSharedImage(widget.sharedImagePath!));
+    }
+  }
+
+  /// Stages an image handed over by another app's share, using exactly the
+  /// path a gallery pick takes -- including refusing it when it doesn't decode,
+  /// because the sending app's claimed mime type is not evidence.
+  ///
+  /// It is **normalized first** (see normalizeSharedImage): a gallery pick is
+  /// downscaled and re-encoded by image_picker before it reaches here, so a
+  /// shared picture has to be brought to the same size and format or it would
+  /// go out at full camera resolution.
+  ///
+  /// Note it is staged, not sent: the size limit that applies belongs to the
+  /// *recipient's* server (SRV-07), so it can only be checked once this
+  /// conversation is the target -- which the send path already does, complete
+  /// with naming the actual limit.
+  Future<void> _stageSharedImage(String path) async {
+    setState(() => _preparing = true);
+    try {
+      final normalized = await normalizeSharedImage(path) ?? path;
+      final bytes = await File(normalized).readAsBytes();
+      final attachment = await OutgoingAttachment.prepare(bytes);
+      if (attachment == null) {
+        throw StateError("That file doesn't look like an image.");
+      }
+      if (!mounted) return;
+      setState(() => _pendingAttachment = attachment);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't attach: ${describeError(e)}")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _preparing = false);
+    }
   }
 
   Future<void> _checkAttachmentSupport() async {

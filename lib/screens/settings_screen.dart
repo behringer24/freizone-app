@@ -6,6 +6,7 @@ import 'package:unifiedpush/unifiedpush.dart';
 
 import '../state/account_manager.dart';
 import '../state/app_settings.dart';
+import '../util/share_shortcuts.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
@@ -26,6 +27,14 @@ class SettingsScreen extends StatelessWidget {
     for (final session in manager.sessions) {
       await session.reregisterPush();
     }
+  }
+
+  /// Acts on the flag immediately rather than waiting for the next resume:
+  /// turning this off is a privacy decision, so the already-published names
+  /// have to go away now, not eventually (APP-15).
+  Future<void> _setDirectShareEnabled(bool value) async {
+    await settings.setDirectShareEnabled(value);
+    await syncShareShortcuts(manager, settings);
   }
 
   Widget _sectionTitle(BuildContext context, String text) => Padding(
@@ -156,6 +165,18 @@ class SettingsScreen extends StatelessWidget {
                 ),
                 value: settings.enterSendsMessage,
                 onChanged: settings.setEnterSendsMessage,
+              ),
+              SwitchListTile(
+                title: const Text('Offer chats when sharing'),
+                subtitle: const Text(
+                  'Lets other apps share straight into a specific chat, so '
+                  'your recent contacts appear in the system share sheet. '
+                  'Their names and avatars are handed to Android for that, '
+                  'which is the one place Freizone passes contact details '
+                  'outside the app. Turning this off removes them again.',
+                ),
+                value: settings.directShareEnabled,
+                onChanged: _setDirectShareEnabled,
               ),
             ],
           );

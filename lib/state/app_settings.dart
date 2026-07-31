@@ -63,6 +63,7 @@ class AppSettings extends ChangeNotifier {
     required PushPreference pushPreference,
     required bool readReceiptsEnabled,
     required bool enterSendsMessage,
+    required bool directShareEnabled,
     String? lastActiveAccountId,
   }) : _themeMode = themeMode,
        _accentPreset = accentPreset,
@@ -72,6 +73,7 @@ class AppSettings extends ChangeNotifier {
        _pushPreference = pushPreference,
        _readReceiptsEnabled = readReceiptsEnabled,
        _enterSendsMessage = enterSendsMessage,
+       _directShareEnabled = directShareEnabled,
        _lastActiveAccountId = lastActiveAccountId;
 
   ThemeMode _themeMode;
@@ -82,6 +84,7 @@ class AppSettings extends ChangeNotifier {
   PushPreference _pushPreference;
   bool _readReceiptsEnabled;
   bool _enterSendsMessage;
+  bool _directShareEnabled;
   String? _lastActiveAccountId;
 
   ThemeMode get themeMode => _themeMode;
@@ -106,6 +109,17 @@ class AppSettings extends ChangeNotifier {
   /// and the send button sends. With a hardware keyboard, Shift+Enter
   /// always inserts a line break regardless of this setting.
   bool get enterSendsMessage => _enterSendsMessage;
+
+  /// Whether individual chats are offered in the system share sheet's
+  /// direct-share row (APP-15).
+  ///
+  /// On by default, but worth understanding before leaving it that way: making
+  /// a chat a share target means handing its label and avatar to the system
+  /// shortcut store, where the launcher and the share sheet can read them. So
+  /// contact names leave the app sandbox — the one place Freizone does that.
+  /// Turning this off removes what was already published, it doesn't merely
+  /// stop adding more.
+  bool get directShareEnabled => _directShareEnabled;
 
   /// The account id AccountManager should activate on the next app
   /// start, so a multi-account setup doesn't fall back to an
@@ -133,6 +147,7 @@ class AppSettings extends ChangeNotifier {
         pushPreference: PushPreference.automatic,
         readReceiptsEnabled: true,
         enterSendsMessage: false,
+        directShareEnabled: true,
       );
     }
     final j = json.decode(await file.readAsString()) as Map<String, dynamic>;
@@ -154,6 +169,7 @@ class AppSettings extends ChangeNotifier {
       ),
       readReceiptsEnabled: j['read_receipts_enabled'] as bool? ?? true,
       enterSendsMessage: j['enter_sends_message'] as bool? ?? false,
+      directShareEnabled: j['direct_share_enabled'] as bool? ?? true,
       lastActiveAccountId: j['last_active_account_id'] as String?,
     );
   }
@@ -170,6 +186,7 @@ class AppSettings extends ChangeNotifier {
         'push_preference': _pushPreference.name,
         'read_receipts_enabled': _readReceiptsEnabled,
         'enter_sends_message': _enterSendsMessage,
+        'direct_share_enabled': _directShareEnabled,
         if (_lastActiveAccountId != null)
           'last_active_account_id': _lastActiveAccountId,
       }),
@@ -228,6 +245,16 @@ class AppSettings extends ChangeNotifier {
   Future<void> setEnterSendsMessage(bool value) async {
     if (_enterSendsMessage == value) return;
     _enterSendsMessage = value;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Persists the flag only. Actually publishing or removing the shortcuts is
+  /// the caller's job (see syncShareShortcuts) -- this class deliberately owns
+  /// no platform channels.
+  Future<void> setDirectShareEnabled(bool value) async {
+    if (_directShareEnabled == value) return;
+    _directShareEnabled = value;
     await _save();
     notifyListeners();
   }

@@ -87,4 +87,8 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // ShortcutManagerCompat / ShortcutInfoCompat for the per-chat sharing
+    // shortcuts in APP-15 level 2 -- the compat versions handle the API-level
+    // differences (long-lived shortcuts, Person, share targets) for us.
+    implementation("androidx.core:core-ktx:1.13.1")
 }
