@@ -8,9 +8,13 @@
 // image looks the same as the screen itself.
 //
 // The card follows the app's light/dark theme -- its text is drawn in theme
-// colors, so a fixed-light card left that text unreadable in dark mode. The
-// QR block inside it deliberately does NOT follow the theme: it keeps a white
-// fill with dark modules in both, because that is what a scanner needs.
+// colors, so a fixed-light card left that text unreadable in dark mode.
+//
+// The QR block inside it deliberately does NOT: white fill, dark modules and
+// a dark frame and eyes in both themes, because that is what a scanner needs.
+// It is a fixed artifact that happens to sit on a themed card, so it reads
+// identically in either mode -- and, since it gets shared as an image, looks
+// the same to whoever receives it no matter which theme the sender ran.
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -40,7 +44,21 @@ class QrInviteCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final teal = Theme.of(context).colorScheme.primary;
+    final colorScheme = Theme.of(context).colorScheme;
+
+    // For everything drawn on the card's own (theme-following) background:
+    // the outer border and the title, which should read as this theme's
+    // accent.
+    final teal = colorScheme.primary;
+
+    // For the QR block, which is theme-independent -- see the header comment.
+    // It cannot use `primary`: in dark mode that is a *light* tone, which left
+    // the three finder patterns as pale teal on white. Those are the markers
+    // a scanner locates first, so they have to stay dark. Material 3's
+    // onPrimaryFixedVariant is a dark tone of the same accent hue and is
+    // identical in light and dark by definition, so the block still follows
+    // whichever accent the user picked without ever going pale.
+    final qrTeal = colorScheme.onPrimaryFixedVariant;
 
     // Same auto-versioning QrImageView uses internally (see qr_flutter's
     // own QrValidator) -- computing it here too is the only way to know
@@ -92,7 +110,7 @@ class QrInviteCard extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: teal, width: 3),
+                      border: Border.all(color: qrTeal, width: 3),
                     ),
                     child: Stack(
                       alignment: Alignment.center,
@@ -108,7 +126,7 @@ class QrInviteCard extends StatelessWidget {
                           errorCorrectionLevel: QrErrorCorrectLevel.H,
                           eyeStyle: QrEyeStyle(
                             eyeShape: QrEyeShape.square,
-                            color: teal,
+                            color: qrTeal,
                           ),
                           dataModuleStyle: const QrDataModuleStyle(
                             dataModuleShape: QrDataModuleShape.square,
