@@ -6,6 +6,11 @@
 // underneath. Exposes [captureKey] so the caller's own share action can
 // screenshot exactly this widget via RepaintBoundary, meaning the shared
 // image looks the same as the screen itself.
+//
+// The card follows the app's light/dark theme -- its text is drawn in theme
+// colors, so a fixed-light card left that text unreadable in dark mode. The
+// QR block inside it deliberately does NOT follow the theme: it keeps a white
+// fill with dark modules in both, because that is what a scanner needs.
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -64,7 +69,7 @@ class QrInviteCard extends StatelessWidget {
         child: ClipRRect(
           borderRadius: BorderRadius.circular(18),
           child: PatternBackground(
-            forceLight: true,
+            standalone: true,
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Column(
