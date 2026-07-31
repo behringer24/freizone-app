@@ -46,6 +46,12 @@ dependencies:
   share_plus: ^13.2.1
   firebase_core: ^4.12.1
   firebase_messaging: ^16.4.3
+  # Opens links found in message text (APP-14). Always with
+  # LaunchMode.externalApplication -- the user's own browser, never an in-app
+  # webview, which would add a browser surface to a privacy app for no gain.
+  # Needs the VIEW intents in AndroidManifest's <queries>, or Android 11+
+  # hides the browser and launching fails silently.
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:

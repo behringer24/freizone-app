@@ -15,9 +15,13 @@ import '../state/outgoing_attachment.dart';
 import '../state/receipt_signal.dart';
 import '../widgets/attachment_thumbnail.dart';
 import '../widgets/image_attachment.dart';
+import '../widgets/link_confirm_sheet.dart';
+import '../widgets/message_text.dart';
+import '../widgets/new_chat_sheet.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
+import '../util/link_detection.dart';
 import '../widgets/pattern_background.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
@@ -142,6 +146,63 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     }
+  }
+
+  /// Handles a Freizone `id*server` address tapped inside a message.
+  ///
+  /// Nothing here touches the network: resolving a peer contacts *that
+  /// peer's server* directly (federation is client-direct, PROTOCOL §9), so a
+  /// tap that resolved by itself would hand the user's IP to a server chosen
+  /// by whoever wrote the message. Instead this either jumps to a chat that
+  /// already exists, or opens the new-chat sheet pre-filled -- where pressing
+  /// Start is the user's own decision.
+  Future<void> _openTappedAddress(LinkSpan span) async {
+    final parsed = parseFreizoneAddress(span.target);
+    if (parsed == null) return;
+
+    if (addressIsSelf(span, widget.session.state.accountId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That address is your own account')),
+      );
+      return;
+    }
+
+    // Already a known contact: go straight there. No network, nothing to
+    // confirm -- the user has talked to them before.
+    for (final convo in widget.session.conversations) {
+      if (convo.peerAccountId == parsed.idOrPrefix ||
+          convo.peerAccountId.startsWith(parsed.idOrPrefix)) {
+        if (convo.peerAccountId == widget.peerAccountId) return; // already open
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ChatScreen(
+              session: widget.session,
+              peerAccountId: convo.peerAccountId,
+              settings: widget.settings,
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
+    final peerAccountId = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) =>
+          NewChatSheet(session: widget.session, initialId: span.target),
+    );
+    if (peerAccountId == null || !mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          session: widget.session,
+          peerAccountId: peerAccountId,
+          settings: widget.settings,
+        ),
+      ),
+    );
   }
 
   /// Re-sends a message whose send failed, from the retry chip on its own
@@ -397,6 +458,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ? null
               : () => _scrollToMessage(m.replyToId!),
           onRetry: m.hasFailed ? () => _retrySend(m.id) : null,
+          onOpenAddress: _openTappedAddress,
         ),
       );
     }
@@ -1079,6 +1141,7 @@ class _MessageBubble extends StatelessWidget {
     required this.onLongPress,
     required this.session,
     required this.peerAccountId,
+    required this.onOpenAddress,
     this.quotedHasImage = false,
     this.deliveryStatus,
     this.onTapQuote,
@@ -1119,6 +1182,11 @@ class _MessageBubble extends StatelessWidget {
   /// Re-runs a failed send (APP-08). Only wired up for a message that
   /// actually failed.
   final VoidCallback? onRetry;
+
+  /// A Freizone `id*server` address was tapped in this message's text
+  /// (APP-14). Handled by the screen, since it needs the conversation list
+  /// and the navigator -- and deliberately never resolves on its own.
+  final void Function(LinkSpan span) onOpenAddress;
 
   @override
   Widget build(BuildContext context) {
@@ -1226,9 +1294,15 @@ class _MessageBubble extends StatelessWidget {
                     if (message.text.isNotEmpty) const SizedBox(height: 6),
                   ],
                   // Doubles as the caption when there's an attachment, so an
-                  // image with no text renders nothing extra.
+                  // image with no text renders nothing extra. MessageText
+                  // degrades to a plain Text when there is nothing to link.
                   if (message.text.isNotEmpty)
-                    Text(message.text, style: TextStyle(color: onBubble)),
+                    MessageText(
+                      text: message.text,
+                      style: TextStyle(color: onBubble),
+                      onOpenLink: (span) => confirmAndOpenLink(context, span),
+                      onOpenAddress: onOpenAddress,
+                    ),
                   const SizedBox(height: 2),
                   Row(
                     mainAxisSize: MainAxisSize.min,
