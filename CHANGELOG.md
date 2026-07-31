@@ -7,6 +7,34 @@ Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
 to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 `freizone-server/docs/ROADMAP.md`.
 
+## 0.12.4+13 — 2026-08-01
+
+### Added
+- **Tappable links.** Web addresses, `www.` addresses, and email addresses in
+  a message are now underlined and tappable — opening asks first, showing
+  where it actually goes, since the sender of a message isn't always someone
+  you already trust. A Freizone address quoted in a message (`id*server`) is
+  tappable too and offers to start a chat with that person, without ever
+  contacting a server on its own. (APP-14)
+- **Receive shares from other apps.** Freizone now appears in Android's share
+  sheet for text and pictures — pick a chat afterwards, and the shared
+  content lands in that chat's composer (a picture downscaled exactly like
+  one picked from the gallery), with nothing sent until you press send. An
+  optional Settings switch, off by default, additionally offers your recent
+  chats as individual targets right in the share sheet itself. (APP-15)
+
+### Changed
+- **Shorter invite codes.** An invite code is now a short, easy-to-read code
+  like `ABCD-EFGH-JKMN` instead of a long string of hex characters — easy to
+  read aloud or copy onto paper, and forgiving to type back in (case doesn't
+  matter, and the dashes are optional). Codes now expire after two weeks by
+  default, shown next to the code when you generate one. (SRV-12)
+- The invite/address QR card now follows dark mode properly — the background
+  and its icons used to stay locked to a light appearance, making the address
+  underneath hard to read. (APP-04)
+- Updated the privacy policy to cover pictures shared into Freizone from
+  other apps, and the new optional share-shortcuts feature above.
+
 ## 0.12.3+12 — 2026-07-30
 
 ### Changed
