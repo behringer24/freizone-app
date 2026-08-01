@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../net/dto.dart';
 import '../state/app_session.dart';
 import '../util/address_format.dart';
+import '../util/admin_format.dart';
 import '../util/errors.dart';
 import '../util/role_icon.dart';
 
@@ -257,13 +258,50 @@ class _AdminScreenState extends State<AdminScreen> {
   bool _canToggleBlock(AdminAccountSummary account) =>
       _isAdmin || (_isModerator && account.role == 'user');
 
+  /// The activity line under a row (SRV-09): what is waiting for this account
+  /// and what it has stored, so an abandoned account is visible without
+  /// drilling into anything. Null on a server that doesn't report these, which
+  /// keeps the row looking exactly as it did rather than claiming zeroes it
+  /// doesn't know (see AdminAccountSummary.hasActivitySignals).
+  ///
+  /// Storage is only mentioned once there is any: an empty figure on every row
+  /// would bury the one row that matters. The queue half does the same, so an
+  /// account with nothing going on shows no second line at all -- which is
+  /// itself the signal.
+  String? _activityLine(AdminAccountSummary account) {
+    if (!account.hasActivitySignals) return null;
+    final parts = <String>[
+      // `?` drops the entry when there is nothing queued (use_null_aware_elements).
+      ?formatPendingSummary(
+        account.pendingMessages,
+        account.oldestPendingAt,
+        now: DateTime.now().toUtc(),
+      ),
+      if (account.blobBytes > 0)
+        formatQuotaUsage(account.blobBytes, account.blobBytesLimit),
+    ];
+    return parts.isEmpty ? null : parts.join(' -- ');
+  }
+
   Widget _buildAccountRow(BuildContext context, AdminAccountSummary account) {
     final blocked = account.status != 'active';
     final canBlock = _canToggleBlock(account);
+    final activity = _activityLine(account);
     return ListTile(
+      isThreeLine: activity != null,
       leading: _roleIcon(account),
       title: Text(formatAccountIdForDisplay(account.id)),
-      subtitle: Text('${account.role}${blocked ? ' -- blocked for all' : ''}'),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${account.role}${blocked ? ' -- blocked for all' : ''}'),
+          if (activity != null)
+            Text(
+              activity,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+        ],
+      ),
       trailing: canBlock
           ? PopupMenuButton<String>(
               onSelected: (action) {

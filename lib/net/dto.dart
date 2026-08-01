@@ -230,20 +230,63 @@ class AdminAccountSummary {
     required this.role,
     required this.status,
     required this.createdAt,
+    this.pendingMessages = 0,
+    this.oldestPendingAt,
+    this.blobCount = 0,
+    this.blobBytes = 0,
+    this.blobBytesLimit = 0,
+    this.deviceCount = 0,
   });
 
+  /// Every activity field defaults rather than being required: a server that
+  /// predates SRV-09 simply doesn't send them, and the admin list must still
+  /// work against one (see docs/PROTOCOL.md §4). Zero then reads as "this
+  /// server doesn't report it", which [hasActivitySignals] distinguishes from
+  /// a genuinely idle account.
   factory AdminAccountSummary.fromJson(Map<String, dynamic> j) =>
       AdminAccountSummary(
         id: j['id'] as String,
         role: j['role'] as String,
         status: j['status'] as String,
         createdAt: decodeTime(j['created_at'] as String),
+        pendingMessages: (j['pending_messages'] as num?)?.toInt() ?? 0,
+        oldestPendingAt: j['oldest_pending_at'] == null
+            ? null
+            : decodeTime(j['oldest_pending_at'] as String),
+        blobCount: (j['blob_count'] as num?)?.toInt() ?? 0,
+        blobBytes: (j['blob_bytes'] as num?)?.toInt() ?? 0,
+        blobBytesLimit: (j['blob_bytes_limit'] as num?)?.toInt() ?? 0,
+        deviceCount: (j['device_count'] as num?)?.toInt() ?? 0,
       );
 
   final String id;
   final String role;
   final String status;
   final DateTime createdAt;
+
+  /// How many messages are queued undelivered across this account's devices,
+  /// and when the earliest of them was sent (null when the queue is empty).
+  /// The age is the actual abandonment signal -- a big queue minutes old is a
+  /// busy account, the same queue three weeks old is a device that never
+  /// came back.
+  final int pendingMessages;
+  final DateTime? oldestPendingAt;
+
+  /// Stored attachment ciphertext, and the quota it is measured against: the
+  /// server's per-device limit times [deviceCount], since that is where the
+  /// limit is enforced. [blobBytesLimit] is 0 when there is no meaningful
+  /// limit to show (no devices, or a server that doesn't report it).
+  final int blobCount;
+  final int blobBytes;
+  final int blobBytesLimit;
+  final int deviceCount;
+
+  /// Whether this entry carries SRV-09's signals at all. A server that
+  /// predates them reports no devices either -- and an account always has at
+  /// least one device, or it could never have registered -- so the device
+  /// count is the one field that cannot legitimately be zero on a server that
+  /// does report them.
+  bool get hasActivitySignals => deviceCount > 0;
 }
 
 class MessageResponse {
