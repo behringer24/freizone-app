@@ -7,16 +7,26 @@ import 'package:flutter/material.dart';
 
 import '../net/dto.dart';
 import '../state/app_session.dart';
+import '../state/app_settings.dart';
 import '../util/address_format.dart';
 import '../util/admin_format.dart';
 import '../util/admin_list_view.dart';
 import '../util/errors.dart';
 import '../util/role_icon.dart';
+import 'admin_account_screen.dart';
 
 class AdminScreen extends StatefulWidget {
-  const AdminScreen({super.key, required this.session});
+  const AdminScreen({
+    super.key,
+    required this.session,
+    required this.settings,
+  });
 
   final AppSession session;
+
+  /// Only needed to hand on to ChatScreen, which the detail view can open
+  /// (APP-11) -- nothing on this screen itself reads it.
+  final AppSettings settings;
 
   @override
   State<AdminScreen> createState() => _AdminScreenState();
@@ -380,6 +390,17 @@ class _AdminScreenState extends State<AdminScreen> {
     return ListTile(
       isThreeLine: activity != null,
       leading: _roleIcon(account),
+      // The row opens the detail view; the overflow menu stays so the two
+      // most-used actions remain one tap away from the list (APP-11).
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => AdminAccountScreen(
+            session: widget.session,
+            settings: widget.settings,
+            accountId: account.id,
+          ),
+        ),
+      ),
       title: Text(formatAccountIdForDisplay(account.id)),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

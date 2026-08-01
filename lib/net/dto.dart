@@ -236,6 +236,7 @@ class AdminAccountSummary {
     this.blobBytes = 0,
     this.blobBytesLimit = 0,
     this.deviceCount = 0,
+    this.invitedBy,
   });
 
   /// Every activity field defaults rather than being required: a server that
@@ -257,6 +258,7 @@ class AdminAccountSummary {
         blobBytes: (j['blob_bytes'] as num?)?.toInt() ?? 0,
         blobBytesLimit: (j['blob_bytes_limit'] as num?)?.toInt() ?? 0,
         deviceCount: (j['device_count'] as num?)?.toInt() ?? 0,
+        invitedBy: j['invited_by'] as String?,
       );
 
   final String id;
@@ -280,6 +282,13 @@ class AdminAccountSummary {
   final int blobBytes;
   final int blobBytesLimit;
   final int deviceCount;
+
+  /// The account that issued the invite this one joined with (SRV-14). Sent to
+  /// admins only, so this is always null for a moderator -- and also null for
+  /// an account that needed no invite, or whose inviter has since been deleted
+  /// (the invite record goes with them). Read it as "not known", never as
+  /// "registered openly".
+  final String? invitedBy;
 
   /// Whether this entry carries SRV-09's signals at all. A server that
   /// predates them reports no devices either -- and an account always has at
