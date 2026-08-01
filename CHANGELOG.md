@@ -7,6 +7,16 @@ Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
 to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 `freizone-server/docs/ROADMAP.md`.
 
+## 0.12.5+14 — 2026-08-02
+
+### Fixed
+- When sharing into Freizone from another app, the account sections on the
+  "Send to…" picker now show your full address instead of just the server
+  name, so two accounts on the same server are no longer shown identically.
+- Fixed the on-screen keyboard occasionally leaving its space reserved on
+  screen after leaving and returning to the app, even though the keyboard
+  itself was gone.
+
 ## 0.12.4+13 — 2026-08-01
 
 ### Added
