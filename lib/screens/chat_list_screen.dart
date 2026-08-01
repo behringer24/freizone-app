@@ -552,7 +552,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 Navigator.of(context)
                     .push(
                       MaterialPageRoute(
-                        builder: (_) => AdminScreen(session: session),
+                        builder: (_) => AdminScreen(
+                          session: session,
+                          settings: widget.settings,
+                        ),
                       ),
                     )
                     .then((_) => session.refreshRegistrationPolicy());

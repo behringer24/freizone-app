@@ -734,13 +734,14 @@ class AppSession extends ChangeNotifier {
     await refreshMyRole();
   }
 
-  /// Temporarily disables an account. Admin only.
+  /// Temporarily disables an account server-wide. Admin, or moderator acting
+  /// on a regular member (SRV-08).
   Future<void> blockAccount(String accountId) async {
     await api.blockAccount(state.credentials, accountId);
     await refreshMyRole();
   }
 
-  /// Restores a previously blocked account. Admin only.
+  /// Restores a previously blocked account. Same authorization as blocking.
   Future<void> unblockAccount(String accountId) async {
     await api.unblockAccount(state.credentials, accountId);
     await refreshMyRole();
