@@ -14,6 +14,7 @@ import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
+import '../util/freizone_address.dart';
 import '../util/share_intake.dart';
 import '../widgets/peer_avatar.dart';
 import 'chat_screen.dart';
@@ -72,12 +73,19 @@ class ShareTargetScreen extends StatelessWidget {
       if (convos.isEmpty) continue;
 
       if (showAccountHeaders) {
+        // The server alone doesn't say *which* account -- this device can
+        // (and the switcher strip's own grouping shows) hold several accounts
+        // on the very same server. The full own address (short id*server)
+        // is the one label that always disambiguates.
         children.add(
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
             child: Text(
-              session.state.server,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              shortFreizoneAddress(
+                id: session.state.accountId,
+                server: session.state.server,
+              ),
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 color: Theme.of(context).colorScheme.primary,
                 fontWeight: FontWeight.bold,
               ),
