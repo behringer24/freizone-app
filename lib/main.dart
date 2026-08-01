@@ -110,6 +110,14 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // listeners on every session. See syncShareShortcuts.
     if (foreground) {
       unawaited(syncShareShortcuts(manager, widget.settings));
+    } else {
+      // Works around a stale on-screen-keyboard inset on Android: leaving the
+      // app with a text field focused and the keyboard open can come back to
+      // the keyboard gone but MediaQuery.viewInsets.bottom still reporting its
+      // height, leaving a blank gap reserved for nothing. Closing the
+      // keyboard ourselves on the way out means there is no focus for Android
+      // to restore on return, so the stale inset has nothing to attach to.
+      FocusManager.instance.primaryFocus?.unfocus();
     }
   }
 
