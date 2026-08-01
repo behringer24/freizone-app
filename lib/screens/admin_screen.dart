@@ -1,7 +1,8 @@
 // Server Admin area: registration policy + the user list (roles,
-// block/unblock, delete). Moderators see everything read-only (no tap
-// targets at all); only admins can change anything -- enforced server-
-// side regardless, but hidden client-side too so it isn't a dead end.
+// block/unblock, delete). Admins can change anything here. Moderators see
+// everything but may only block/unblock a regular member (SRV-08) -- roles,
+// deletion and the server settings stay admin-only. Enforced server-side
+// regardless; mirrored client-side so no offered action is a dead end.
 import 'package:flutter/material.dart';
 
 import '../net/dto.dart';
@@ -26,6 +27,7 @@ class _AdminScreenState extends State<AdminScreen> {
   String? _error;
 
   bool get _isAdmin => widget.session.myRole == 'admin';
+  bool get _isModerator => widget.session.myRole == 'moderator';
 
   @override
   void initState() {
@@ -247,13 +249,22 @@ class _AdminScreenState extends State<AdminScreen> {
     return Icon(roleBadgeIcon(account.role) ?? Icons.person_outline);
   }
 
+  /// Whether the signed-in user may block/unblock [account] server-wide
+  /// (SRV-08). Admins may act on anyone; a moderator only on regular members,
+  /// because blocking staff would amount to removing them -- the server
+  /// enforces exactly this and answers 403 otherwise, so mirroring the rule
+  /// here only avoids offering an action that would fail.
+  bool _canToggleBlock(AdminAccountSummary account) =>
+      _isAdmin || (_isModerator && account.role == 'user');
+
   Widget _buildAccountRow(BuildContext context, AdminAccountSummary account) {
     final blocked = account.status != 'active';
+    final canBlock = _canToggleBlock(account);
     return ListTile(
       leading: _roleIcon(account),
       title: Text(formatAccountIdForDisplay(account.id)),
-      subtitle: Text('${account.role}${blocked ? ' -- blocked' : ''}'),
-      trailing: _isAdmin
+      subtitle: Text('${account.role}${blocked ? ' -- blocked for all' : ''}'),
+      trailing: canBlock
           ? PopupMenuButton<String>(
               onSelected: (action) {
                 switch (action) {
@@ -266,12 +277,21 @@ class _AdminScreenState extends State<AdminScreen> {
                 }
               },
               itemBuilder: (context) => [
-                const PopupMenuItem(value: 'set_role', child: Text('Set role')),
-                PopupMenuItem(
-                  value: 'toggle_block',
-                  child: Text(blocked ? 'Unblock' : 'Block'),
-                ),
-                const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                // Role and delete stay admin-only, so a moderator's menu holds
+                // the block entry alone.
+                if (_isAdmin)
+                  const PopupMenuItem(value: 'set_role', child: Text('Set role')),
+                if (canBlock)
+                  PopupMenuItem(
+                    value: 'toggle_block',
+                    // "for all" spelled out because the app also has a
+                    // personal, per-contact block (peer_profile_screen.dart)
+                    // that affects nobody but the blocker -- next to that, a
+                    // bare "Block" here would be genuinely ambiguous.
+                    child: Text(blocked ? 'Unblock for all' : 'Block for all'),
+                  ),
+                if (_isAdmin)
+                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
               ],
             )
           : null,
