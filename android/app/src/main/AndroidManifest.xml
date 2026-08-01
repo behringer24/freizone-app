@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Required on Android 13+ to show the generic "new message" notification
          a push wake triggers (see lib/push/push_manager.dart). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -60,6 +61,26 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts"/>
         </activity>
+
+        <!-- APP-12: handle a refreshed FCM token even with the app closed.
+             Exactly one service may claim com.google.firebase.MESSAGING_EVENT,
+             so firebase_messaging's own declaration is removed in favour of
+             our subclass of it (which still calls super, keeping the
+             foreground onTokenRefresh stream working). Two services claiming
+             the same event would be undefined behaviour, the kind of bug
+             that looks like "push works on my device". Message delivery is
+             unaffected: the plugin handles that in its own broadcast
+             receiver, which stays. -->
+        <service
+            android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService"
+            tools:node="remove"/>
+        <service
+            android:name=".FreizonePushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT"/>
+            </intent-filter>
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

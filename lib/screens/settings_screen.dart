@@ -4,9 +4,11 @@
 import 'package:flutter/material.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
+import '../push/push_manager.dart';
 import '../state/account_manager.dart';
 import '../state/app_settings.dart';
 import '../util/share_shortcuts.dart';
+import 'push_status_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
@@ -130,6 +132,7 @@ class SettingsScreen extends StatelessWidget {
               // hidden when FCM is forced, since it wouldn't be used then.
               if (settings.pushPreference != PushPreference.forceFcm)
                 _PushDistributorTile(manager: manager),
+              _PushStatusLine(manager: manager, settings: settings),
               const Divider(height: 32),
               _sectionTitle(context, 'Notifications'),
               SwitchListTile(
@@ -275,15 +278,9 @@ class _PushDistributorTileState extends State<_PushDistributorTile> {
     setState(() => _current = distributor);
   }
 
-  // A friendly name for the common distributors; falls back to the package
-  // id for anything else (resolving the real app label would need a
-  // PackageManager round-trip we don't otherwise take).
-  String _label(String pkg) => switch (pkg) {
-    'io.heckel.ntfy' => 'ntfy',
-    'org.unifiedpush.distributor.nextpush' => 'NextPush',
-    'org.unifiedpush.distributor.fcm' => 'Embedded (FCM-backed)',
-    _ => pkg,
-  };
+  // Shared with the push status screen (see describeDistributor), so a
+  // distributor is never named one way here and another way there.
+  String _label(String pkg) => describeDistributor(pkg);
 
   @override
   Widget build(BuildContext context) {
@@ -334,5 +331,124 @@ class _PushDistributorTileState extends State<_PushDistributorTile> {
       ),
     );
     if (chosen != null && chosen != _current) await _choose(chosen);
+  }
+}
+
+/// The one line under the push radio buttons (APP-12).
+///
+/// Deliberately narrow in what it says. The radios already show what the user
+/// *chose* and [_PushDistributorTile] already names the distributor, so this
+/// only adds what neither conveys: with the preference on automatic, which of
+/// the two it actually resolved to, plus whether anything is registered at all.
+/// The `>` leads to the per-account detail, which is a specialist question and
+/// does not belong in the main Settings flow.
+class _PushStatusLine extends StatefulWidget {
+  const _PushStatusLine({required this.manager, required this.settings});
+
+  final AccountManager manager;
+  final AppSettings settings;
+
+  @override
+  State<_PushStatusLine> createState() => _PushStatusLineState();
+}
+
+class _PushStatusLineState extends State<_PushStatusLine> {
+  PushMechanism? _mechanism;
+  String? _distributor;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_PushStatusLine old) {
+    super.didUpdateWidget(old);
+    // The preference changing changes what automatic resolves to.
+    if (old.settings.pushPreference != widget.settings.pushPreference) _load();
+  }
+
+  Future<void> _load() async {
+    // Resolved once here, not per account: which mechanism applies is a
+    // device-wide fact (see resolvePushMechanism).
+    final mechanism = await resolvePushMechanism();
+    final distributor = mechanism == PushMechanism.unifiedPush
+        ? await UnifiedPush.getDistributor()
+        : null;
+    if (!mounted) return;
+    setState(() {
+      _mechanism = mechanism;
+      _distributor = distributor;
+    });
+  }
+
+  String get _summary {
+    final registered = widget.manager.sessions
+        .where((s) => s.state.pushRegisteredAt != null)
+        .length;
+    final total = widget.manager.sessions.length;
+
+    final String mechanismText;
+    switch (_mechanism) {
+      case null:
+        return 'Checking…';
+      case PushMechanism.fcm:
+        mechanismText = 'Firebase Cloud Messaging';
+      case PushMechanism.unifiedPush:
+        final pkg = _distributor;
+        mechanismText = pkg == null || pkg.isEmpty
+            ? 'UnifiedPush'
+            : 'UnifiedPush (${describeDistributor(pkg)})';
+      case PushMechanism.needsDistributorChoice:
+        return 'Pick a distributor above to receive notifications';
+      case PushMechanism.none:
+        return 'No push service available — install a UnifiedPush '
+            'distributor, or allow Firebase above';
+    }
+
+    // Only worth spelling out for automatic, where the choice was ours and the
+    // radios therefore don't already answer it.
+    final prefix =
+        widget.settings.pushPreference == PushPreference.automatic
+        ? 'Using $mechanismText'
+        : mechanismText;
+    return total == 0
+        ? prefix
+        : '$prefix · $registered of $total accounts registered';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final unregistered = widget.manager.sessions.any(
+      (s) => s.state.pushRegisteredAt == null,
+    );
+    final broken =
+        _mechanism == PushMechanism.none ||
+        _mechanism == PushMechanism.needsDistributorChoice;
+
+    return ListTile(
+      leading: Icon(
+        broken || unregistered
+            ? Icons.notification_important_outlined
+            : Icons.notifications_active_outlined,
+        color: broken ? colorScheme.error : colorScheme.onSurfaceVariant,
+      ),
+      title: Text(_summary, style: Theme.of(context).textTheme.bodySmall),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () async {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => PushStatusScreen(manager: widget.manager),
+          ),
+        );
+        // Re-registering inside the detail screen changes what we summarise.
+        if (mounted) {
+          setState(() {});
+          await _load();
+        }
+      },
+    );
   }
 }
