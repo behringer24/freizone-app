@@ -9,6 +9,7 @@ import '../net/dto.dart';
 import '../state/app_session.dart';
 import '../util/address_format.dart';
 import '../util/admin_format.dart';
+import '../util/admin_list_view.dart';
 import '../util/errors.dart';
 import '../util/role_icon.dart';
 
@@ -27,8 +28,20 @@ class _AdminScreenState extends State<AdminScreen> {
   bool? _federationEnabled;
   String? _error;
 
+  /// Incremental search text and chosen ordering (APP-10) -- view state only,
+  /// applied to the already-fetched list, never sent anywhere.
+  String _query = '';
+  AdminSortOrder _order = AdminSortOrder.created;
+  final _searchController = TextEditingController();
+
   bool get _isAdmin => widget.session.myRole == 'admin';
   bool get _isModerator => widget.session.myRole == 'moderator';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -283,6 +296,83 @@ class _AdminScreenState extends State<AdminScreen> {
     return parts.isEmpty ? null : parts.join(' -- ');
   }
 
+  /// The "Users" heading, the search box, and the sort control (APP-10). The
+  /// count reads "showing N of M" only while a search is narrowing things, so
+  /// the unfiltered case stays quiet.
+  Widget _buildUsersHeader(
+    BuildContext context,
+    List<AdminAccountSummary> all,
+    List<AdminAccountSummary> shown,
+  ) {
+    final filtered = shown.length != all.length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+      child: Row(
+        children: [
+          const Text('Users', style: TextStyle(fontWeight: FontWeight.bold)),
+          if (filtered)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Text(
+                '${shown.length} of ${all.length}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          const Spacer(),
+          SizedBox(
+            width: 180,
+            child: TextField(
+              controller: _searchController,
+              // Filtering happens on every keystroke over a list already in
+              // memory, so there is nothing to debounce.
+              onChanged: (v) => setState(() => _query = v),
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: 'Search id',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear, size: 18),
+                        tooltip: 'Clear search',
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => _query = '');
+                        },
+                      ),
+              ),
+            ),
+          ),
+          PopupMenuButton<AdminSortOrder>(
+            icon: const Icon(Icons.sort),
+            tooltip: 'Sort order',
+            initialValue: _order,
+            onSelected: (order) => setState(() => _order = order),
+            itemBuilder: (context) => [
+              for (final order in AdminSortOrder.values)
+                // Ordering by figures this server doesn't report would do
+                // nothing at all, so it isn't offered.
+                if (adminSortOrderApplies(order, all))
+                  PopupMenuItem(value: order, child: Text(_sortLabel(order))),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Labels name the direction, not just the field: "Role" alone leaves the
+  /// user guessing which end of the list they are about to get.
+  String _sortLabel(AdminSortOrder order) => switch (order) {
+    AdminSortOrder.id => 'Account id',
+    AdminSortOrder.created => 'Oldest first',
+    AdminSortOrder.role => 'Role, admins first',
+    AdminSortOrder.status => 'Blocked first',
+    AdminSortOrder.pending => 'Most queued first',
+    AdminSortOrder.oldestPending => 'Longest waiting first',
+  };
+
   Widget _buildAccountRow(BuildContext context, AdminAccountSummary account) {
     final blocked = account.status != 'active';
     final canBlock = _canToggleBlock(account);
@@ -353,20 +443,27 @@ class _AdminScreenState extends State<AdminScreen> {
               listenable: widget.session,
               builder: (context, _) {
                 final accounts = widget.session.adminAccounts;
+                final shown = adminListView(
+                  accounts,
+                  query: _query,
+                  order: _order,
+                );
                 return ListView(
                   children: [
                     _buildPolicySection(context),
                     const Divider(height: 32),
                     _buildFederationSection(context),
                     const Divider(height: 32),
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
-                      child: Text(
-                        'Users',
-                        style: TextStyle(fontWeight: FontWeight.bold),
+                    _buildUsersHeader(context, accounts, shown),
+                    // A search that matches nothing needs saying out loud --
+                    // an empty list under a filled-in search box otherwise
+                    // reads as "this server has no accounts".
+                    if (shown.isEmpty && accounts.isNotEmpty)
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        child: Text('No account matches that.'),
                       ),
-                    ),
-                    for (final account in accounts)
+                    for (final account in shown)
                       _buildAccountRow(context, account),
                   ],
                 );
