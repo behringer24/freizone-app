@@ -7,6 +7,21 @@ Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
 to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 `freizone-server/docs/ROADMAP.md`.
 
+## 0.12.7+16 — 2026-08-01
+
+### Fixed
+- **A chat that stopped being readable now repairs itself.** If the encryption
+  between you and one contact ever fell out of step, their messages silently
+  stopped arriving and the only way back was to find "Reset secure session" in
+  their profile — and even then, nothing happened until you sent them
+  something. Freizone now notices on its own and re-establishes the encrypted
+  session in the background. Both sides need this version for it to work, and
+  messages that were already stuck undelivered are lost — but the conversation
+  keeps working from there on. (SRV-03)
+- **"Reset secure session" now works on its own.** Previously it only took
+  effect once you sent the next message, because your contact had no way of
+  hearing about it before that. It now tells them right away.
+
 ## 0.12.6+15 — 2026-08-01
 
 ### Fixed
