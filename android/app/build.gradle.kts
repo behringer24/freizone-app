@@ -91,4 +91,11 @@ dependencies {
     // shortcuts in APP-15 level 2 -- the compat versions handle the API-level
     // differences (long-lived shortcuts, Person, share targets) for us.
     implementation("androidx.core:core-ktx:1.13.1")
+    // FreizonePushService (APP-12) subclasses firebase_messaging's own service,
+    // so FirebaseMessagingService has to be on *this* module's compile
+    // classpath -- via the plugin it is only a transitive runtime dependency,
+    // which is enough to run but not to extend. Version comes from the BOM so
+    // it can never drift from what the plugin actually ships.
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging")
 }

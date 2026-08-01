@@ -917,13 +917,23 @@ class AppSession extends ChangeNotifier {
 
   Future<void> _registerPush() async {
     try {
+      final mechanism = await resolvePushMechanism();
       final result = await registerForPush(
         api,
         state.accountId,
         state.credentials,
+        mechanism: mechanism,
       );
       pushRegistration = result;
       pushHintPending = result != PushRegistration.registered;
+      // Recorded on the profile so the diagnostics screen (APP-12) can still
+      // answer "when did this account last manage to register" after a
+      // restart -- pushRegistration itself is in-memory only.
+      if (result == PushRegistration.registered) {
+        state.pushRegisteredAt = DateTime.now().toUtc();
+        state.pushMechanism = await pushMechanismLabel(mechanism);
+        await LocalStateStore.saveProfile(state);
+      }
       notifyListeners();
     } catch (e) {
       lastError = 'push registration failed: $e';

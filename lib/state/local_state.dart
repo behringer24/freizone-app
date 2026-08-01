@@ -101,6 +101,8 @@ class AppState {
     Set<String>? processedMessageIds,
     Map<String, int>? decryptFailures,
     this.recoveryBackupDone = false,
+    this.pushRegisteredAt,
+    this.pushMechanism,
   }) : oneTimePrekeys = oneTimePrekeys ?? {},
        sessions = sessions ?? {},
        conversations = conversations ?? {},
@@ -160,6 +162,10 @@ class AppState {
       (k, v) => MapEntry(k, v as int),
     ),
     recoveryBackupDone: j['recovery_backup_done'] as bool? ?? false,
+    pushRegisteredAt: j['push_registered_at'] == null
+        ? null
+        : decodeTime(j['push_registered_at'] as String),
+    pushMechanism: j['push_mechanism'] as String?,
   );
 
   String server;
@@ -232,6 +238,23 @@ class AppState {
   /// from the start, since the user already holds the phrase.
   bool recoveryBackupDone;
 
+  /// When this account last successfully told **its own server** where to send
+  /// push wakes, and which mechanism it used ("fcm", or "unifiedpush:<pkg>").
+  ///
+  /// Persisted, not in-memory, for two reasons. First, it is the one part of
+  /// the push picture that genuinely differs per account -- the *mechanism* is
+  /// an app-wide choice (AppSettings.pushPreference) and the FCM token is one
+  /// per install, but each account registers separately against its own
+  /// server, so one can be fine while another's server was unreachable.
+  /// Second, the registration that matters most happens where nothing is
+  /// watching: a token refresh handled by the background engine (APP-12), so a
+  /// value living only in RAM would be gone before anyone could read it.
+  ///
+  /// Null means "never successfully registered" -- which is exactly what the
+  /// diagnostics screen needs to be able to say out loud.
+  DateTime? pushRegisteredAt;
+  String? pushMechanism;
+
   /// Records messageId as handled, evicting the oldest entries past the cap.
   void markMessageProcessed(String messageId) {
     processedMessageIds.add(messageId);
@@ -297,6 +320,9 @@ class AppState {
       'processed_message_ids': processedMessageIds.toList(),
     if (decryptFailures.isNotEmpty) 'decrypt_failures': decryptFailures,
     if (recoveryBackupDone) 'recovery_backup_done': true,
+    if (pushRegisteredAt != null)
+      'push_registered_at': encodeTime(pushRegisteredAt!),
+    if (pushMechanism != null) 'push_mechanism': pushMechanism,
   };
 }
 

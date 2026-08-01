@@ -28,6 +28,8 @@ import 'dart:developer' as developer;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
@@ -128,6 +130,47 @@ Future<void> initPush() async {
   FirebaseMessaging.instance.onTokenRefresh.listen(_onFcmTokenRefresh);
 }
 
+/// Dart entrypoint for the background engine the platform side starts when
+/// FCM hands us a refreshed token while the app is closed (APP-12).
+///
+/// Why this has to exist at all: `firebase_messaging`'s own
+/// `FlutterFirebaseMessagingService.onNewToken` only does
+/// `FlutterFirebaseTokenLiveData.postToken(token)` -- an **in-process
+/// LiveData**. With no live Flutter engine observing it the new token goes
+/// nowhere and is never persisted, and the plugin offers no background hook for
+/// tokens the way it does for messages (`onBackgroundMessage`). So the server
+/// keeps the stale token until the user happens to open the app: the gateway's
+/// send comes back UNREGISTERED, freizone-server drops the push target, and no
+/// wake arrives again -- which the user has no reason to fix, because nothing
+/// is notifying them.
+///
+/// Deliberately does NOT call [initPush]: nothing here shows a notification or
+/// needs UnifiedPush callbacks wired up, and doing so in a throwaway engine
+/// would register handlers that are torn down moments later. It reads the new
+/// token via getToken() rather than taking it as an argument, so it always
+/// registers whatever is current even if several refreshes coalesced.
+@pragma('vm:entry-point')
+Future<void> pushTokenRefreshEntrypoint() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  _log('background token-refresh engine started');
+  try {
+    await Firebase.initializeApp();
+    await reregisterAllProfiles();
+  } catch (e) {
+    _log('background token refresh failed: $e');
+  } finally {
+    // Tells the platform side the engine may be torn down. Without this the
+    // engine would be destroyed while this work was still in flight, or leak.
+    try {
+      await const MethodChannel(
+        'freizone/push_token_refresh',
+      ).invokeMethod('done');
+    } catch (_) {
+      // Nothing useful to do -- the platform side has its own timeout.
+    }
+  }
+}
+
 /// Requests the Android 13+ notification permission. Only ever called
 /// from the foreground app (never a background isolate, which never
 /// builds the UI that calls this) -- call once per app launch, not once
@@ -146,6 +189,57 @@ Future<void> requestNotificationPermission() async {
 /// hints (choose one in Settings vs. install a distributor / switch to FCM).
 enum PushRegistration { registered, needsDistributorChoice, unavailable }
 
+/// Which mechanism the app-wide preference and this device actually resolve
+/// to, independent of any one account (APP-12).
+///
+/// This is deliberately a *device* fact, not a per-account one: the preference
+/// lives in AppSettings, the chosen distributor is persisted by the UnifiedPush
+/// plugin for the whole app, and the FCM token is one per install. Resolving it
+/// once and passing it down is what keeps [registerForPush] from re-asking the
+/// same device-wide question inside a per-account loop -- which it used to do,
+/// harmlessly but confusingly.
+enum PushMechanism {
+  unifiedPush,
+  fcm,
+
+  /// UnifiedPush is wanted but several distributors are installed and none is
+  /// chosen yet -- the user has to pick, so nothing can be registered.
+  needsDistributorChoice,
+
+  /// Nothing is available: no distributor and either no FCM or FCM ruled out.
+  none,
+}
+
+/// Resolves the app-wide mechanism once. Call this before a loop over
+/// accounts, not inside it.
+Future<PushMechanism> resolvePushMechanism() async {
+  final settings = await AppSettings.load();
+  switch (settings.pushPreference) {
+    case PushPreference.forceFcm:
+      return PushMechanism.fcm;
+    case PushPreference.forceUnifiedPush:
+    case PushPreference.automatic:
+      final distributor = await UnifiedPush.getDistributor();
+      if (distributor != null && distributor.isNotEmpty) {
+        return PushMechanism.unifiedPush;
+      }
+      final available = await UnifiedPush.getDistributors();
+      // Exactly one installed and none chosen yet is the common case, and
+      // picking it needs no interaction -- see _registerUnifiedPush.
+      if (available.length == 1) return PushMechanism.unifiedPush;
+      if (available.length > 1) {
+        return settings.pushPreference == PushPreference.forceUnifiedPush
+            ? PushMechanism.needsDistributorChoice
+            // In automatic, an unanswered distributor choice is not a dead end:
+            // FCM still gets a chance below.
+            : PushMechanism.fcm;
+      }
+      return settings.pushPreference == PushPreference.forceUnifiedPush
+          ? PushMechanism.none
+          : PushMechanism.fcm;
+  }
+}
+
 /// Registers one account's device for push, per the current
 /// [PushPreference] (see lib/state/app_settings.dart):
 ///
@@ -161,27 +255,68 @@ enum PushRegistration { registered, needsDistributorChoice, unavailable }
 ///
 /// Safe to call on every app start, on every SSE reconnect, and whenever the
 /// preference or chosen distributor changes (see AppSession.reregisterPush).
+/// [mechanism] lets a caller that already resolved it (a loop over several
+/// accounts, see [resolvePushMechanism]) avoid re-asking the same device-wide
+/// question per account. Omitted, it is resolved here.
 Future<PushRegistration> registerForPush(
   ApiClient api,
   String instance,
-  DeviceCredentials creds,
-) async {
-  final settings = await AppSettings.load();
+  DeviceCredentials creds, {
+  PushMechanism? mechanism,
+}) async {
+  final resolved = mechanism ?? await resolvePushMechanism();
 
-  switch (settings.pushPreference) {
-    case PushPreference.forceUnifiedPush:
-      return _registerUnifiedPush(api, instance);
-    case PushPreference.forceFcm:
+  switch (resolved) {
+    case PushMechanism.needsDistributorChoice:
+      return PushRegistration.needsDistributorChoice;
+    case PushMechanism.none:
+      return PushRegistration.unavailable;
+    case PushMechanism.fcm:
       return (await _registerFcm(api, creds))
           ? PushRegistration.registered
           : PushRegistration.unavailable;
-    case PushPreference.automatic:
+    case PushMechanism.unifiedPush:
       final viaUnifiedPush = await _registerUnifiedPush(api, instance);
       if (viaUnifiedPush == PushRegistration.registered) return viaUnifiedPush;
-      // Prefer UnifiedPush but don't get stuck on it: fall back to FCM, and
-      // only surface UnifiedPush's own reason (choose/none) if FCM fails too.
-      if (await _registerFcm(api, creds)) return PushRegistration.registered;
+      // Prefer UnifiedPush but don't get stuck on it: with the preference on
+      // automatic, fall back to FCM and only surface UnifiedPush's own reason
+      // if FCM fails too. Forced UnifiedPush never reaches this, since
+      // resolvePushMechanism would not have returned unifiedPush.
+      final settings = await AppSettings.load();
+      if (settings.pushPreference != PushPreference.forceUnifiedPush &&
+          await _registerFcm(api, creds)) {
+        return PushRegistration.registered;
+      }
       return viaUnifiedPush;
+  }
+}
+
+/// A friendly name for the common UnifiedPush distributors, falling back to the
+/// package id for anything else (resolving the real app label would need a
+/// PackageManager round-trip we don't otherwise take).
+///
+/// Shared rather than private to the settings tile, so the distributor is named
+/// identically wherever it appears (Settings, the push status screen).
+String describeDistributor(String pkg) => switch (pkg) {
+  'io.heckel.ntfy' => 'ntfy',
+  'org.unifiedpush.distributor.nextpush' => 'NextPush',
+  'org.unifiedpush.distributor.fcm' => 'Embedded (FCM-backed)',
+  _ => pkg,
+};
+
+/// The label stored in [AppState.pushMechanism] -- what the diagnostics screen
+/// shows, so it has to name the distributor too, not just the family.
+Future<String> pushMechanismLabel(PushMechanism mechanism) async {
+  switch (mechanism) {
+    case PushMechanism.fcm:
+      return 'fcm';
+    case PushMechanism.unifiedPush:
+      final distributor = await UnifiedPush.getDistributor();
+      return 'unifiedpush:${distributor ?? ''}';
+    case PushMechanism.needsDistributorChoice:
+      return 'none:needs-distributor-choice';
+    case PushMechanism.none:
+      return 'none';
   }
 }
 
@@ -417,14 +552,16 @@ Future<String?> _syncProfile(AppState state) async {
 /// now" the same way registerForPush decides it in the first place,
 /// rather than tracking that separately.
 Future<void> _onFcmTokenRefresh(String newToken) async {
-  final settings = await AppSettings.load();
-  if (settings.pushPreference == PushPreference.forceUnifiedPush) return;
+  // Resolved once, outside the loop: which mechanism applies is a device-wide
+  // fact (see resolvePushMechanism), so asking per account only obscured that.
+  final mechanism = await resolvePushMechanism();
+  if (mechanism != PushMechanism.fcm) {
+    _log('fcm token refreshed but mechanism is $mechanism -- nothing to do');
+    return;
+  }
+  final label = await pushMechanismLabel(mechanism);
 
   for (final state in await LocalStateStore.listProfiles()) {
-    if (settings.pushPreference == PushPreference.automatic &&
-        await UnifiedPush.tryUseCurrentOrDefaultDistributor()) {
-      continue; // this account would register UnifiedPush, not FCM
-    }
     final api = ApiClient(baseUrl: state.server, core: FreizoneCore());
     try {
       await api.setPushTarget(
@@ -432,8 +569,55 @@ Future<void> _onFcmTokenRefresh(String newToken) async {
         platform: 'fcm',
         token: newToken,
       );
+      // Recorded per account under the profile lock, since this can run in the
+      // background engine concurrently with a foreground save (APP-12/SRV-03).
+      await LocalStateStore.withProfileLock(state.accountId, () async {
+        final fresh = await LocalStateStore.loadProfile(state.accountId);
+        if (fresh == null) return;
+        fresh.pushRegisteredAt = DateTime.now().toUtc();
+        fresh.pushMechanism = label;
+        await LocalStateStore.saveProfile(fresh);
+      });
+      _log('fcm token refreshed for ${state.accountId}');
     } catch (e) {
       _log('updating fcm push target failed: $e');
+    } finally {
+      api.close();
+    }
+  }
+}
+
+/// Re-registers **every** locally stored account for push, resolving the
+/// mechanism once. This is what the background engine runs after an FCM token
+/// refresh arrives with the app closed (APP-12) -- see
+/// [pushTokenRefreshEntrypoint].
+Future<void> reregisterAllProfiles() async {
+  final mechanism = await resolvePushMechanism();
+  final label = await pushMechanismLabel(mechanism);
+  _log('re-registering all profiles, mechanism=$mechanism');
+
+  for (final state in await LocalStateStore.listProfiles()) {
+    final api = ApiClient(baseUrl: state.server, core: FreizoneCore());
+    try {
+      final result = await registerForPush(
+        api,
+        state.accountId,
+        state.credentials,
+        mechanism: mechanism,
+      );
+      if (result != PushRegistration.registered) {
+        _log('re-register ${state.accountId}: $result');
+        continue;
+      }
+      await LocalStateStore.withProfileLock(state.accountId, () async {
+        final fresh = await LocalStateStore.loadProfile(state.accountId);
+        if (fresh == null) return;
+        fresh.pushRegisteredAt = DateTime.now().toUtc();
+        fresh.pushMechanism = label;
+        await LocalStateStore.saveProfile(fresh);
+      });
+    } catch (e) {
+      _log('re-register ${state.accountId} failed: $e');
     } finally {
       api.close();
     }
