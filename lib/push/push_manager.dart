@@ -34,7 +34,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
 import '../ffi/freizone_core.dart';
+import '../ffi/freizone_core_exception.dart';
 import '../net/api_client.dart';
+import '../net/dto.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/local_state.dart';
@@ -479,6 +481,28 @@ Future<void> _syncAndMaybeNotify(String? instance) async {
 /// A message that arrives while the app is fully closed only starts
 /// showing delivery/read checkmarks to its sender once the app is next
 /// opened (AppSession._handleIncoming/enterConversation send both).
+/// Counts one failed attempt at [msg] and reports whether it should now be
+/// dropped from the server queue -- the wake-side twin of
+/// AppSession._giveUpOnEnvelope, minus the recovery it can't perform.
+///
+/// A wake can *detect* a desynced session but not repair one: re-keying means
+/// sending, and none of AppSession's send machinery exists without a live
+/// session (see this function's caller). So the evidence is recorded into the
+/// profile and left there; the next AppSession to come up acts on it
+/// (AppSession._recoverDesyncedSessions, on stream connect). This is exactly why
+/// PeerSessionHealth is persisted rather than held in memory.
+bool _giveUpOnEnvelope(
+  AppState state,
+  MessageResponse msg, {
+  required bool isDesyncEvidence,
+}) {
+  if (!state.recordDecryptFailure(msg.messageId)) return false;
+  if (isDesyncEvidence) {
+    state.recordDesyncEvidence(msg.senderAccountId, DateTime.now().toUtc());
+  }
+  return true;
+}
+
 Future<String?> _syncProfile(AppState state) async {
   final core = FreizoneCore();
   final api = ApiClient(baseUrl: state.server, core: core);
@@ -501,7 +525,7 @@ Future<String?> _syncProfile(AppState state) async {
           // never become decryptable and would otherwise be re-fetched on
           // every wake for as long as the server keeps it.
           changed = true;
-          if (state.recordDecryptFailure(msg.messageId)) {
+          if (_giveUpOnEnvelope(state, msg, isDesyncEvidence: true)) {
             _log('wake sync ${state.accountId}: giving up on a message');
             deletions.add(api.deleteMessage(msg.messageId, state.credentials));
           } else {
@@ -515,7 +539,11 @@ Future<String?> _syncProfile(AppState state) async {
       } catch (e) {
         _log('background message decrypt failed: $e');
         changed = true;
-        if (state.recordDecryptFailure(msg.messageId)) {
+        if (_giveUpOnEnvelope(
+          state,
+          msg,
+          isDesyncEvidence: e is FreizoneCoreException && e.suggestsDesync,
+        )) {
           _log('wake sync ${state.accountId}: giving up after repeated failures');
           deletions.add(api.deleteMessage(msg.messageId, state.credentials));
         }

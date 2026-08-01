@@ -17,6 +17,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../ffi/freizone_core.dart';
+import '../ffi/freizone_core_exception.dart';
 import '../ffi/models.dart';
 import '../net/api_client.dart';
 import '../net/dto.dart';
@@ -33,10 +34,24 @@ import 'message_content.dart';
 import 'outgoing_attachment.dart';
 import 'local_state.dart';
 import 'receipt_signal.dart';
+import 'rekey_signal.dart';
+import 'session_recovery.dart';
 
 /// How many one-time prekeys to generate and upload at once, mirroring
 /// cmd/devclient's defaultOneTimePrekeyBatch.
 const _oneTimePrekeyBatch = 10;
+
+/// The transcript marker for a secure session the user reset themselves --
+/// shown on both sides (the resetting device writes it in
+/// [AppSession.resetSecureSession], the peer when it accepts the re-key in
+/// [processIncomingMessage]).
+const String sessionResetMarker = 'Secure session was reset';
+
+/// The same, for a session the app re-established on its own after repeated
+/// undecryptable messages (SRV-03). Worded differently on purpose: the user
+/// didn't do this, and shouldn't be left wondering what they pressed.
+const String automaticRekeyMarker =
+    'Secure session was re-established automatically';
 
 /// How low this device lets its own one-time-prekey pool get before
 /// [topUpOneTimePrekeysIfNeeded] tops it back up -- comfortably above the
@@ -174,11 +189,30 @@ Future<IncomingMessageResult?> processIncomingMessage(
 
   // Ongoing message, or the re-key attempt didn't apply: decrypt with the
   // existing session.
-  dec ??= core.sessionDecrypt(
-    session: session!,
-    header: parsed.header,
-    ciphertext: parsed.ciphertext,
-  ); // may throw -> propagates
+  if (dec == null) {
+    try {
+      dec = core.sessionDecrypt(
+        session: session!,
+        header: parsed.header,
+        ciphertext: parsed.ciphertext,
+      );
+    } on FreizoneCoreException catch (e) {
+      // The ratchet has already moved past this exact envelope: it was
+      // decrypted before and the acknowledgement was lost (delivery is
+      // at-least-once). Distinct from every other decrypt failure -- nothing is
+      // wrong, so it must neither be retried nor counted as evidence of a
+      // desync. Only reachable when processedMessageIds has already evicted the
+      // id, since that check above catches the common case first.
+      if (e.code == CoreErrorCode.duplicateMessage) {
+        state.markMessageProcessed(msg.messageId);
+        return IncomingMessageResult(
+          peerAccountId: msg.senderAccountId,
+          shouldNotify: false,
+        );
+      }
+      rethrow; // classified by the caller -> see recordDesyncEvidence
+    }
+  }
 
   state.sessions[msg.senderAccountId] = dec.session;
   // Recorded here, the moment the ratchet has actually advanced -- before any
@@ -186,10 +220,56 @@ Future<IncomingMessageResult?> processIncomingMessage(
   // never for a failed decrypt, which leaves the session untouched and must
   // stay retryable.
   state.markMessageProcessed(msg.messageId);
+  // A decrypt that worked is the only proof this session is healthy, so any
+  // desync evidence collected about this peer is now void -- including evidence
+  // that had already crossed the threshold, which is what stops an automatic
+  // re-key from firing after the conversation has recovered on its own (or
+  // because we just adopted the peer's re-key).
+  state.clearDesyncEvidence(msg.senderAccountId);
   // A one-time prekey is consumed only now that a responder session built
   // from the initial has successfully decrypted -- never on a failed attempt.
   if (usedResponder && consumeOtpkId != null) {
     state.oneTimePrekeys.remove(consumeOtpkId);
+  }
+
+  final now = DateTime.now().toUtc();
+  // Blocked/known status is looked up from AppState.blockedPeers/knownPeerIds
+  // -- deliberately independent of whether a Conversation for this peer
+  // currently exists, so a deleted-then-recreated Conversation (see
+  // deleteConversation) picks the right state back up rather than treating a
+  // blocked or already-known peer as a brand new "message request."
+  final blocked = state.blockedPeers.containsKey(msg.senderAccountId);
+
+  // The peer re-keyed and we accepted it above: mark it in the transcript
+  // before whatever this envelope turns out to carry, so the recovery is
+  // visible on this side too (the resetting side shows its own marker). Done
+  // here rather than alongside the stored message below because a re-key can
+  // arrive on an *invisible* envelope -- the automatic path sends a bare
+  // RekeySignal, so this marker is the only thing that would ever show up for
+  // it. Deliberately does not touch lastActivityAt: recovering a session is
+  // maintenance, not activity, and must not jump the chat to the top of the
+  // list. No conversation (deleted locally while the session lived on) means
+  // there is nothing to mark; the message below recreates it.
+  final rekeySignal = RekeySignal.tryDecode(dec.plaintext);
+  if (didRekey && !blocked) {
+    state.conversations[msg.senderAccountId]?.messages.add(
+      StoredMessage.system(
+        rekeySignal?.reason == RekeyReason.decryptFailures
+            ? automaticRekeyMarker
+            : sessionResetMarker,
+        now,
+      ),
+    );
+  }
+  if (rekeySignal != null) {
+    // Nothing else to do: its whole purpose was the fresh `prekey` block on the
+    // envelope around it (see rekey_signal.dart), which the code above has
+    // already acted on. Never stored, never notified -- but the caller still
+    // acks it out of the server queue like any other processed envelope.
+    return IncomingMessageResult(
+      peerAccountId: msg.senderAccountId,
+      shouldNotify: false,
+    );
   }
 
   final receipt = ReceiptSignal.tryDecode(dec.plaintext);
@@ -226,15 +306,7 @@ Future<IncomingMessageResult?> processIncomingMessage(
     dec.plaintext,
     fallbackId: generateMessageId(),
   );
-  final now = DateTime.now().toUtc();
 
-  // Blocked/known status is looked up from AppState.blockedPeers/
-  // knownPeerIds -- deliberately independent of whether a Conversation
-  // for this peer currently exists, so a deleted-then-recreated
-  // Conversation (see deleteConversation) picks the right state back up
-  // rather than treating a blocked or already-known peer as a brand new
-  // "message request."
-  final blocked = state.blockedPeers.containsKey(msg.senderAccountId);
   final isFirstContact = !state.knownPeerIds.contains(msg.senderAccountId);
   // Captured before putIfAbsent creates the entry -- distinguishes the
   // message that actually starts a new "message request" from a
@@ -264,15 +336,6 @@ Future<IncomingMessageResult?> processIncomingMessage(
   // the caller) but dropped here rather than stored or notified -- see
   // setBlocked.
   if (!convo.blocked) {
-    // The peer reset their secure session and we accepted the re-key above:
-    // mark it in the transcript, just before the first recovered message, so
-    // the recovery is visible on this side too (the resetting side shows its
-    // own marker via resetSecureSession).
-    if (didRekey) {
-      convo.messages.add(
-        StoredMessage.system('Secure session was reset', now),
-      );
-    }
     convo.messages.add(
       StoredMessage(
         id: content.id,
@@ -1079,6 +1142,15 @@ class AppSession extends ChangeNotifier {
           // (re)connect -- covers long-lived sessions and network changes.
           unawaited(refreshRegistrationPolicy());
           _retryPendingReceipts();
+          // Heal any conversation whose desync was noticed while this session
+          // couldn't act on it -- a background push wake detects but cannot
+          // send (see push_manager.dart's _syncProfile), and the higher-id side
+          // of a desync deliberately waits before re-keying
+          // (autoRekeyResponderGrace), which needs *something* to come back and
+          // re-check. Mirrors _retryPendingReceipts' own "every (re)connect"
+          // trigger, for the same reason: it is the one moment this app
+          // reliably revisits every conversation.
+          unawaited(_recoverDesyncedSessions());
         },
       ),
     );
@@ -1111,7 +1183,16 @@ class AppSession extends ChangeNotifier {
           openConversationPeerId: _readableConversation,
         ),
       );
-      if (result == null) return;
+      // Nothing to decrypt with: no session for this sender and no X3DH initial
+      // to start one (see processIncomingMessage). This is the one desync shape
+      // that produces no crypto error at all -- our own session is simply gone,
+      // while the peer keeps sending into the one they still hold -- so it has
+      // to be counted here or automatic recovery would never see the case it
+      // exists for.
+      if (result == null) {
+        await _giveUpOnEnvelope(msg, isDesyncEvidence: true);
+        return;
+      }
 
       if (result.shouldNotify) {
         // Without this call, the launcher icon's badge (which Android
@@ -1170,21 +1251,53 @@ class AppSession extends ChangeNotifier {
       lastError = null;
       notifyListeners();
     } catch (e) {
-      // A decrypt failure is deterministic (same session + ciphertext fails
-      // identically), so a poison envelope -- e.g. an old-chain message left
-      // over after a secure-session reset -- would re-fetch and re-fail on
-      // every reconnect forever. After a few attempts drop it from the server
-      // queue so it stops clogging. The count lives in the profile, shared
-      // with the background push isolate (see AppState.recordDecryptFailure):
-      // both consumers see the same envelope, so counting per-isolate let it
-      // survive far longer than the limit suggests.
-      if (state.recordDecryptFailure(msg.messageId)) {
-        unawaited(api.deleteMessage(msg.messageId, state.credentials));
-      }
-      await LocalStateStore.saveProfile(state);
+      await _giveUpOnEnvelope(
+        msg,
+        // Only a failure whose code means diverged keys counts towards
+        // recovering the session. A redelivery is already handled inside
+        // processIncomingMessage; an undiagnosed error (bad JSON, a storage
+        // failure -- this catch covers the whole of the processing above, not
+        // just the decrypt) says nothing about the ratchet, and discarding a
+        // working session over one would lose messages for no reason.
+        isDesyncEvidence: e is FreizoneCoreException && e.suggestsDesync,
+      );
       lastError = 'decrypt error: $e';
       notifyListeners();
     }
+  }
+
+  /// Counts one failed attempt at [msg] and, once it has failed enough times,
+  /// drops it from the server queue.
+  ///
+  /// A decrypt failure is deterministic (the same session and ciphertext fail
+  /// identically), so a poison envelope -- e.g. an old-chain message left over
+  /// after a secure-session reset -- would re-fetch and re-fail on every
+  /// reconnect forever. The count lives in the profile, shared with the
+  /// background push isolate (see AppState.recordDecryptFailure): both consumers
+  /// see the same envelope, so counting per-isolate let it survive far longer
+  /// than the limit suggests.
+  ///
+  /// [isDesyncEvidence] marks a failure that means this peer's session has
+  /// diverged rather than that this one envelope is bad; the evidence is only
+  /// recorded when the envelope is finally given up on, so one envelope counts
+  /// once however many times it was retried.
+  Future<void> _giveUpOnEnvelope(
+    MessageResponse msg, {
+    required bool isDesyncEvidence,
+  }) async {
+    if (state.recordDecryptFailure(msg.messageId)) {
+      if (isDesyncEvidence) {
+        state.recordDesyncEvidence(
+          msg.senderAccountId,
+          DateTime.now().toUtc(),
+        );
+      }
+      unawaited(api.deleteMessage(msg.messageId, state.credentials));
+    }
+    await LocalStateStore.saveProfile(state);
+    // Fire-and-forget: recovery sends a message and resolves a device, which
+    // must not hold up draining the rest of the queue.
+    unawaited(_recoverDesyncedSessions());
   }
 
   /// Resolves peerIdOrPrefix's true account id and verified active device
@@ -1664,29 +1777,119 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Discards the ratchet session with [peerAccountId] so the NEXT outgoing
-  /// message re-runs X3DH as initiator (see [_getOrCreateCryptoSession]) and
-  /// carries a fresh `initial` -- which the peer's receive path now accepts to
-  /// replace their stale session (see processIncomingMessage). Recovers a
-  /// conversation whose Double Ratchet has desynced (messages silently fail to
-  /// decrypt). Purely local: the conversation, its history and the
-  /// known/blocked status are all kept, and the peer is not told; a local
-  /// system marker is added to the transcript for transparency. Recovery
-  /// completes when the next real message is sent (nothing is auto-sent).
+  /// Discards the ratchet session with [peerAccountId] so a fresh X3DH runs as
+  /// initiator (see [_getOrCreateCryptoSession]), carrying an `initial` the
+  /// peer's receive path accepts in place of their stale session (see
+  /// processIncomingMessage). Recovers a conversation whose Double Ratchet has
+  /// desynced (messages silently fail to decrypt). The conversation, its
+  /// history and the known/blocked status are all kept, and a system marker
+  /// goes into the transcript for transparency.
+  ///
+  /// Then sends an invisible re-key signal straight away, rather than leaving
+  /// the fresh `initial` to ride on whatever the user types next: what a desync
+  /// breaks is *receiving*, so the peer is still sending into a session this
+  /// side can no longer read, and until they hear otherwise nothing they do will
+  /// change that. Best-effort -- a failed send leaves the session discarded, so
+  /// the next real message recovers it the old way.
   Future<void> resetSecureSession(String peerAccountId) async {
+    final convo = state.conversations[peerAccountId];
+    await _discardSessionAndMark(
+      peerAccountId,
+      marker: sessionResetMarker,
+      bumpActivity: true,
+    );
+    if (convo != null) {
+      await _sendRekeySignal(convo, RekeyReason.userRequested);
+    }
+  }
+
+  /// Discards the local ratchet session with [peerAccountId] and records it in
+  /// the transcript. Shared by the manual reset and the automatic recovery,
+  /// which differ only in wording and in whether this counts as activity: a
+  /// reset the user asked for belongs at the top of the chat list where they
+  /// left off, while an automatic one is maintenance and must not reorder
+  /// anything behind their back.
+  Future<void> _discardSessionAndMark(
+    String peerAccountId, {
+    required String marker,
+    required bool bumpActivity,
+  }) async {
     await _withPeerSessionLock(peerAccountId, () async {
       state.sessions.remove(peerAccountId);
     });
     final convo = state.conversations[peerAccountId];
     if (convo != null) {
       final now = DateTime.now().toUtc();
-      convo.messages.add(
-        StoredMessage.system('Secure session was reset', now),
-      );
-      convo.lastActivityAt = now;
+      convo.messages.add(StoredMessage.system(marker, now));
+      if (bumpActivity) convo.lastActivityAt = now;
     }
     await LocalStateStore.saveProfile(state);
     notifyListeners();
+  }
+
+  /// Sends the invisible re-key control envelope (see rekey_signal.dart). Its
+  /// content is irrelevant -- what matters is that sending anything at all now
+  /// that the local session is gone re-runs X3DH and puts a fresh `prekey`
+  /// block on the wire for the peer to adopt.
+  ///
+  /// Best-effort and never rethrows: this is a repair attempt, and the caller
+  /// has already discarded the session, so a failure here costs a delay (until
+  /// the next message or the next reconnect sweep), not correctness.
+  Future<void> _sendRekeySignal(Conversation convo, RekeyReason reason) async {
+    try {
+      await _ensurePeerDeviceResolved(convo);
+      await _encryptAndSend(convo, RekeySignal(reason: reason).encode());
+      await LocalStateStore.saveProfile(state);
+    } catch (e) {
+      developer.log(
+        'sending re-key signal to ${convo.peerAccountId} failed: $e',
+        name: 'session-recovery',
+      );
+    }
+  }
+
+  /// Re-establishes every session this device has collected enough evidence
+  /// against (SRV-03's automatic path). Called after an envelope is given up on
+  /// and on every stream (re)connect; [shouldAutoRekey] owns the thresholds,
+  /// the ordering rule that keeps both sides from re-keying at once, and the
+  /// spacing between attempts.
+  ///
+  /// Eligibility beyond the crypto state is decided here: a blocked peer gets
+  /// nothing sent to them, and neither does an unaccepted message request --
+  /// answering one, even invisibly, would tell a stranger the user is there
+  /// before they have decided to reply. Both recover if and when the user
+  /// engages with them.
+  Future<void> _recoverDesyncedSessions() async {
+    final now = DateTime.now().toUtc();
+    // Snapshotted: the loop awaits, and recovery mutates peerSessionHealth.
+    for (final peerAccountId in state.peerSessionHealth.keys.toList()) {
+      final convo = state.conversations[peerAccountId];
+      if (convo == null || convo.blocked || convo.pendingApproval) continue;
+      if (federationLocked(convo)) continue;
+      if (!shouldAutoRekey(
+        health: state.peerSessionHealth[peerAccountId],
+        myAccountId: state.accountId,
+        peerAccountId: peerAccountId,
+        now: now,
+      )) {
+        continue;
+      }
+
+      // Stamped before the attempt, not after: if the send fails, the spacing
+      // must still hold, or every reconnect would retry immediately and burn a
+      // one-time prekey each time.
+      state.recordAutoRekey(peerAccountId, now);
+      developer.log(
+        're-establishing the secure session with $peerAccountId',
+        name: 'session-recovery',
+      );
+      await _discardSessionAndMark(
+        peerAccountId,
+        marker: automaticRekeyMarker,
+        bumpActivity: false,
+      );
+      await _sendRekeySignal(convo, RekeyReason.decryptFailures);
+    }
   }
 
   /// Returns the existing session with a conversation's peer, or

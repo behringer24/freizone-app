@@ -177,6 +177,14 @@ class FreizoneCore {
     return EncryptResult.fromJson(data);
   }
 
+  /// Decrypts one envelope, returning the advanced session to persist.
+  ///
+  /// Pure with respect to [session]: a failure leaves the passed-in session
+  /// untouched (the core clones and commits only on success), which is what
+  /// lets a caller try a speculative re-key and fall back. Throws
+  /// [FreizoneCoreException] on failure, carrying a [CoreErrorCode] whenever
+  /// the core could classify it -- check
+  /// [FreizoneCoreException.suggestsDesync] rather than the message text.
   DecryptResult sessionDecrypt({
     required RatchetSessionJson session,
     required RatchetHeader header,
@@ -317,6 +325,7 @@ class FreizoneCore {
       if (env['ok'] != true) {
         throw FreizoneCoreException(
           env['error'] as String? ?? 'unknown native core error',
+          code: env['code'] as String?,
         );
       }
       return (env['data'] as Map<String, dynamic>?) ?? const {};

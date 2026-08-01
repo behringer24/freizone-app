@@ -30,11 +30,46 @@ import (
 )
 
 // resultEnvelope is the shared JSON shape every exported function returns:
-// either {"ok":true,"data":...} or {"ok":false,"error":"..."}.
+// either {"ok":true,"data":...} or {"ok":false,"error":"...","code":"..."}.
 type resultEnvelope struct {
 	OK    bool            `json:"ok"`
 	Data  json.RawMessage `json:"data,omitempty"`
 	Error string          `json:"error,omitempty"`
+
+	// Code is a stable machine-readable classification of Error, present only
+	// for failures a caller is expected to *act* on differently rather than
+	// just report -- today the ratchet.Failure* decrypt codes, which are how
+	// the Dart side tells a harmless redelivery apart from the desync that
+	// should trigger session recovery. Absent means "no specific diagnosis",
+	// which must never be read as harmless. An error value cannot cross cgo,
+	// so this string is the only channel for the distinction.
+	Code string `json:"code,omitempty"`
+}
+
+// codedError attaches a resultEnvelope.Code to an error. Produced by the
+// handlers that have something meaningful to classify (doSessionDecrypt) and
+// unwrapped by toCResult (core.go); everything else keeps returning plain
+// errors and simply carries no code.
+type codedError struct {
+	code string
+	err  error
+}
+
+func (e codedError) Error() string { return e.err.Error() }
+func (e codedError) Unwrap() error { return e.err }
+func (e codedError) Code() string  { return e.code }
+
+// errorCode extracts the resultEnvelope.Code for err, or "" if it carries
+// none. Matched by interface rather than concrete type so a future error type
+// can opt in the same way, and via errors.As so a code survives being wrapped
+// by a caller adding context. Lives here rather than in core.go's toCResult so
+// it stays testable without the cgo toolchain.
+func errorCode(err error) string {
+	var coded interface{ Code() string }
+	if errors.As(err, &coded) {
+		return coded.Code()
+	}
+	return ""
 }
 
 // verifyResult is the shared shape for "did this signature/certificate
@@ -335,12 +370,21 @@ type sessionDecryptResponse struct {
 // doSessionDecrypt authenticates and decrypts ciphertext, performing a DH
 // ratchet step first if needed. Returns the (mutated) session for the
 // caller to persist.
+//
+// A failure is returned with its ratchet.FailureCode attached (see
+// codedError): the Dart receive path has to distinguish a redelivery it should
+// silently drop from the authentication failure that means this conversation's
+// ratchet has desynced and needs re-establishing, and error text is not a
+// contract it can match on.
 func doSessionDecrypt(req sessionDecryptRequest) (any, error) {
 	if req.Session == nil {
 		return nil, errors.New("session is required")
 	}
 	plaintext, err := req.Session.Decrypt(req.Header, req.Ciphertext)
 	if err != nil {
+		if code := ratchet.FailureCode(err); code != "" {
+			return nil, codedError{code: code, err: err}
+		}
 		return nil, err
 	}
 	return sessionDecryptResponse{Session: req.Session, Plaintext: plaintext}, nil

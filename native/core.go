@@ -27,7 +27,7 @@ import (
 func toCResult(data any, err error) *C.char {
 	var env resultEnvelope
 	if err != nil {
-		env = resultEnvelope{OK: false, Error: err.Error()}
+		env = resultEnvelope{OK: false, Error: err.Error(), Code: errorCode(err)}
 	} else {
 		raw, mErr := json.Marshal(data)
 		if mErr != nil {
