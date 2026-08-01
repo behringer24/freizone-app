@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import '../ffi/models.dart';
 import '../net/api_client.dart';
 import 'conversation.dart';
+import 'session_recovery.dart';
 
 /// One uploaded one-time prekey's key pair, kept locally until it's
 /// consumed by a peer (the server never says which one gets claimed).
@@ -100,6 +101,7 @@ class AppState {
     Map<String, BlockedPeer>? blockedPeers,
     Set<String>? processedMessageIds,
     Map<String, int>? decryptFailures,
+    Map<String, PeerSessionHealth>? peerSessionHealth,
     this.recoveryBackupDone = false,
     this.pushRegisteredAt,
     this.pushMechanism,
@@ -109,7 +111,8 @@ class AppState {
        knownPeerIds = knownPeerIds ?? {},
        blockedPeers = blockedPeers ?? {},
        processedMessageIds = processedMessageIds ?? {},
-       decryptFailures = decryptFailures ?? {};
+       decryptFailures = decryptFailures ?? {},
+       peerSessionHealth = peerSessionHealth ?? {};
 
   factory AppState.fromJson(Map<String, dynamic> j) => AppState(
     server: j['server'] as String,
@@ -160,6 +163,9 @@ class AppState {
         .toSet(),
     decryptFailures: (j['decrypt_failures'] as Map<String, dynamic>?)?.map(
       (k, v) => MapEntry(k, v as int),
+    ),
+    peerSessionHealth: (j['peer_session_health'] as Map<String, dynamic>?)?.map(
+      (k, v) => MapEntry(k, PeerSessionHealth.fromJson(v as Map<String, dynamic>)),
     ),
     recoveryBackupDone: j['recovery_backup_done'] as bool? ?? false,
     pushRegisteredAt: j['push_registered_at'] == null
@@ -232,6 +238,14 @@ class AppState {
   /// queue forever. See [recordDecryptFailure].
   Map<String, int> decryptFailures;
 
+  /// Per-peer evidence that a session has desynced, keyed by peer account id
+  /// and present only for peers something has actually gone wrong with (see
+  /// [PeerSessionHealth]). Drives the automatic recovery in
+  /// AppSession._recoverDesyncedSessions; written by whichever isolate notices
+  /// (including a background push wake, which cannot send and so cannot act on
+  /// it itself), read by the one that can act.
+  Map<String, PeerSessionHealth> peerSessionHealth;
+
   /// True once the user has backed up (or explicitly dismissed the prompt to
   /// back up) this account's recovery phrase (APP-01). Drives the one-time
   /// post-setup backup nudge on the chat list; set for a *recovered* account
@@ -286,6 +300,49 @@ class AppState {
     return false;
   }
 
+  /// Records that one envelope from peerAccountId has been given up on for a
+  /// reason that implies diverged ratchet keys -- i.e. one unit of the evidence
+  /// [shouldAutoRekey] weighs. Call only once per envelope, when
+  /// [recordDecryptFailure] has just reported it exhausted AND the failure code
+  /// meant desync (CoreErrorCode.suggestsDesync): counting every attempt would
+  /// reach any threshold three times over, and counting a redelivery or an
+  /// undiagnosed error would recover sessions that were never broken.
+  ///
+  /// Ignored for a peer there is no [conversations] entry for, which bounds this
+  /// map to conversations that exist: recovery has nowhere to send to without
+  /// one anyway, and without the guard a stranger sending undecryptable
+  /// envelopes could grow the profile with an entry per account id they invent.
+  void recordDesyncEvidence(String peerAccountId, DateTime at) {
+    if (!conversations.containsKey(peerAccountId)) return;
+    final health = peerSessionHealth.putIfAbsent(
+      peerAccountId,
+      PeerSessionHealth.new,
+    );
+    health.desyncEvidence++;
+    health.firstFailureAt ??= at;
+  }
+
+  /// Forgets everything recorded about peerAccountId's session going wrong --
+  /// called whenever a message from them decrypts, which is the only proof that
+  /// the session works. Also clears the re-key spacing, deliberately: a healthy
+  /// session needs no protection against re-keying too often.
+  void clearDesyncEvidence(String peerAccountId) {
+    peerSessionHealth.remove(peerAccountId);
+  }
+
+  /// Records that an automatic re-key with peerAccountId has just been sent:
+  /// the evidence that triggered it is spent, but the timestamp outlives it to
+  /// space out any further attempt ([minAutoRekeyInterval]).
+  void recordAutoRekey(String peerAccountId, DateTime at) {
+    final health = peerSessionHealth.putIfAbsent(
+      peerAccountId,
+      PeerSessionHealth.new,
+    );
+    health.desyncEvidence = 0;
+    health.firstFailureAt = null;
+    health.lastRekeyAt = at;
+  }
+
   DeviceCredentials get credentials =>
       DeviceCredentials(deviceId: deviceId, devicePriv: devicePriv);
 
@@ -319,6 +376,10 @@ class AppState {
     if (processedMessageIds.isNotEmpty)
       'processed_message_ids': processedMessageIds.toList(),
     if (decryptFailures.isNotEmpty) 'decrypt_failures': decryptFailures,
+    if (peerSessionHealth.isNotEmpty)
+      'peer_session_health': peerSessionHealth.map(
+        (k, v) => MapEntry(k, v.toJson()),
+      ),
     if (recoveryBackupDone) 'recovery_backup_done': true,
     if (pushRegisteredAt != null)
       'push_registered_at': encodeTime(pushRegisteredAt!),
