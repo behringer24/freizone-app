@@ -7,6 +7,22 @@ Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
 to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 `freizone-server/docs/ROADMAP.md`.
 
+## 0.12.6+15 — 2026-08-01
+
+### Fixed
+- **Notifications no longer stop arriving after a long time away.** When the
+  push service handed out a new address for this device while Freizone was
+  closed, the change was lost — the server kept sending to the old one, gave
+  up on it, and no notifications arrived again until you happened to open the
+  app by hand. Freizone now picks the new address up and tells your server
+  about it even while closed. (APP-12)
+
+### Added
+- A push status line in Settings → Push delivery: which service is actually
+  in use (useful when the choice is left on automatic) and how many of your
+  accounts are registered for notifications, with a tap through to the details
+  per account and a "Re-register now" button.
+
 ## 0.12.5+14 — 2026-08-02
 
 ### Fixed
