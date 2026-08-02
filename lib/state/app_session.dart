@@ -1902,9 +1902,46 @@ class AppSession extends ChangeNotifier {
     final existing = state.sessions[convo.peerAccountId];
     if (existing != null) return (existing, null);
 
-    final bundle = await _clientFor(
-      convo.peerServer,
-    ).claimPrekeyBundle(convo.peerDeviceId!);
+    // Signed either way (SRV-04) -- an unauthenticated claim still returns a
+    // usable bundle but without a one-time prekey, quietly costing this session
+    // forward secrecy on its first message. Which form applies is decided the
+    // same way the send path decides it (see _encryptAndSend): a peer on our own
+    // server authenticates by device id, one on another server by presenting
+    // its whole certificate chain, since that server has never seen us.
+    final PrekeyBundleResponse bundle;
+    if (convo.peerServer == null) {
+      bundle = await api.claimPrekeyBundle(
+        convo.peerDeviceId!,
+        state.credentials,
+      );
+    } else {
+      bundle = await _clientFor(convo.peerServer).claimFederatedPrekeyBundle(
+        deviceId: convo.peerDeviceId!,
+        devicePriv: state.devicePriv,
+        rootPub: state.rootPub,
+        senderAccountId: state.accountId,
+        cert: core.signDeviceCertificate(
+          accountId: state.accountId,
+          deviceId: state.deviceId,
+          devicePub: state.devicePub,
+          issuedAt: DateTime.now().toUtc(),
+          rootPriv: state.rootPriv,
+        ),
+      );
+    }
+
+    // Never expected: this app signs every claim, so hearing otherwise means
+    // our own credentials were refused (a clock far out of skew, a revoked
+    // device, a stale cert) and this session is silently starting weaker than
+    // it should. Logged rather than thrown -- a working conversation is worth
+    // more than the first message's forward secrecy -- but not swallowed.
+    if (bundle.wasClaimedUnauthenticated) {
+      developer.log(
+        'server refused our prekey-bundle claim credentials for '
+        '${convo.peerAccountId}; session starts without a one-time prekey',
+        name: 'prekeys',
+      );
+    }
 
     final dhCert = DHIdentityCertificate(
       accountId: convo.peerAccountId,
