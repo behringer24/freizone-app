@@ -1,6 +1,6 @@
 # Design: Send feedback and the outgoing message queue
 
-Status: **in progress** · Roadmap: [APP-08](../ROADMAP.md)
+Status: **done** · Roadmap: [APP-08](../ROADMAP.md)
 
 On a slow connection or a slow server the send button felt unresponsive: the
 user tapped, and until the round trip finished *nothing* visibly happened, so
@@ -45,28 +45,61 @@ restoring, so blocking the input would only undo the responsiveness this item
 is about. Overlapping sends are safe — `_encryptAndSend` already serializes
 per peer, so the ratchet is never entered twice at once.
 
-Known limit, by design: a pending or failed message is **session-only** and
-never written to disk (filtered in `Conversation.toJson`, covered by tests in
-`test/conversation_test.dart`). Retrying needs the picture bytes, which
-`AppSession._outgoingAttachments` holds in memory, so a failed bubble restored
-after a restart could never actually be sent — it would be a dead end the user
-cannot clear. Durability is exactly what step 2 is for.
+Known limit of step 1, since removed: a pending or failed message was
+**session-only** and never written to disk, because retrying needs the picture
+bytes `AppSession._outgoingAttachments` holds in memory — a failed bubble
+restored after a restart would have been a dead end the user could not clear.
 
-**Step 2 — a real outbox, worth considering.** A persisted queue would
-additionally survive app kill, allow composing while offline, and retry with
-backoff. The non-obvious constraint is the Double Ratchet: encryption advances
-the session per message, so ciphertext cannot be produced out of order or
-re-produced later at will. Either enqueue **ciphertext** (encrypt at enqueue
-time, retry = re-POST the identical bytes) — which keeps ratchet order intact
-but means a queued item is already committed to one specific session state, so
-a `Reset secure session` or a re-key (SRV-03) has to invalidate or re-encrypt
-what is still queued — or enqueue **plaintext** and serialize strictly
-per peer, encrypting only at the moment of a successful send. The queue also
-has to hold the same cross-isolate lock the push isolate uses (SRV-03), or a
-background wake and a retry will race the ratchet again. Retries are safe on
-the wire (delivery is already at-least-once and the receiver de-duplicates by
-message id, SRV-03), so a re-POST cannot produce a duplicate message for the
-peer.
+**Step 2 — a durable outbox. Shipped 2026-08-02.**
+
+The design question was ciphertext or plaintext in the queue. The Double
+Ratchet advances per message, so ciphertext cannot be produced out of order or
+re-produced later at will: queueing it keeps ratchet order intact but commits
+each item to one specific session state, which a `Reset secure session` or a
+re-key (SRV-03) then has to invalidate or re-encrypt. **APP-16 settled it in
+favour of plaintext**: a group message is encrypted once per recipient against
+N different sessions, and the ciphertext model would commit N copies that a
+single re-key invalidates.
+
+That turned out to describe what the code already did. `_deliver` builds the
+plaintext and calls `_encryptAndSend` at send time, and `_encryptAndSend`
+already serializes per peer through the same lock the push isolate uses. So
+step 2 was not a queue to build but a limitation to remove:
+
+- **Unsent messages are persisted**, with their state. `send_state` is omitted
+  for a sent message, so existing history stays byte-identical and only the
+  exceptional case costs a key. `sendError` is deliberately *not* persisted: a
+  reason from a previous run ("this server doesn't accept pictures") may no
+  longer be true, and a stale explanation is worse than none.
+- **`pending` never survives a restart.** Nothing is in flight in a process
+  that no longer exists, so it loads back as `failed` and is retried. Restoring
+  it as pending would leave a clock icon waiting on a send no code is running.
+- **The picture is read back from disk.** This is what makes the whole thing
+  possible, and it needed no new storage: the sender's own copy is already
+  written *before* the pending bubble first paints, and its metadata rides in
+  the message's own placeholder attachment entry. `_recoverAttachment` rebuilds
+  the `OutgoingAttachment` from those two. If the file is genuinely gone the
+  send is refused rather than delivering the caption alone, which would quietly
+  send something other than what was composed.
+- **`flushOutbox` retries** oldest-first, sequentially, per conversation — at
+  startup and on the transition back from unreachable, the two moments a send
+  that failed for want of a network might now succeed. Bounded at three
+  automatic attempts per message per run, because a send can fail for a reason
+  retrying never fixes (a peer whose server has federation off, a picture too
+  large for it) and an automatic retry on every reconnect would be an endless
+  invisible loop. A user's own "tap to retry" is not counted against that
+  bound: asking again is a decision, not a loop.
+
+Retries are safe on the wire — delivery is already at-least-once and the
+receiver de-duplicates by message id (SRV-03) — so a re-POST cannot produce a
+duplicate for the peer.
+
+**Not covered by tests, and worth saying plainly.** The model half is: what
+gets persisted, and that a pending message restores as failed. The runtime half
+— the flush firing on reconnect, and the picture actually being read back from
+disk — is not, because nothing in this suite constructs an `AppSession` or a
+`MediaStore`, and building that harness is a larger change than the feature.
+Those two paths want a run on a real device.
 
 No server work: send is a plain authenticated `POST`, and nothing here changes
 the protocol.

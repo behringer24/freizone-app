@@ -25,15 +25,25 @@ StoredMessageKind _storedMessageKindFromJson(String? v) =>
     );
 
 /// How far one of our OWN outgoing messages has got (APP-08). A received
-/// message, and anything loaded back from disk, is always [sent]: the
-/// transcript is written only once a message is actually away (see
-/// ChatTarget.writeBaseJson), so no other value can survive a restart.
+/// message is always [sent].
 ///
 /// [pending] means the bubble is already in the transcript while the upload
 /// and/or the encrypted POST are still in flight -- that is the whole point,
 /// so the composer can be cleared the instant the user hits send instead of
 /// looking frozen on a slow connection.
+///
+/// All three are persisted (APP-08 step 2), but [pending] never survives a
+/// restart: nothing is in flight in a process that no longer exists, so it
+/// loads back as [failed] and gets retried. Before step 2 an unsent message
+/// was dropped on close entirely.
 enum MessageSendState { pending, sent, failed }
+
+MessageSendState _sendStateFromJson(String? v) => switch (v) {
+  // A message written while it was still in flight: the process it was in
+  // flight from is gone, so it is a failure to retry, not a send in progress.
+  'pending' || 'failed' => MessageSendState.failed,
+  _ => MessageSendState.sent,
+};
 
 /// Tolerant of anything unexpected, like the enum parse above: history
 /// written by an older build simply has no "attachments" key, and a
@@ -97,6 +107,7 @@ class StoredMessage {
     replyPreviewMine: j['reply_preview_mine'] as bool?,
     kind: _storedMessageKindFromJson(j['kind'] as String?),
     attachments: _attachmentsFromJson(j['attachments']),
+    sendState: _sendStateFromJson(j['send_state'] as String?),
   );
 
   Map<String, dynamic> toJson() => {
@@ -112,6 +123,12 @@ class StoredMessage {
     if (kind != StoredMessageKind.normal) 'kind': kind.name,
     if (attachments.isNotEmpty)
       'attachments': attachments.map((a) => a.toJson()).toList(),
+    // Omitted for a sent message, which is almost all of them -- so existing
+    // history stays byte-identical and only the exceptional case costs a key.
+    // sendError is deliberately NOT persisted: a reason from a previous run
+    // ("this server doesn't accept pictures") may no longer be true, and a
+    // stale explanation is worse than the plain "not sent" the retry shows.
+    if (sendState != MessageSendState.sent) 'send_state': sendState.name,
   };
 
   final String id;
@@ -249,20 +266,16 @@ abstract class ChatTarget {
 
   /// Writes the fields every transcript has. Subclasses add their own.
   ///
-  /// Only messages that actually left the device (APP-08) are persisted. A
-  /// pending or failed one is deliberately session-only: retrying it needs the
-  /// original picture bytes, which live in memory (AppSession's outgoing
-  /// attachment map), so a "failed" bubble restored after a restart could
-  /// never be resent -- it would just be a dead end the user can't clear.
-  /// Making them durable is exactly what APP-08 step 2's real outbox is for.
-  /// Filtered here rather than at the call site so an unrelated save (an
-  /// incoming message, a receipt) can't persist one by accident either.
+  /// Unsent messages are persisted too (APP-08 step 2). They used to be
+  /// dropped here, because a retry needed the picture bytes from an in-memory
+  /// map and a restored "failed" bubble could never actually be resent -- a
+  /// dead end the user could not clear. That reasoning no longer holds: the
+  /// sender's own copy of a picture is written to disk *before* the bubble
+  /// first paints, so a retry can read it back (see
+  /// AppSession.\_recoverAttachment).
   void writeBaseJson(Map<String, dynamic> j) {
     if (displayName != null) j['display_name'] = displayName;
-    j['messages'] = messages
-        .where((m) => m.sendState == MessageSendState.sent)
-        .map((m) => m.toJson())
-        .toList();
+    j['messages'] = messages.map((m) => m.toJson()).toList();
     j['last_activity_at'] = encodeTime(lastActivityAt);
     j['has_unread'] = hasUnread;
     if (pinnedMessageIds.isNotEmpty) {

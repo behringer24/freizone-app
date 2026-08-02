@@ -654,10 +654,21 @@ class AppSession extends ChangeNotifier {
 
   /// Picture bytes for outgoing messages not yet confirmed sent, keyed by
   /// message id -- what [retrySend] re-uploads after a failure. Dropped as
-  /// soon as the send succeeds, and in memory only: that is precisely why an
-  /// unsent message is never persisted (see Conversation.toJson), since a
-  /// failed bubble restored from disk could never actually be resent.
+  /// soon as the send succeeds. In memory only, but no longer the sole copy:
+  /// [_recoverAttachment] reads the sender's own file back from disk for a
+  /// message that outlived the run that composed it.
   final Map<String, OutgoingAttachment> _outgoingAttachments = {};
+
+  /// How many times [flushOutbox] has retried each unsent message this run.
+  ///
+  /// A message can fail for a reason no amount of retrying fixes -- a peer
+  /// whose server has federation switched off, a picture too large for it --
+  /// and an automatic retry on every reconnect would then be an endless,
+  /// invisible loop. After [_maxOutboxAttempts] the message stays failed and
+  /// waits for the user, whose "tap to retry" is deliberately not counted
+  /// here: asking for it again is a decision, not a loop.
+  final Map<String, int> _outboxAttempts = {};
+  static const int _maxOutboxAttempts = 3;
 
   /// What the server holding this conversation's attachments will accept.
   ///
@@ -977,6 +988,10 @@ class AppSession extends ChangeNotifier {
     unawaited(sweepOrphanedMedia());
     unawaited(refreshRegistrationPolicy());
     unawaited(_registerPush());
+    // Anything composed but never sent -- in this run or a previous one --
+    // gets its first automatic attempt here (APP-08 step 2). Not awaited:
+    // a backlog against a slow peer must not hold up startup.
+    unawaited(flushOutbox());
   }
 
   Future<void> _registerPush() async {
@@ -1115,10 +1130,16 @@ class AppSession extends ChangeNotifier {
   void _markStreamConnected() {
     _reachabilityGraceTimer?.cancel();
     _reachabilityGraceTimer = null;
-    if (reachability != ServerReachability.online) {
+    final wasOffline = reachability != ServerReachability.online;
+    if (wasOffline) {
       reachability = ServerReachability.online;
       notifyListeners();
     }
+    // Coming back from unreachable is the moment a send that failed for want
+    // of a network can finally succeed, so it is where the outbox drains
+    // (APP-08 step 2). Only on the transition: a reconnect that was never a
+    // disconnect has nothing new to offer.
+    if (wasOffline) unawaited(flushOutbox());
   }
 
   void _startStream() {
@@ -2066,22 +2087,18 @@ class AppSession extends ChangeNotifier {
     await _deliver(convo, message, attachment);
   }
 
-  /// Re-sends a message whose optimistic send failed. Only meaningful within
-  /// the session that composed it: a picture's bytes live in
-  /// [_outgoingAttachments], in memory, which is also why a failed message is
-  /// never written to disk (see Conversation.toJson). Durable retry across a
-  /// restart is APP-08 step 2's outbox.
+  /// Re-sends a message whose send failed, including one composed in an
+  /// earlier run of the app (APP-08 step 2).
   Future<void> retrySend(String peerAccountId, String messageId) async {
     final convo = state.conversations[peerAccountId];
     if (convo == null) return;
     final message = convo.messageById(messageId);
     if (message == null || !message.hasFailed) return;
 
-    final attachment = _outgoingAttachments[messageId];
+    final attachment = await _recoverAttachment(convo, message);
     if (message.hasAttachments && attachment == null) {
-      // Can only happen if the bytes were dropped while the message stayed
-      // failed, which nothing does today -- but re-sending the caption alone
-      // would quietly deliver a different message than the user composed.
+      // Re-sending the caption alone would quietly deliver a different
+      // message than the one the user composed, so refuse instead.
       message.sendError = 'The picture is no longer available to resend.';
       notifyListeners();
       return;
@@ -2092,6 +2109,76 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
 
     await _deliver(convo, message, attachment);
+  }
+
+  /// The picture bytes a retry needs, from memory if this run composed the
+  /// message and from disk otherwise.
+  ///
+  /// Reading it back is what makes an unsent message durable at all. The
+  /// sender's own copy is written *before* the pending bubble first paints
+  /// (see [sendMessage]), so by the time anything can fail it is already
+  /// there -- and its metadata rode along in the message's own placeholder
+  /// attachment entry, which is now persisted with it.
+  Future<OutgoingAttachment?> _recoverAttachment(
+    Conversation convo,
+    StoredMessage message,
+  ) async {
+    if (!message.hasAttachments) return null;
+    final held = _outgoingAttachments[message.id];
+    if (held != null) return held;
+
+    final reference = message.attachments.first;
+    try {
+      final media = await MediaStore.instance();
+      final file = media.fileFor(
+        accountId: state.accountId,
+        chatId: convo.id,
+        messageId: message.id,
+      );
+      if (!await file.exists()) return null;
+
+      final recovered = OutgoingAttachment(
+        bytes: await file.readAsBytes(),
+        mimeType: reference.mimeType,
+        width: reference.width,
+        height: reference.height,
+        thumb: reference.thumb,
+      );
+      _outgoingAttachments[message.id] = recovered;
+      return recovered;
+    } catch (_) {
+      // Unreadable for any reason is the same as absent: the caller refuses
+      // to send the caption on its own rather than guessing.
+      return null;
+    }
+  }
+
+  /// Retries everything still unsent, oldest first, one conversation at a
+  /// time (APP-08 step 2).
+  ///
+  /// Called after state is loaded and whenever the stream reconnects, which
+  /// are exactly the two moments something that failed for want of a network
+  /// might now succeed. Per conversation the order is strictly oldest-first
+  /// and sequential, so a flush cannot deliver a backlog out of order or
+  /// enter the same ratchet twice -- [_encryptAndSend] serializes per peer,
+  /// but only ordering the retries keeps them in the order they were typed.
+  Future<void> flushOutbox() async {
+    for (final convo in state.conversations.values.toList()) {
+      final unsent = convo.messages
+          .where((m) => m.hasFailed && m.kind == StoredMessageKind.normal)
+          .toList();
+      for (final message in unsent) {
+        final attempts = _outboxAttempts[message.id] ?? 0;
+        if (attempts >= _maxOutboxAttempts) continue;
+        _outboxAttempts[message.id] = attempts + 1;
+        try {
+          await retrySend(convo.peerAccountId, message.id);
+        } catch (_) {
+          // retrySend has already recorded the failure on the message; a
+          // flush must keep going so one dead peer cannot hold up the rest.
+        }
+      }
+    }
   }
 
   /// The network half of a send, shared by [sendMessage] and [retrySend]:
