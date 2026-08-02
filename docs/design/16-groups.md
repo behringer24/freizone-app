@@ -307,7 +307,8 @@ unbound:
 
 1. **`ChatTarget` refactor — done 2026-08-02**, including moving the media path
    off `peerAccountId`. See the data-model section above.
-2. APP-08 step 2: the durable outbox, plaintext model.
+2. **APP-08 step 2: the durable outbox — done 2026-08-02.** The 1:1 half. The
+   per-recipient item a group fan-out needs comes with the send path in phase 5.
 3. `pkg/group` + the four FFI exports + Dart bindings.
 4. Group state store and persistence, still no UI.
 5. Send/receive path, fan-out, batch, receipts.

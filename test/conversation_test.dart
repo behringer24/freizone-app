@@ -126,7 +126,7 @@ void main() {
       expect(m.hasFailed, isFalse);
     });
 
-    test('a message read back from disk is always sent', () {
+    test('history with no send state recorded reads back as sent', () {
       final restored = StoredMessage.fromJson({
         'text': 'from disk',
         'mine': true,
@@ -135,11 +135,12 @@ void main() {
       expect(restored.sendState, MessageSendState.sent);
     });
 
-    // The load-bearing invariant of APP-08 step 1: retrying a failed send
-    // needs the picture bytes AppSession only holds in memory, so a pending
-    // or failed message must never reach disk -- restored, it would be a
-    // bubble that can never be sent and never be cleared.
-    test('pending and failed messages are left out of toJson', () {
+    // APP-08 step 2. Step 1 deliberately dropped unsent messages on close,
+    // because a retry needed picture bytes held only in memory. They are
+    // durable now -- the sender's own copy is on disk before the bubble
+    // paints, so a restored failure can genuinely be resent.
+    test('unsent messages are persisted, and a pending one comes back as '
+        'failed rather than in flight', () {
       final convo = Conversation(peerAccountId: 'peer1');
       convo.messages.addAll([
         outgoing('delivered', MessageSendState.sent),
@@ -148,11 +149,35 @@ void main() {
       ]);
 
       final persisted = convo.toJson()['messages'] as List<dynamic>;
-      expect(persisted, hasLength(1));
-      expect((persisted.single as Map<String, dynamic>)['text'], 'delivered');
+      expect(persisted, hasLength(3));
 
-      // ...while all three stay visible in the live transcript.
-      expect(convo.messages, hasLength(3));
+      final restored = Conversation.fromJson(convo.toJson());
+      expect(restored.messages.map((m) => m.sendState).toList(), [
+        MessageSendState.sent,
+        // Nothing is in flight in a process that no longer exists, so a
+        // pending message restores as a failure to retry. Otherwise it would
+        // sit there with a clock icon forever, waiting on a send that no code
+        // is running.
+        MessageSendState.failed,
+        MessageSendState.failed,
+      ]);
+    });
+
+    test('a sent message costs no extra key, so old history is unchanged', () {
+      final sent = outgoing('delivered', MessageSendState.sent);
+      expect(sent.toJson().containsKey('send_state'), isFalse);
+
+      final failed = outgoing('never left', MessageSendState.failed);
+      expect(failed.toJson()['send_state'], 'failed');
+    });
+
+    test('a stale failure reason is not persisted', () {
+      // "this server doesn't accept pictures" may simply not be true any
+      // more by the next run, and a wrong explanation is worse than none.
+      final failed = outgoing('never left', MessageSendState.failed)
+        ..sendError = 'blobs are disabled on that server';
+      expect(failed.toJson().containsKey('send_error'), isFalse);
+      expect(StoredMessage.fromJson(failed.toJson()).sendError, isNull);
     });
 
     test('a system info line still persists, since it defaults to sent', () {
@@ -167,7 +192,6 @@ void main() {
       final convo = Conversation(peerAccountId: 'peer1');
       final message = outgoing('pending at first', MessageSendState.pending);
       convo.messages.add(message);
-      expect(convo.toJson()['messages'], isEmpty);
 
       // Exactly what AppSession._deliver does once the POST succeeds.
       message.sendState = MessageSendState.sent;
@@ -206,6 +230,14 @@ void main() {
         peerReadUpTo: DateTime.utc(2026, 8, 2, 11, 30),
         sentDeliveredReceiptUpTo: DateTime.utc(2026, 8, 2, 10),
         sentReadReceiptUpTo: DateTime.utc(2026, 8, 2, 10, 30),
+      );
+
+      convo.messages.add(
+        StoredMessage(
+          text: 'hi',
+          mine: true,
+          timestamp: DateTime.utc(2026, 8, 2, 11, 59),
+        ),
       );
 
       expect(convo.toJson().keys.toSet(), {

@@ -88,7 +88,7 @@ Status: `planned`
 Require a biometric unlock when opening the app.
 
 ### APP-08 — Send feedback / outgoing message queue
-Status: `in progress` (step 1 shipped) · Part of: APP-04 (attachment path)
+Status: `done` · Part of: APP-04 (attachment path)
 Design: [design/08-outgoing-message-queue.md](design/08-outgoing-message-queue.md)
 
 On a slow connection the send button felt unresponsive: nothing visibly happened
@@ -97,13 +97,20 @@ optimistic — the message appears immediately and shows its own state.
 
 - Done — step 1: the composer clears at once, the message is stored before the
   network call, and delivery state is visible per message
-- **Open** — a durable outgoing queue that survives app death and retries on its
-  own, which is also what the attachment upload path needs
 - 2026-08-02 — step 2's open fork (queue ciphertext or plaintext?) decided by
   APP-16: **plaintext**, encrypted at send time. A group message is encrypted
   once per recipient, so queued ciphertext would commit N copies to N specific
   session states that a single re-key invalidates. Groups also make step 2 a
   prerequisite rather than an improvement
+- 2026-08-02 — step 2 shipped, and it was a limitation to remove rather than a
+  queue to build: the send path already produced plaintext at send time and
+  already serialized per peer. Unsent messages are now persisted (a `pending`
+  one restores as `failed`, since nothing is in flight in a dead process), the
+  picture is read back from the sender's own on-disk copy instead of an
+  in-memory map, and `flushOutbox` retries oldest-first at startup and on the
+  transition back from unreachable, bounded at three automatic attempts. The
+  runtime half — flush on reconnect, picture recovery — has no test coverage
+  and wants a run on a real device
 
 ### APP-09 — New-user onboarding guidance
 Status: `planned`
