@@ -254,10 +254,13 @@ over APP-08's outbox, and the group UI.
   a retry that addresses only the copies that never arrived. A member removed
   while a copy was queued no longer receives it
 - **Open**, in the order they are likely to be done:
-  - the receive path — `v: 4` into the transcript with the `state_hash`
-    comparison, `v: 5` applied without being stored or notified, and holding
-    control envelopes that arrive out of order. **Simultaneous X3DH
-    establishment is done** (2026-08-03)
+  - ~~the receive path~~ — **done 2026-08-03**: `v: 4` into its own transcript,
+    `v: 5` applied without being stored or notified, out-of-order events held
+    and retried, `state_hash` compared on every group envelope and answered
+    with a snapshot, simultaneous X3DH establishment settled. The group half
+    lives in `group_receive.dart` as plain functions over `AppState`, because
+    the background push isolate decrypts too and whoever decrypts must act:
+    the ratchet has already advanced past the envelope
   - **group receipts** — designed but unbuilt. `GroupConversation` already has
     the per-member watermark maps and the wire needs nothing new, but nothing
     sends or reads a `v: 2` receipt in a group yet

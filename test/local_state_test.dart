@@ -104,6 +104,31 @@ void main() {
     });
   });
 
+  group('AppState.pendingGroupEvents', () {
+    test('omitted when empty, so existing profiles are unchanged', () {
+      expect(
+        _minimalState().toJson().containsKey('pending_group_events'),
+        isFalse,
+      );
+    });
+
+    test('held facts survive a restart', () {
+      // They have to. Delivery is unordered, so an events envelope routinely
+      // overtakes the snapshot carrying the genesis it needs -- and the
+      // ratchet has already advanced past the envelope they arrived in, so
+      // dropping them on close would be final.
+      final state = _minimalState();
+      state.pendingGroupEvents['p2xjx0000000000000000'] = [
+        {'type': 'member_add', 'subject': 'qben000000000000000b'},
+      ];
+
+      final restored = AppState.fromJson(state.toJson());
+      final held = restored.pendingGroupEvents['p2xjx0000000000000000']!;
+      expect(held, hasLength(1));
+      expect(held.single['type'], 'member_add');
+    });
+  });
+
   group('AppState.inboundSessions', () {
     test('omitted when empty, so existing profiles are unchanged', () {
       expect(_minimalState().toJson().containsKey('inbound_sessions'), isFalse);

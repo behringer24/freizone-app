@@ -100,6 +100,7 @@ class AppState {
     Map<String, RatchetSessionJson>? inboundSessions,
     Map<String, Conversation>? conversations,
     Map<String, GroupConversation>? groups,
+    Map<String, List<Map<String, dynamic>>>? pendingGroupEvents,
     Set<String>? knownPeerIds,
     Map<String, BlockedPeer>? blockedPeers,
     Set<String>? processedMessageIds,
@@ -113,6 +114,7 @@ class AppState {
        inboundSessions = inboundSessions ?? {},
        conversations = conversations ?? {},
        groups = groups ?? {},
+       pendingGroupEvents = pendingGroupEvents ?? {},
        knownPeerIds = knownPeerIds ?? {},
        blockedPeers = blockedPeers ?? {},
        processedMessageIds = processedMessageIds ?? {},
@@ -161,6 +163,13 @@ class AppState {
       (k, v) =>
           MapEntry(k, GroupConversation.fromJson(v as Map<String, dynamic>)),
     ),
+    pendingGroupEvents: (j['pending_group_events'] as Map<String, dynamic>?)
+        ?.map(
+          (k, v) => MapEntry(
+            k,
+            (v as List<dynamic>).cast<Map<String, dynamic>>(),
+          ),
+        ),
     knownPeerIds: (j['known_peer_ids'] as List<dynamic>?)
         ?.cast<String>()
         .toSet(),
@@ -226,6 +235,16 @@ class AppState {
   /// Keyed by peer account id -- the UI/history layer on top of
   /// [sessions]'s crypto layer.
   Map<String, Conversation> conversations;
+
+  /// Group facts that arrived before the ones they depend on, keyed by group
+  /// id (APP-16).
+  ///
+  /// Delivery is unordered, so an `events` envelope routinely overtakes the
+  /// snapshot carrying the genesis it needs. Persisted rather than kept in
+  /// memory because the snapshot that unblocks them may be a long way behind,
+  /// and the ratchet has already advanced past the envelope they came in --
+  /// dropping them would be final.
+  Map<String, List<Map<String, dynamic>>> pendingGroupEvents;
 
   /// Group transcripts, keyed by group id (APP-16).
   ///
@@ -405,6 +424,8 @@ class AppState {
       'conversations': conversations.map((k, v) => MapEntry(k, v.toJson())),
     if (groups.isNotEmpty)
       'groups': groups.map((k, v) => MapEntry(k, v.toJson())),
+    if (pendingGroupEvents.isNotEmpty)
+      'pending_group_events': pendingGroupEvents,
     if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
     if (blockedPeers.isNotEmpty)
       'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),
