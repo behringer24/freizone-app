@@ -227,7 +227,13 @@ over APP-08's outbox, and the group UI.
   the media path moved off `peerAccountId` onto a chat-neutral id. No behaviour
   change by construction, and measured that way — analyzer output unchanged,
   tests 216 → 219
-- **Open** — APP-08 step 2 (the durable outbox) is next, then `pkg/group` over
-  FFI. Two receive-path requirements the reference client turned up are recorded
-  in the design document and must not be lost: simultaneous X3DH establishment,
-  and holding control envelopes that arrive out of order
+- 2026-08-02 — phase 2 done: APP-08 step 2, the durable outbox
+- 2026-08-02 — phase 3 shipped: `native/group.go` exposes `pkg/group` over four
+  FFI exports (`GroupCreate`, `GroupSignEvent`, `GroupApplyEvents`,
+  `GroupResolveState`), with the state blob opaque to Dart. cgo-free like the
+  rest of the core, so it tests on the host, and the exports were checked in
+  the cross-compiled `.so` for both ABIs rather than assumed
+- **Open** — the group state store and persistence (phase 4), then the send and
+  receive paths. Two receive-path requirements the reference client turned up
+  are recorded in the design document and must not be lost: simultaneous X3DH
+  establishment, and holding control envelopes that arrive out of order

@@ -44,10 +44,20 @@ Four new exports in `native/core.go`, in the established JSON-in/JSON-out shape:
 
 | Export | Does |
 |---|---|
-| `GroupCreate` | Derives the group root key from the account root key and a fresh `group_nonce`, emits genesis + the founder's own add/accept, returns the initial state blob |
-| `GroupSignEvent` | Builds an event's signing bytes, signs with the device key (or the group root key for founder-only events), returns the event with its `signer` block |
-| `GroupApplyEvents` | Merges incoming events into a state blob; returns the new blob, its `state_hash`, and a per-event verdict (`applied` / `rejected` + reason) |
+| `GroupCreate` | Derives the group root key from the account root key and a fresh `group_nonce`, emits genesis (plus a meta event if a name was given), returns the initial state blob |
+| `GroupSignEvent` | Builds an event's signing bytes and signs it, returning the event with its `signer` block |
+| `GroupApplyEvents` | Merges incoming events into a state blob; returns the new blob, its `state_hash`, and a per-event verdict (`applied` / `known` / `rejected` + reason) |
 | `GroupResolveState` | Folds a state blob into the derived view the UI renders: members with roles, pending invitees, name, topic, my own role |
+
+**Shipped 2026-08-02**, with two refinements the implementation argued for.
+Genesis is the founder's membership, so `GroupCreate` emits no self-add and no
+self-accept — two events nobody would ever have checked. And `GroupSignEvent`
+decides *which key* signs rather than taking it as a parameter: raising someone
+to admin is the founder's alone and needs the group root key, everything below
+is an ordinary device signature. Asking the caller would be one more thing a
+client could get wrong for no benefit. Every mutating call also returns the
+resolved view alongside the blob, so the UI never needs a second round trip
+just to redraw.
 
 The **state blob is opaque to Dart** — it is persisted and handed back, never
 interpreted, exactly as a `RatchetSessionJson` is today. Dart renders only
@@ -309,7 +319,10 @@ unbound:
    off `peerAccountId`. See the data-model section above.
 2. **APP-08 step 2: the durable outbox — done 2026-08-02.** The 1:1 half. The
    per-recipient item a group fan-out needs comes with the send path in phase 5.
-3. `pkg/group` + the four FFI exports + Dart bindings.
+3. **`pkg/group` + the four FFI exports + Dart bindings — done 2026-08-02.**
+   `native/group.go`, cgo-free like the rest of the logic so it tests on the
+   host; the exports verified present in the cross-compiled `.so` for both
+   ABIs.
 4. Group state store and persistence, still no UI.
 5. Send/receive path, fan-out, batch, receipts.
 6. UI.

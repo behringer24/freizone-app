@@ -302,6 +302,90 @@ class FreizoneCore {
     return decodeB64(data['plaintext'] as String);
   }
 
+  // --- Groups (APP-16) -----------------------------------------------------
+  //
+  // The state blob these pass back and forth is opaque here on purpose: it is
+  // the signed fact set, and only the core interprets it. That is what keeps
+  // the convergence rules in one place, so a bug on this side cannot produce
+  // a group state that disagrees with what another client computes from the
+  // same facts.
+
+  /// Founds a group. The group root key is derived from this account's root
+  /// key and a nonce stored in the genesis event, so it survives total device
+  /// loss: restore the seed phrase, get the state from any member, re-derive.
+  GroupStateResult groupCreate({
+    required GroupIdentity identity,
+    required String server,
+    String name = '',
+    String topic = '',
+    DateTime? issuedAt,
+  }) {
+    final data = _call(_bindings.groupCreate, {
+      'identity': identity.toJson(),
+      'server': server,
+      'name': name,
+      'topic': topic,
+      'issued_at': encodeTime(issuedAt ?? DateTime.now()),
+    });
+    return GroupStateResult.fromJson(data);
+  }
+
+  /// Builds and signs one group event, ready to be applied locally and sent
+  /// to every member.
+  ///
+  /// Which key signs it is decided in the core, not here: raising someone to
+  /// admin is the founder's alone and needs the group root key, everything
+  /// below is an ordinary device signature. The returned event is opaque and
+  /// only travels -- to [groupApplyEvents] and into a `v: 5` envelope.
+  Map<String, dynamic> groupSignEvent({
+    required GroupIdentity identity,
+    required Map<String, dynamic> state,
+    required String type,
+    String subject = '',
+    String server = '',
+    String role = '',
+    String name = '',
+    String topic = '',
+    DateTime? issuedAt,
+  }) {
+    final data = _call(_bindings.groupSignEvent, {
+      'identity': identity.toJson(),
+      'state': state,
+      'type': type,
+      'subject': subject,
+      'server': server,
+      'role': role,
+      'name': name,
+      'topic': topic,
+      'issued_at': encodeTime(issuedAt ?? DateTime.now()),
+    });
+    return data['event'] as Map<String, dynamic>;
+  }
+
+  /// Merges events into a state blob, whether our own or a peer's. Pass an
+  /// empty [state] for a group being heard of for the first time.
+  ///
+  /// A bad event costs only itself: the call reports it in
+  /// [GroupStateResult.rejected] rather than failing, since a snapshot from a
+  /// hostile peer must not be able to discard the good facts alongside it.
+  GroupStateResult groupApplyEvents({
+    required Map<String, dynamic> state,
+    required List<Map<String, dynamic>> events,
+  }) {
+    final data = _call(_bindings.groupApplyEvents, {
+      'state': state,
+      'events': events,
+    });
+    return GroupStateResult.fromJson(data);
+  }
+
+  /// Folds a state blob into the view the UI renders: members with roles, who
+  /// has accepted, the name and topic, and the state hash.
+  GroupStateResult groupResolveState(Map<String, dynamic> state) =>
+      GroupStateResult.fromJson(
+        _call(_bindings.groupResolveState, {'state': state}),
+      );
+
   // --- boilerplate ---------------------------------------------------------
 
   Map<String, dynamic> _callNoArg(Pointer<Utf8> Function() fn) =>
