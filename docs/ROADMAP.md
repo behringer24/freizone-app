@@ -233,7 +233,12 @@ over APP-08's outbox, and the group UI.
   `GroupResolveState`), with the state blob opaque to Dart. cgo-free like the
   rest of the core, so it tests on the host, and the exports were checked in
   the cross-compiled `.so` for both ABIs rather than assumed
-- **Open** — the group state store and persistence (phase 4), then the send and
-  receive paths. Two receive-path requirements the reference client turned up
-  are recorded in the design document and must not be lost: simultaneous X3DH
-  establishment, and holding control envelopes that arrive out of order
+- 2026-08-02 — phase 4 shipped: `GroupConversation` (transcript only),
+  `GroupStateStore` (one file per group per account, atomic writes), group
+  transcripts in the profile, and the local operations on `AppSession` —
+  create, sign, apply, delete — with no network yet. `sweepOrphanedMedia` and
+  account deletion learned about groups on the way past
+- **Open** — the send and receive paths (phase 5), then the UI. Two
+  receive-path requirements the reference client turned up are recorded in the
+  design document and must not be lost: simultaneous X3DH establishment, and
+  holding control envelopes that arrive out of order

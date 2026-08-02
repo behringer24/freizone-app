@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import '../ffi/models.dart';
 import '../net/api_client.dart';
 import 'conversation.dart';
+import 'group_conversation.dart';
 import 'session_recovery.dart';
 
 /// One uploaded one-time prekey's key pair, kept locally until it's
@@ -97,6 +98,7 @@ class AppState {
     Map<int, OneTimePrekeyState>? oneTimePrekeys,
     Map<String, RatchetSessionJson>? sessions,
     Map<String, Conversation>? conversations,
+    Map<String, GroupConversation>? groups,
     Set<String>? knownPeerIds,
     Map<String, BlockedPeer>? blockedPeers,
     Set<String>? processedMessageIds,
@@ -108,6 +110,7 @@ class AppState {
   }) : oneTimePrekeys = oneTimePrekeys ?? {},
        sessions = sessions ?? {},
        conversations = conversations ?? {},
+       groups = groups ?? {},
        knownPeerIds = knownPeerIds ?? {},
        blockedPeers = blockedPeers ?? {},
        processedMessageIds = processedMessageIds ?? {},
@@ -148,6 +151,10 @@ class AppState {
     ),
     conversations: (j['conversations'] as Map<String, dynamic>?)?.map(
       (k, v) => MapEntry(k, Conversation.fromJson(v as Map<String, dynamic>)),
+    ),
+    groups: (j['groups'] as Map<String, dynamic>?)?.map(
+      (k, v) =>
+          MapEntry(k, GroupConversation.fromJson(v as Map<String, dynamic>)),
     ),
     knownPeerIds: (j['known_peer_ids'] as List<dynamic>?)
         ?.cast<String>()
@@ -202,6 +209,14 @@ class AppState {
   /// Keyed by peer account id -- the UI/history layer on top of
   /// [sessions]'s crypto layer.
   Map<String, Conversation> conversations;
+
+  /// Group transcripts, keyed by group id (APP-16).
+  ///
+  /// Only the transcripts. A group's membership and roles are a signed fact
+  /// set living in its own file (group_store.dart), because it has the
+  /// opposite write profile: tens of kilobytes that change rarely, against a
+  /// profile rewritten in full on every single message.
+  Map<String, GroupConversation> groups;
 
   /// Every peer account id ever accepted (message request Accept) or
   /// reached out to ourselves (AppSession.startConversation) -- i.e. "not
@@ -370,6 +385,8 @@ class AppState {
     if (sessions.isNotEmpty) 'sessions': sessions,
     if (conversations.isNotEmpty)
       'conversations': conversations.map((k, v) => MapEntry(k, v.toJson())),
+    if (groups.isNotEmpty)
+      'groups': groups.map((k, v) => MapEntry(k, v.toJson())),
     if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
     if (blockedPeers.isNotEmpty)
       'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),
