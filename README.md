@@ -122,6 +122,17 @@ flutter test
 
 Both should be clean before committing. There's no CI configured yet — these are run manually.
 
+### Documentation map
+
+| File | What it is |
+| --- | --- |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Planned and shipped work, one short entry per item with a dated status log |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Released versions, written for a store listing |
+| [docs/design/](docs/design/) | One document per topic: why an approach was chosen, what was rejected, which trade-offs were accepted. Linked from the roadmap entry |
+| [PRIVACY.md](PRIVACY.md) | The privacy policy the store listing points at |
+
+The wire protocol itself lives in freizone-server's [`docs/PROTOCOL.md`](https://github.com/behringer24/freizone-server/blob/master/docs/PROTOCOL.md), which is binding on this client.
+
 ## A note on trust
 
 This client independently verifies the full self-certifying chain for every peer it talks to (`hash(root_pubkey) == account_id`, then verifies each device certificate's signature) rather than trusting the server's word for who owns which key or device. The server can misbehave (drop messages, go offline, get compromised) without being able to silently impersonate anyone or read your messages.
