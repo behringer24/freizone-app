@@ -238,7 +238,13 @@ over APP-08's outbox, and the group UI.
   transcripts in the profile, and the local operations on `AppSession` —
   create, sign, apply, delete — with no network yet. `sweepOrphanedMedia` and
   account deletion learned about groups on the way past
-- **Open** — the send and receive paths (phase 5), then the UI. Two
-  receive-path requirements the reference client turned up are recorded in the
-  design document and must not be lost: simultaneous X3DH establishment, and
-  holding control envelopes that arrive out of order
+- 2026-08-02 — phase 5's wire layer shipped: `v: 4` group chat content, carried
+  by `MessageContent` itself rather than a second class duplicating its fields,
+  and `v: 5` as `GroupControl` following the `RekeySignal` pattern. A
+  one-to-one message stays byte-identical, and an older build still shows a
+  neutral placeholder rather than misfiling a group message into a DM
+- **Open** — the send and receive plumbing around that wire layer, then the UI.
+  Three things must not be lost, all recorded in the design document:
+  simultaneous X3DH establishment, holding control envelopes that arrive out of
+  order, and moving the peer endpoint off `Conversation` so a fan-out does not
+  have to litter the chat list to reach a member
