@@ -192,7 +192,15 @@ The rest follows:
   here that is a correctness requirement rather than a feature.
 - `MessageContent.decode` must accept a **set** of known versions instead of
   comparing against `currentVersion`. Today `v: 4` would render as "newer app
-  feature" in our own build.
+  feature" in our own build. **Done 2026-08-02**, along with the rest of the
+  wire layer: `MessageContent` carries both versions rather than a second class
+  duplicating its fields, since `v: 4` *is* `v: 1`'s shape plus `group_id` and
+  `state_hash` — the presence of a group id is what selects the version, and a
+  one-to-one message stays byte-identical. `v: 5` is `GroupControl`, following
+  the `RekeySignal` pattern of an `encode`/`tryDecode` pair that declines
+  anything that is not its own shape, so the receive path can try each decoder
+  in turn. Events inside it stay opaque: they are signed objects only the core
+  reads, and a malformed one costs itself rather than the envelope.
 - **Control envelopes arrive out of order.** An `events` envelope routinely
   overtakes the `snapshot` carrying the genesis it depends on, so events that
   are not admissible *yet* go into a small bounded hold buffer and are retried
@@ -351,7 +359,19 @@ unbound:
 4. **Group state store and persistence — done 2026-08-02**, still no UI.
    `GroupConversation`, `GroupStateStore`, `AppState.groups`, and the local
    operations on `AppSession` (create, sign, apply, delete).
-5. Send/receive path, fan-out, batch, receipts.
+5. Send/receive path, fan-out, batch, receipts. The **wire layer is done**
+   (2026-08-02): `v: 4` and `v: 5`, encode and decode, fully tested. What
+   remains is the plumbing on either side of it.
+
+   One thing that plumbing has to settle, and which is not obvious: a group
+   member is reachable in exactly the way a one-to-one peer is, and the ratchet
+   session is literally the same one (`AppState.sessions` is keyed by peer
+   account id, and pairwise fan-out means a group message to Ben rides Ben's
+   own session). But the peer *endpoint* — device id, device key, home server —
+   currently lives on `Conversation`, so a fan-out either creates a
+   one-to-one conversation per member, which would litter the chat list, or
+   `_encryptAndSend` stops taking a `Conversation` and takes the endpoint
+   instead. The second is the right shape and belongs in this phase.
 6. UI.
 7. A federated group across both local instances, end to end.
 

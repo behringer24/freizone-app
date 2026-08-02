@@ -192,6 +192,8 @@ class MessageContent {
   const MessageContent({
     required this.id,
     required this.text,
+    this.groupId,
+    this.stateHash,
     this.replyToId,
     this.replyPreview,
     this.senderServer,
@@ -233,11 +235,39 @@ class MessageContent {
   /// knowledge of it self-heals if local state is ever lost.
   final String? senderServer;
 
+  /// The group this message belongs to, or null for a one-to-one chat.
+  ///
+  /// Its presence is what makes [encode] emit [groupVersion] instead of
+  /// [currentVersion]. A group message is deliberately not a `v: 1` with an
+  /// extra field: `v: 1` is frozen, and a build that has never heard of groups
+  /// would file a group message into a one-to-one conversation -- which is
+  /// worse than the "newer feature" placeholder it shows for a version it does
+  /// not know.
+  final String? groupId;
+
+  /// The sender's view of the group's fact set, so a recipient can notice the
+  /// two of them are missing each other's facts without exchanging anything
+  /// (APP-16). Null outside a group.
+  final String? stateHash;
+
+  /// Ordinary chat text, frozen forever.
   static const currentVersion = 1;
+
+  /// Group chat content: every field of [currentVersion] plus [groupId] and
+  /// [stateHash].
+  static const groupVersion = 4;
+
+  /// The versions this build can render. Anything higher is a feature from a
+  /// newer app; anything lower and non-JSON is legacy plain text.
+  static const _knownVersions = {currentVersion, groupVersion};
+
+  bool get isGroupMessage => groupId != null;
 
   Uint8List encode() {
     final json = <String, dynamic>{
-      'v': currentVersion,
+      'v': isGroupMessage ? groupVersion : currentVersion,
+      if (groupId != null) 'group_id': groupId,
+      if (stateHash != null) 'state_hash': stateHash,
       'id': id,
       'text': text,
       'attachments': attachments.map((a) => a.toJson()).toList(),
@@ -263,11 +293,13 @@ class MessageContent {
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
         final v = decoded['v'];
-        if (v == currentVersion) {
+        if (_knownVersions.contains(v)) {
           final replyPreviewJson = decoded['reply_preview'];
           return MessageContent(
             id: decoded['id'] as String? ?? fallbackId,
             text: decoded['text'] as String? ?? '',
+            groupId: decoded['group_id'] as String?,
+            stateHash: decoded['state_hash'] as String?,
             replyToId: decoded['reply_to'] as String?,
             replyPreview: replyPreviewJson == null
                 ? null
