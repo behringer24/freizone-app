@@ -355,12 +355,67 @@ class ApiClient {
   /// Claims (and atomically consumes, if any remain) a one-time prekey
   /// from deviceId's bundle. Unauthenticated -- see docs/PROTOCOL.md's
   /// note on this endpoint's trust model.
-  Future<PrekeyBundleResponse> claimPrekeyBundle(String deviceId) async {
-    final resp = await _unauthedRequest(
+  /// Claims [deviceId]'s prekey bundle from **this** client's server, signed as
+  /// [creds]. The signature is what earns the one-time prekey (SRV-04): the
+  /// server answers an unsigned claim too, but withholds the key, which costs
+  /// the new session forward secrecy on its first message.
+  ///
+  /// For a peer on another server use [claimFederatedPrekeyBundle] -- that
+  /// server has no row for this device to look a device id up in.
+  Future<PrekeyBundleResponse> claimPrekeyBundle(
+    String deviceId,
+    DeviceCredentials creds,
+  ) async {
+    final resp = await _signedRequest(
       'POST',
       '/v1/devices/$deviceId/prekey-bundle',
       null,
+      creds,
     );
+    return PrekeyBundleResponse.fromJson(_decodeObject(resp, {200}));
+  }
+
+  /// Claims a prekey bundle from a **foreign** server, proving our identity the
+  /// same way [sendFederatedMessage] does: the whole self-certifying chain
+  /// inline, signed with the self-describing-key convention (§3/§9). Needed
+  /// because that server has never seen this device and cannot resolve a device
+  /// id.
+  ///
+  /// Fails with a `404` if the target server has federation switched off -- the
+  /// same answer it gives for a federated message, and for the same reason:
+  /// there would be no way to deliver what the bundle is for.
+  Future<PrekeyBundleResponse> claimFederatedPrekeyBundle({
+    required String deviceId,
+    required Uint8List devicePriv,
+    required Uint8List rootPub,
+    required String senderAccountId,
+    required DeviceCertificate cert,
+  }) async {
+    final path = '/v1/devices/$deviceId/prekey-bundle';
+    final body = {
+      'sender_account_id': senderAccountId,
+      'sender_root_pub_key': encodeB64(rootPub),
+      'sender_device_cert': {
+        'device_id': cert.deviceId,
+        'device_pub_key': encodeB64(cert.devicePubKey),
+        'issued_at': encodeTime(cert.issuedAt),
+        'signature': encodeB64(cert.signature),
+      },
+    };
+    final bodyBytes = Uint8List.fromList(utf8.encode(json.encode(body)));
+    final keyId = encodeB64(cert.devicePubKey);
+    final headers = core.signHTTPRequest(
+      method: 'POST',
+      path: path,
+      body: bodyBytes,
+      deviceId: keyId,
+      devicePriv: devicePriv,
+    );
+    final req = http.Request('POST', _uri(path));
+    req.headers['Content-Type'] = 'application/json';
+    headers.forEach((key, value) => req.headers[key] = value);
+    req.bodyBytes = bodyBytes;
+    final resp = await _send(req);
     return PrekeyBundleResponse.fromJson(_decodeObject(resp, {200}));
   }
 

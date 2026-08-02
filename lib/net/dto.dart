@@ -171,6 +171,7 @@ class PrekeyBundleResponse {
     required this.dhIdentityCert,
     required this.signedPrekey,
     this.oneTimePrekey,
+    this.oneTimePrekeyOmitted,
   });
 
   factory PrekeyBundleResponse.fromJson(Map<String, dynamic> j) =>
@@ -188,6 +189,7 @@ class PrekeyBundleResponse {
             : OneTimePrekeyDTO.fromJson(
                 j['one_time_prekey'] as Map<String, dynamic>,
               ),
+        oneTimePrekeyOmitted: j['one_time_prekey_omitted'] as String?,
       );
 
   final String deviceId;
@@ -195,6 +197,18 @@ class PrekeyBundleResponse {
   final DHIdentityCertDTO dhIdentityCert;
   final SignedPrekeyDTO signedPrekey;
   final OneTimePrekeyDTO? oneTimePrekey;
+
+  /// Why no one-time prekey came back: `"pool_empty"`, or `"unauthenticated"`
+  /// when the server didn't accept our credentials (SRV-04). Null when one was
+  /// handed out, and also null from a server predating the field. Diagnostic
+  /// only -- a session starts either way, just with reduced forward secrecy on
+  /// its first message.
+  final String? oneTimePrekeyOmitted;
+
+  /// True when the server told us our claim was unauthenticated. Always a bug
+  /// on this side -- the app signs every claim -- so it is worth logging loudly
+  /// rather than silently accepting the weaker session.
+  bool get wasClaimedUnauthenticated => oneTimePrekeyOmitted == 'unauthenticated';
 }
 
 class PrekeyStatusResponse {
