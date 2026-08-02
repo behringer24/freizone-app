@@ -421,6 +421,13 @@ class ApiClient {
 
   // --- Messages -----------------------------------------------------------
 
+  /// Queues a message for a recipient device.
+  ///
+  /// `409` counts as success, not failure. It means this `message_id` is
+  /// already queued, which -- since a retry re-uses the same one (APP-08 step
+  /// 2) -- says the message got through and only our knowledge of that was
+  /// lost. Treating it as an error would leave the outbox retrying something
+  /// the peer already has, forever.
   Future<void> sendMessage({
     required DeviceCredentials creds,
     required String messageId,
@@ -432,7 +439,7 @@ class ApiClient {
       'recipient_device_id': recipientDeviceId,
       'payload': payload,
     }, creds);
-    _checkStatus(resp, {202});
+    _checkStatus(resp, {202, 409});
   }
 
   /// Posts an encrypted message directly to a peer's home server (which
@@ -483,7 +490,8 @@ class ApiClient {
     headers.forEach((key, value) => req.headers[key] = value);
     req.bodyBytes = bodyBytes;
     final resp = await _send(req);
-    _checkStatus(resp, {202});
+    // 409 is success here for the same reason as in [sendMessage].
+    _checkStatus(resp, {202, 409});
   }
 
   Future<List<MessageResponse>> listMessages(DeviceCredentials creds) async {

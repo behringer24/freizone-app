@@ -94,12 +94,41 @@ Retries are safe on the wire — delivery is already at-least-once and the
 receiver de-duplicates by message id (SRV-03) — so a re-POST cannot produce a
 duplicate for the peer.
 
+**The first device test found it inert, and why is worth recording.** Making
+the *model* persist unsent messages did nothing, because no code path ever
+saved at a moment when a message was unsent: `_deliver` called `saveProfile`
+only after a successful send, and `sendMessage` explicitly did not save at all
+(the comment there still said an unsent message was session-only). So the outbox
+had nothing to retry from.
+
+It was invisible rather than merely inert because of
+`_reloadVolatileStateFromDisk`, which replaces `conversations` wholesale with
+the disk copy whenever the app is resumed — correct for its own purpose, since
+a frozen isolate cannot hold anything newer than disk, but it means a
+memory-only message is not just unsaved, it is actively erased on the next
+resume. Turning airplane mode off involves leaving and re-entering the app, so
+the failed bubble vanished exactly when the user went to make it succeed.
+
+Three saves fix it: at compose, when a retry starts, and when a send fails. The
+failure save is best-effort and never masks the original error.
+
+**Retries are idempotent now, which they were not.** `_encryptAndSend` minted a
+fresh random wire `message_id` per attempt, so a POST that actually arrived but
+whose response was lost would be delivered a second time by the retry. A real
+message now passes its own stable `StoredMessage` id, and `409 message_exists`
+counts as success rather than failure — it says the peer already has it. That
+also makes the resume race self-correcting: if a resume replaces an in-flight
+message with the disk copy while the original send completes against the
+orphaned object, the retry hits the 409 and settles as delivered instead of
+sending twice.
+
 **Not covered by tests, and worth saying plainly.** The model half is: what
 gets persisted, and that a pending message restores as failed. The runtime half
-— the flush firing on reconnect, and the picture actually being read back from
-disk — is not, because nothing in this suite constructs an `AppSession` or a
-`MediaStore`, and building that harness is a larger change than the feature.
-Those two paths want a run on a real device.
+— the flush firing on reconnect, the picture read back from disk, and the three
+saves above — is not, because nothing in this suite constructs an `AppSession`
+or a `MediaStore`, and building that harness is a larger change than the
+feature. That is precisely why the first device test found a feature that had
+passed every test and did nothing.
 
 No server work: send is a plain authenticated `POST`, and nothing here changes
 the protocol.

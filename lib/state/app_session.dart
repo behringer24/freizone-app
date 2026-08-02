@@ -2080,9 +2080,15 @@ class AppSession extends ChangeNotifier {
 
     convo.messages.add(message);
     convo.lastActivityAt = now;
-    // Not persisted yet -- an unsent message is deliberately session-only
-    // (see Conversation.toJson); this is purely so the bubble paints now.
     notifyListeners();
+
+    // Persisted BEFORE the network is touched (APP-08 step 2). Anything held
+    // only in memory is lost the moment the app is backgrounded, because
+    // _reloadVolatileStateFromDisk replaces conversations wholesale with the
+    // disk copy on resume -- so a message that exists only in memory while its
+    // send is in flight simply vanishes, which is exactly what happened before
+    // this line existed.
+    await LocalStateStore.saveProfile(state);
 
     await _deliver(convo, message, attachment);
   }
@@ -2107,6 +2113,9 @@ class AppSession extends ChangeNotifier {
     message.sendState = MessageSendState.pending;
     message.sendError = null;
     notifyListeners();
+    // Same reason as in sendMessage: in flight is a state that has to survive
+    // being backgrounded, since resuming re-reads conversations from disk.
+    await LocalStateStore.saveProfile(state);
 
     await _deliver(convo, message, attachment);
   }
@@ -2227,20 +2236,29 @@ class AppSession extends ChangeNotifier {
         sentAt: message.timestamp,
       );
 
-      await _encryptAndSend(convo, content.encode());
+      await _encryptAndSend(convo, content.encode(), messageId: message.id);
     } catch (e) {
       message.sendState = MessageSendState.failed;
       message.sendError = describeError(e);
       lastError = 'send failed: ${describeError(e)}';
       notifyListeners();
+      // The failure is persisted too, or the outbox has nothing to retry
+      // from: without this the message is memory-only and the next resume
+      // drops it (see _reloadVolatileStateFromDisk). Saving must not mask
+      // the original error, so it is best-effort and the rethrow stands.
+      try {
+        await LocalStateStore.saveProfile(state);
+      } catch (_) {
+        // Nothing useful to do: the send already failed, and the caller is
+        // about to hear about that.
+      }
       rethrow;
     }
 
     message.sendState = MessageSendState.sent;
     message.sendError = null;
     _outgoingAttachments.remove(message.id);
-    // First save of this message: Conversation.toJson skips anything not
-    // yet sent, so until now it existed only in memory.
+    _outboxAttempts.remove(message.id);
     await LocalStateStore.saveProfile(state);
 
     lastError = null;
@@ -2290,7 +2308,18 @@ class AppSession extends ChangeNotifier {
   /// decide what, if anything, becomes locally visible; a receipt should
   /// stay invisible and shouldn't bump the conversation to the top of the
   /// chat list, unlike a real sent message.
-  Future<void> _encryptAndSend(Conversation convo, Uint8List plaintext) {
+  ///
+  /// [messageId] is the id the *server* de-duplicates by. A real message
+  /// passes its own stable StoredMessage id, so re-sending after a failure
+  /// cannot deliver a second copy: the server answers `409` and the client
+  /// treats that as delivered (see ApiClient.sendMessage). A receipt has no
+  /// stored identity and gets a fresh random one, which is fine -- a repeated
+  /// receipt is a no-op for the peer.
+  Future<void> _encryptAndSend(
+    Conversation convo,
+    Uint8List plaintext, {
+    String? messageId,
+  }) {
     // Outbound federation guard: a federated conversation whose home server
     // now has federation disabled is a dead end (replies blocked inbound), so
     // stop sending -- covers both real messages and receipts. Already received
@@ -2305,6 +2334,7 @@ class AppSession extends ChangeNotifier {
     // same peer close together (e.g. a "delivered" receipt immediately
     // followed by a "read" one) must never both read the ratchet session
     // before either has written its advanced state back.
+    final wireMessageId = messageId ?? _randomHex(16);
     return _withPeerSessionLock(convo.peerAccountId, () async {
       final (session, initial) = await _getOrCreateCryptoSession(convo);
       final enc = core.sessionEncrypt(session: session, plaintext: plaintext);
@@ -2318,7 +2348,7 @@ class AppSession extends ChangeNotifier {
       if (convo.peerServer == null) {
         await api.sendMessage(
           creds: state.credentials,
-          messageId: _randomHex(16),
+          messageId: wireMessageId,
           recipientDeviceId: convo.peerDeviceId!,
           payload: payload,
         );
@@ -2339,7 +2369,7 @@ class AppSession extends ChangeNotifier {
           rootPub: state.rootPub,
           senderAccountId: state.accountId,
           cert: cert,
-          messageId: _randomHex(16),
+          messageId: wireMessageId,
           recipientDeviceId: convo.peerDeviceId!,
           payload: payload,
         );

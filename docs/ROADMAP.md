@@ -111,6 +111,13 @@ optimistic — the message appears immediately and shows its own state.
   transition back from unreachable, bounded at three automatic attempts. The
   runtime half — flush on reconnect, picture recovery — has no test coverage
   and wants a run on a real device
+- 2026-08-02 — the first device test found it inert: nothing ever saved while a
+  message was unsent, so the outbox had nothing to retry from, and
+  `_reloadVolatileStateFromDisk` then erased the memory-only bubble on the next
+  resume. Fixed by saving at compose, at retry and on failure. Retries are also
+  idempotent now — a stable wire `message_id` per message plus treating `409`
+  as delivered, where before every attempt minted a fresh id and could deliver
+  twice
 
 ### APP-09 — New-user onboarding guidance
 Status: `planned`
