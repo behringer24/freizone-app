@@ -55,7 +55,11 @@ class FreizoneCoreBindings {
       restoreIdentityFromSeed = _lookupWithReq(lib, 'RestoreIdentityFromSeed'),
       recoveryWordlist = _lookupNoArg(lib, 'RecoveryWordlist'),
       encryptBlob = _lookupWithReq(lib, 'EncryptBlob'),
-      decryptBlob = _lookupWithReq(lib, 'DecryptBlob');
+      decryptBlob = _lookupWithReq(lib, 'DecryptBlob'),
+      groupCreate = _lookupWithReq(lib, 'GroupCreate'),
+      groupSignEvent = _lookupWithReq(lib, 'GroupSignEvent'),
+      groupApplyEvents = _lookupWithReq(lib, 'GroupApplyEvents'),
+      groupResolveState = _lookupWithReq(lib, 'GroupResolveState');
 
   factory FreizoneCoreBindings.open() {
     final lib = Platform.isAndroid
@@ -94,4 +98,8 @@ class FreizoneCoreBindings {
   final NoArgFn recoveryWordlist;
   final WithReqFn encryptBlob;
   final WithReqFn decryptBlob;
+  final WithReqFn groupCreate;
+  final WithReqFn groupSignEvent;
+  final WithReqFn groupApplyEvents;
+  final WithReqFn groupResolveState;
 }

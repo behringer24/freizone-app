@@ -350,3 +350,188 @@ class EncryptedBlob {
   /// computed in the core, which already holds the bytes.
   final String digest;
 }
+
+// --- Groups (APP-16) --------------------------------------------------------
+
+/// This account's own identity, as every group operation that signs
+/// something needs all of it: who is acting, the device key that signs, and
+/// the root key both to certify that device and -- for a founder -- to
+/// re-derive the group root key.
+class GroupIdentity {
+  const GroupIdentity({
+    required this.accountId,
+    required this.rootPub,
+    required this.rootPriv,
+    required this.deviceId,
+    required this.devicePub,
+    required this.devicePriv,
+  });
+
+  final String accountId;
+  final Uint8List rootPub;
+  final Uint8List rootPriv;
+  final String deviceId;
+  final Uint8List devicePub;
+  final Uint8List devicePriv;
+
+  Map<String, dynamic> toJson() => {
+    'account_id': accountId,
+    'root_pub': encodeB64(rootPub),
+    'root_priv': encodeB64(rootPriv),
+    'device_id': deviceId,
+    'device_pub': encodeB64(devicePub),
+    'device_priv': encodeB64(devicePriv),
+  };
+}
+
+/// One member's standing in a group.
+class GroupMember {
+  const GroupMember({
+    required this.accountId,
+    required this.server,
+    required this.role,
+    required this.joined,
+    required this.addedAt,
+  });
+
+  factory GroupMember.fromJson(Map<String, dynamic> j) => GroupMember(
+    accountId: j['account_id'] as String,
+    server: j['server'] as String? ?? '',
+    role: j['role'] as String? ?? 'none',
+    joined: j['joined'] as bool? ?? false,
+    addedAt: decodeTime(j['added_at'] as String),
+  );
+
+  final String accountId;
+
+  /// Their home server. Needed by everyone, since a group message is
+  /// delivered to each member individually.
+  final String server;
+
+  /// "founder" · "admin" · "moderator" · "member". A string rather than a
+  /// number, so the wire's rank values stay inside the core.
+  final String role;
+
+  /// False for an invitee who has not accepted yet. They are shown, so a
+  /// moderator can see the invitation is outstanding, but nothing is sent to
+  /// them: being added must not disclose their address to the group before
+  /// they agree to it.
+  final bool joined;
+
+  final DateTime addedAt;
+
+  bool get isFounder => role == 'founder';
+  bool get isAdmin => role == 'admin' || isFounder;
+  bool get isModerator => role == 'moderator' || isAdmin;
+}
+
+/// The current membership, folded from the fact set by the core.
+class GroupResolved {
+  const GroupResolved({
+    required this.groupId,
+    required this.founder,
+    required this.name,
+    required this.topic,
+    required this.members,
+    required this.dissolved,
+  });
+
+  factory GroupResolved.fromJson(Map<String, dynamic> j) => GroupResolved(
+    groupId: j['group_id'] as String? ?? '',
+    founder: j['founder'] as String? ?? '',
+    name: j['name'] as String? ?? '',
+    topic: j['topic'] as String? ?? '',
+    members: ((j['members'] as List<dynamic>?) ?? const [])
+        .map((m) => GroupMember.fromJson(m as Map<String, dynamic>))
+        .toList(),
+    dissolved: j['dissolved'] as bool? ?? false,
+  );
+
+  final String groupId;
+  final String founder;
+  final String name;
+  final String topic;
+  final List<GroupMember> members;
+  final bool dissolved;
+
+  GroupMember? memberById(String accountId) {
+    for (final m in members) {
+      if (m.accountId == accountId) return m;
+    }
+    return null;
+  }
+
+  String roleOf(String accountId) => memberById(accountId)?.role ?? 'none';
+}
+
+/// One event a peer sent that could not be admitted, and why.
+class GroupRejection {
+  const GroupRejection({required this.index, required this.id, required this.reason});
+
+  factory GroupRejection.fromJson(Map<String, dynamic> j) => GroupRejection(
+    index: (j['index'] as num?)?.toInt() ?? -1,
+    id: j['id'] as String? ?? '',
+    reason: j['reason'] as String? ?? 'unknown',
+  );
+
+  /// Position in the submitted batch -- the only handle on an event whose id
+  /// could not even be computed.
+  final int index;
+  final String id;
+  final String reason;
+
+  /// True while this event is merely not admissible *yet*: it arrived before
+  /// the genesis it depends on, which is routine, since delivery is
+  /// unordered. Worth holding and retrying, unlike a bad signature.
+  bool get isPremature => reason == 'no genesis event yet';
+}
+
+/// What every group call returns: the opaque state blob to persist, plus the
+/// view derived from it.
+///
+/// [state] is deliberately not modelled. It is the signed fact set, and only
+/// the core interprets it -- exactly as with a ratchet session. Keeping it
+/// opaque is what guarantees this client cannot fold a group into a state
+/// that disagrees with what another client computes from the same facts.
+class GroupStateResult {
+  const GroupStateResult({
+    required this.groupId,
+    required this.state,
+    required this.stateHash,
+    required this.resolved,
+    required this.applied,
+    required this.known,
+    required this.rejected,
+  });
+
+  factory GroupStateResult.fromJson(Map<String, dynamic> j) => GroupStateResult(
+    groupId: j['group_id'] as String? ?? '',
+    state: j['state'] as Map<String, dynamic>? ?? const {},
+    stateHash: j['state_hash'] as String? ?? '',
+    resolved: GroupResolved.fromJson(
+      j['resolved'] as Map<String, dynamic>? ?? const {},
+    ),
+    applied: ((j['applied'] as List<dynamic>?) ?? const []).cast<String>(),
+    known: ((j['known'] as List<dynamic>?) ?? const []).cast<String>(),
+    rejected: ((j['rejected'] as List<dynamic>?) ?? const [])
+        .map((r) => GroupRejection.fromJson(r as Map<String, dynamic>))
+        .toList(),
+  );
+
+  final String groupId;
+  final Map<String, dynamic> state;
+
+  /// The fingerprint that rides on every group message, so a peer can tell
+  /// without exchanging anything that the two of us are missing each other's
+  /// facts.
+  final String stateHash;
+
+  final GroupResolved resolved;
+
+  /// Ids of events this call newly admitted, ones it already had, and ones it
+  /// refused. Re-delivering a fact is routine rather than an error -- the same
+  /// snapshot arrives from several members.
+  final List<String> applied;
+  final List<String> known;
+  final List<GroupRejection> rejected;
+}

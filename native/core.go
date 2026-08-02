@@ -184,4 +184,27 @@ func DecryptBlob(cReq *C.char) *C.char {
 	return jsonCall(cReq, doDecryptBlob)
 }
 
+// Groups (SRV-01 / APP-16). The state blob these pass back and forth is
+// opaque to the caller -- see group.go for why that matters.
+
+//export GroupCreate
+func GroupCreate(cReq *C.char) *C.char {
+	return jsonCall(cReq, doGroupCreate)
+}
+
+//export GroupSignEvent
+func GroupSignEvent(cReq *C.char) *C.char {
+	return jsonCall(cReq, doGroupSignEvent)
+}
+
+//export GroupApplyEvents
+func GroupApplyEvents(cReq *C.char) *C.char {
+	return jsonCall(cReq, doGroupApplyEvents)
+}
+
+//export GroupResolveState
+func GroupResolveState(cReq *C.char) *C.char {
+	return jsonCall(cReq, doGroupResolveState)
+}
+
 func main() {}
