@@ -123,6 +123,31 @@ write profile: ~80 KB that changes rarely.
 - Deleting a group deletes both, and `sweepOrphanedMedia` already covers the
   attachment files.
 
+**Shipped 2026-08-02** as `groups/<account id>/<group id>.json` — per account,
+matching how media is already laid out, since one device holds several
+accounts. A damaged or unreadable group file is treated as absent rather than
+fatal: the fact set is grow-only and any member can hand back a full snapshot,
+so the cost is a re-sync, and refusing to start an account over one group's
+file would be far worse.
+
+Two things the wiring settled:
+
+**Exactly one derived value is cached outside the fact set**, and it has one
+writer. A chat-list row needs a title, and folding every group's file to draw
+the list would be absurd — so the folded name is copied onto the transcript
+whenever the fact set changes, together with whether this account's own
+invitation is still outstanding. Everything else the UI needs comes from
+`GroupResolveState` at the moment it is asked. A second copy of the membership
+here would be a cache that can disagree with the signed truth, which is the one
+thing the split exists to prevent.
+
+**`sweepOrphanedMedia` had to learn about groups.** It collects the message ids
+that still exist and deletes every media file not among them; iterating only
+one-to-one conversations would have swept away the pictures of every group
+message on the next startup. It now walks `AppSession.chats`, which is both
+kinds. The same reasoning applies to account deletion, which now removes the
+group directory alongside the profile and the media.
+
 ## Sending: fan-out over a durable outbox
 
 **APP-08 step 2 is a hard prerequisite, not a nice-to-have.** A fan-out that
@@ -323,7 +348,9 @@ unbound:
    `native/group.go`, cgo-free like the rest of the logic so it tests on the
    host; the exports verified present in the cross-compiled `.so` for both
    ABIs.
-4. Group state store and persistence, still no UI.
+4. **Group state store and persistence — done 2026-08-02**, still no UI.
+   `GroupConversation`, `GroupStateStore`, `AppState.groups`, and the local
+   operations on `AppSession` (create, sign, apply, delete).
 5. Send/receive path, fan-out, batch, receipts.
 6. UI.
 7. A federated group across both local instances, end to end.

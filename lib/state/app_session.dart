@@ -29,6 +29,8 @@ import '../util/freizone_address.dart';
 import '../util/server_url.dart';
 import 'app_settings.dart';
 import 'conversation.dart';
+import 'group_conversation.dart';
+import 'group_store.dart';
 import 'media_store.dart';
 import 'message_content.dart';
 import 'outgoing_attachment.dart';
@@ -807,9 +809,23 @@ class AppSession extends ChangeNotifier {
   Conversation? conversation(String peerAccountId) =>
       state.conversations[peerAccountId];
 
-  /// True if any conversation in this account has an unread message --
-  /// drives the account switcher's notification dot.
-  bool get hasAnyUnread => state.conversations.values.any((c) => c.hasUnread);
+  /// Every chat, one-to-one and group alike, newest-activity-first. What a
+  /// chat list renders: groups sit in the one list rather than behind a tab,
+  /// so there is exactly one place that answers "what is new".
+  List<ChatTarget> get chats {
+    final list = <ChatTarget>[
+      ...state.conversations.values,
+      ...state.groups.values,
+    ];
+    list.sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
+    return list;
+  }
+
+  /// True if any chat in this account has an unread message -- drives the
+  /// account switcher's notification dot.
+  bool get hasAnyUnread =>
+      state.conversations.values.any((c) => c.hasUnread) ||
+      state.groups.values.any((g) => g.hasUnread);
 
   /// The peer whose ChatScreen is currently on screen, if any -- an
   /// incoming message from them is never marked unread, since the user
@@ -987,6 +1003,10 @@ class AppSession extends ChangeNotifier {
     // message points at any more, so nothing depends on it finishing.
     unawaited(sweepOrphanedMedia());
     unawaited(refreshRegistrationPolicy());
+    // Group fact sets live in their own files, so they are read separately
+    // from the profile. Not awaited: a group that fails to load costs a
+    // re-sync, never a startup.
+    unawaited(loadGroupStates());
     unawaited(_registerPush());
     // Anything composed but never sent -- in this run or a previous one --
     // gets its first automatic attempt here (APP-08 step 2). Not awaited:
@@ -1613,9 +1633,12 @@ class AppSession extends ChangeNotifier {
   Future<void> sweepOrphanedMedia() async {
     try {
       final media = await MediaStore.instance();
+      // Every chat, groups included -- a group message's picture is stored
+      // exactly like a one-to-one one, and leaving groups out of this would
+      // sweep away pictures that are still on screen.
       final live = <String>{};
-      for (final convo in state.conversations.values) {
-        for (final m in convo.messages) {
+      for (final chat in chats) {
+        for (final m in chat.messages) {
           if (m.hasAttachments) live.add(m.id);
         }
       }
@@ -1623,6 +1646,166 @@ class AppSession extends ChangeNotifier {
     } catch (_) {
       // Housekeeping only -- never worth surfacing or retrying.
     }
+  }
+
+  // --- Groups (APP-16) -----------------------------------------------------
+  //
+  // The fact set of each group is an opaque blob produced by the native core
+  // and stored in its own file. Nothing here interprets it; this layer holds
+  // it, hands it back, and keeps the transcript beside it. Sending and
+  // receiving come next -- everything below is local.
+
+  /// Folded views, keyed by group id, kept in step with the files on disk.
+  ///
+  /// Cached because folding is not free and the chat list asks constantly, and
+  /// safe to cache because it is refreshed on the one path that can change a
+  /// group: [_storeGroupState].
+  final Map<String, GroupStateResult> _groupStates = {};
+
+  GroupStateResult? groupState(String groupId) => _groupStates[groupId];
+
+  GroupConversation? group(String groupId) => state.groups[groupId];
+
+  /// This account's identity, in the shape every signing call over the FFI
+  /// boundary expects.
+  GroupIdentity get _groupIdentity => GroupIdentity(
+    accountId: state.accountId,
+    rootPub: state.rootPub,
+    rootPriv: state.rootPriv,
+    deviceId: state.deviceId,
+    devicePub: state.devicePub,
+    devicePriv: state.devicePriv,
+  );
+
+  /// Reads every group's fact set back at startup.
+  ///
+  /// A group whose file is missing or damaged is skipped rather than fatal:
+  /// the fact set is grow-only and any member can hand back a full snapshot,
+  /// so the cost is a re-sync, and refusing to start an account over one
+  /// group's file would be far worse.
+  Future<void> loadGroupStates() async {
+    final blobs = await GroupStateStore.loadAll(state.accountId);
+    for (final entry in blobs.entries) {
+      try {
+        _groupStates[entry.key] = core.groupResolveState(entry.value);
+      } catch (e) {
+        lastError = 'group ${entry.key} failed to load: ${describeError(e)}';
+      }
+    }
+    _refreshGroupNames();
+    notifyListeners();
+  }
+
+  /// Founds a group. Local only: nobody else knows about it until somebody is
+  /// invited.
+  Future<GroupConversation> createGroup({String name = '', String topic = ''}) async {
+    final result = core.groupCreate(
+      identity: _groupIdentity,
+      server: state.server,
+      name: name,
+      topic: topic,
+    );
+
+    final conversation = GroupConversation(groupId: result.groupId);
+    state.groups[result.groupId] = conversation;
+    await _storeGroupState(result);
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+    return conversation;
+  }
+
+  /// Signs one group event with this account's identity, ready to be applied
+  /// and sent on. Which key signs it is the core's decision, not ours.
+  Map<String, dynamic> signGroupEvent({
+    required String groupId,
+    required String type,
+    String subject = '',
+    String server = '',
+    String role = '',
+    String name = '',
+    String topic = '',
+  }) {
+    final current = _groupStates[groupId];
+    if (current == null) throw StateError('no group state for $groupId');
+    return core.groupSignEvent(
+      identity: _groupIdentity,
+      state: current.state,
+      type: type,
+      subject: subject,
+      server: server,
+      role: role,
+      name: name,
+      topic: topic,
+    );
+  }
+
+  /// Merges events into a group's fact set, whether our own or a peer's, and
+  /// persists the result.
+  ///
+  /// [groupId] may name a group this device has never heard of -- that is how
+  /// an invitation arrives, as a snapshot carrying the genesis. Rejected
+  /// events are reported back rather than thrown: a snapshot from a hostile
+  /// peer must cost only its bad entries.
+  Future<GroupStateResult> applyGroupEvents(
+    String groupId,
+    List<Map<String, dynamic>> events,
+  ) async {
+    final result = core.groupApplyEvents(
+      state: _groupStates[groupId]?.state ?? const <String, dynamic>{},
+      events: events,
+    );
+    // The blob decides its own id: a snapshot for an unknown group carries the
+    // genesis, and the id follows from the key in it rather than from whatever
+    // the sender claimed.
+    final id = result.groupId.isEmpty ? groupId : result.groupId;
+
+    state.groups.putIfAbsent(id, () => GroupConversation(groupId: id));
+    await _storeGroupState(result, groupId: id);
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+    return result;
+  }
+
+  /// Forgets a group locally: its facts, its transcript and its pictures.
+  ///
+  /// Purely local, like deleting a one-to-one conversation. Leaving a group so
+  /// the other members know is a signed event, and a different thing.
+  Future<void> deleteGroup(String groupId) async {
+    _groupStates.remove(groupId);
+    state.groups.remove(groupId);
+    await GroupStateStore.delete(state.accountId, groupId);
+    await _deleteChatMedia(groupId);
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+  }
+
+  Future<void> _storeGroupState(GroupStateResult result, {String? groupId}) async {
+    final id = groupId ?? result.groupId;
+    if (id.isEmpty) return;
+    _groupStates[id] = result;
+    _refreshGroupName(id);
+    await GroupStateStore.save(state.accountId, id, result.state);
+  }
+
+  void _refreshGroupNames() {
+    for (final id in state.groups.keys) {
+      _refreshGroupName(id);
+    }
+  }
+
+  /// Copies the folded name onto the transcript, so a chat-list row can be
+  /// drawn without opening every group's file. The one derived value kept
+  /// outside the fact set, and it has exactly one writer.
+  void _refreshGroupName(String groupId) {
+    final conversation = state.groups[groupId];
+    final resolved = _groupStates[groupId]?.resolved;
+    if (conversation == null || resolved == null) return;
+    conversation.displayName = resolved.name.isEmpty ? null : resolved.name;
+
+    // An invitation this account has not accepted yet: listed, but nothing is
+    // sent to us and we send nothing into it.
+    final me = resolved.memberById(state.accountId);
+    conversation.invitePending = me != null && !me.joined;
   }
 
   /// Encrypts an outgoing attachment and uploads it to the RECIPIENT's
