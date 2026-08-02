@@ -253,7 +253,15 @@ over APP-08's outbox, and the group UI.
   per recipient carrying its own random stable wire id and delivery state, and
   a retry that addresses only the copies that never arrived. A member removed
   while a copy was queued no longer receives it
-- **Open** — the receive path, then batch delivery and group attachments, then
-  the UI. Two things must not be lost, both in the design document:
-  simultaneous X3DH establishment, and holding control envelopes that arrive
-  out of order
+- **Open**, in the order they are likely to be done:
+  - the receive path — `v: 4` into the transcript with the `state_hash`
+    comparison, `v: 5` applied without being stored or notified, holding
+    control envelopes that arrive out of order, and **simultaneous X3DH
+    establishment**, which this app does not handle at all today (see the
+    receiving section of the design document; the reference client found it)
+  - **group receipts** — designed but unbuilt. `GroupConversation` already has
+    the per-member watermark maps and the wire needs nothing new, but nothing
+    sends or reads a `v: 2` receipt in a group yet
+  - **batch delivery** in the fan-out, and **attachments in a group** (one
+    upload per distinct recipient server)
+  - the UI
