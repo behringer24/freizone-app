@@ -13,6 +13,7 @@ import 'dart:typed_data';
 import '../ffi/models.dart';
 import '../util/freizone_address.dart';
 import 'chat_target.dart';
+import 'peer_endpoint.dart';
 
 export 'chat_target.dart';
 
@@ -20,11 +21,11 @@ export 'chat_target.dart';
 /// locally persisted message history with them.
 class Conversation extends ChatTarget {
   Conversation({
-    required this.peerAccountId,
+    required String peerAccountId,
     super.displayName,
-    this.peerServer,
-    this.peerDeviceId,
-    this.peerDevicePubKey,
+    String? peerServer,
+    String? peerDeviceId,
+    Uint8List? peerDevicePubKey,
     super.messages,
     super.lastActivityAt,
     super.hasUnread,
@@ -35,7 +36,12 @@ class Conversation extends ChatTarget {
     this.peerReadUpTo,
     this.sentDeliveredReceiptUpTo,
     this.sentReadReceiptUpTo,
-  });
+  }) : peer = PeerEndpoint(
+         accountId: peerAccountId,
+         server: peerServer,
+         deviceId: peerDeviceId,
+         devicePubKey: peerDevicePubKey,
+       );
 
   factory Conversation.fromJson(Map<String, dynamic> j) => Conversation(
     peerAccountId: j['peer_account_id'] as String,
@@ -69,12 +75,17 @@ class Conversation extends ChatTarget {
         : decodeTime(j['sent_read_receipt_up_to'] as String),
   );
 
-  final String peerAccountId;
+  /// How to reach this peer -- the same object a group fan-out uses for a
+  /// member (see peer_endpoint.dart). Held rather than inlined so both kinds
+  /// of chat share one delivery path, and one device resolution.
+  final PeerEndpoint peer;
+
+  String get peerAccountId => peer.accountId;
 
   /// The peer's account id doubles as this chat's local key -- there is
   /// exactly one conversation per peer.
   @override
-  String get id => peerAccountId;
+  String get id => peer.accountId;
 
   /// This peer's home server, normalized (see server_url.dart), if it's
   /// on a DIFFERENT server than this session's own -- null means "same
@@ -82,9 +93,14 @@ class Conversation extends ChatTarget {
   /// conversation, and kept fresh on every incoming message that carries
   /// one (see AppSession._handleIncoming and message_content.dart's
   /// senderServer) so it self-heals if local state is ever lost.
-  String? peerServer;
-  String? peerDeviceId;
-  Uint8List? peerDevicePubKey;
+  String? get peerServer => peer.server;
+  set peerServer(String? value) => peer.server = value;
+
+  String? get peerDeviceId => peer.deviceId;
+  set peerDeviceId(String? value) => peer.deviceId = value;
+
+  Uint8List? get peerDevicePubKey => peer.devicePubKey;
+  set peerDevicePubKey(Uint8List? value) => peer.devicePubKey = value;
 
   /// True once this peer is blocked -- purely local (see
   /// AppSession.setBlocked): further incoming messages are decrypted

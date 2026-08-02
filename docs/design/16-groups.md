@@ -168,6 +168,16 @@ The rest follows:
 - **One outbox item per (message_id, recipient device)**, so progress is k/N, a
   partial fan-out is visible rather than silent, and a retry can address the
   failed recipients alone (see the delivery sheet under "UI").
+- **Each copy needs its own wire message id, and it must be stable.** APP-08
+  step 2 made a retry re-use the message's id so the server's `409` means
+  "already delivered" instead of a double send. In a group that same id cannot
+  be re-used across recipients: two members on the same server would collide,
+  the second copy would be answered `409`, and this client would record it as
+  delivered to someone who never got it. So the id is per recipient — and
+  deliberately not `message id + account id`, which would let a server (or two
+  servers comparing notes) recognise N copies as one group message. A random id
+  per recipient, kept with that recipient's outbox item so a retry re-uses it,
+  gives idempotency without the linkage.
 - **Batch where possible**: group the items by recipient server and use
   `POST /v1/messages/batch` (or the federated variant) where that server's
   `GET /v1/server-status` advertises `batch_messages`, falling back to
@@ -363,15 +373,14 @@ unbound:
    (2026-08-02): `v: 4` and `v: 5`, encode and decode, fully tested. What
    remains is the plumbing on either side of it.
 
-   One thing that plumbing has to settle, and which is not obvious: a group
-   member is reachable in exactly the way a one-to-one peer is, and the ratchet
-   session is literally the same one (`AppState.sessions` is keyed by peer
-   account id, and pairwise fan-out means a group message to Ben rides Ben's
-   own session). But the peer *endpoint* — device id, device key, home server —
-   currently lives on `Conversation`, so a fan-out either creates a
-   one-to-one conversation per member, which would litter the chat list, or
-   `_encryptAndSend` stops taking a `Conversation` and takes the endpoint
-   instead. The second is the right shape and belongs in this phase.
+   The **peer endpoint is extracted** (2026-08-02): `PeerEndpoint` holds the
+   account id, home server and resolved device, `Conversation` owns one and
+   forwards its old field names to it, and the send core
+   (`_encryptAndSend`, `_getOrCreateCryptoSession`, the federation guard) takes
+   an endpoint rather than a conversation. A fan-out can now reach a member
+   without inventing a one-to-one conversation to litter the chat list with —
+   and reaches them over the very same ratchet a one-to-one chat would use,
+   since sessions are keyed by account id either way.
 6. UI.
 7. A federated group across both local instances, end to end.
 

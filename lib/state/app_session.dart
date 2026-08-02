@@ -34,6 +34,7 @@ import 'group_store.dart';
 import 'media_store.dart';
 import 'message_content.dart';
 import 'outgoing_attachment.dart';
+import 'peer_endpoint.dart';
 import 'local_state.dart';
 import 'receipt_signal.dart';
 import 'rekey_signal.dart';
@@ -708,7 +709,17 @@ class AppSession extends ChangeNotifier {
   /// keep sending into a dead end. Only sending is affected -- already
   /// received messages stay readable.
   bool federationLocked(Conversation convo) =>
-      convo.peerServer != null && !federationEnabled;
+      federationLockedFor(convo.peerServer);
+
+  /// Whether we may send to a peer on [server] at all. A federated peer whose
+  /// home server now has federation disabled is a dead end -- their replies
+  /// would be blocked inbound -- so sending stops. Reading what already
+  /// arrived is unaffected.
+  ///
+  /// Takes the server rather than a conversation, since a group member is
+  /// subject to the same rule and may not have one.
+  bool federationLockedFor(String? server) =>
+      server != null && !federationEnabled;
 
   /// Refreshes [myRole] and [adminAccounts] from the server. A 403 means
   /// this device is neither admin nor moderator -- not an error, just
@@ -2043,7 +2054,7 @@ class AppSession extends ChangeNotifier {
   Future<void> _sendRekeySignal(Conversation convo, RekeyReason reason) async {
     try {
       await _ensurePeerDeviceResolved(convo);
-      await _encryptAndSend(convo, RekeySignal(reason: reason).encode());
+      await _encryptAndSend(convo.peer, RekeySignal(reason: reason).encode());
       await LocalStateStore.saveProfile(state);
     } catch (e) {
       developer.log(
@@ -2097,13 +2108,17 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Returns the existing session with a conversation's peer, or
-  /// establishes a new one as X3DH initiator by claiming their prekey
-  /// bundle.
+  /// Returns the existing session with a peer, or establishes a new one as
+  /// X3DH initiator by claiming their prekey bundle.
+  ///
+  /// Takes an endpoint rather than a conversation because a group member is
+  /// reached the same way, and shares the very same session: pairwise fan-out
+  /// means a group message to Ben rides Ben's own ratchet, the one a
+  /// one-to-one chat with him would use.
   Future<(RatchetSessionJson, InitialMessage?)> _getOrCreateCryptoSession(
-    Conversation convo,
+    PeerEndpoint peer,
   ) async {
-    final existing = state.sessions[convo.peerAccountId];
+    final existing = state.sessions[peer.accountId];
     if (existing != null) return (existing, null);
 
     // Signed either way (SRV-04) -- an unauthenticated claim still returns a
@@ -2113,14 +2128,14 @@ class AppSession extends ChangeNotifier {
     // server authenticates by device id, one on another server by presenting
     // its whole certificate chain, since that server has never seen us.
     final PrekeyBundleResponse bundle;
-    if (convo.peerServer == null) {
+    if (peer.server == null) {
       bundle = await api.claimPrekeyBundle(
-        convo.peerDeviceId!,
+        peer.deviceId!,
         state.credentials,
       );
     } else {
-      bundle = await _clientFor(convo.peerServer).claimFederatedPrekeyBundle(
-        deviceId: convo.peerDeviceId!,
+      bundle = await _clientFor(peer.server).claimFederatedPrekeyBundle(
+        deviceId: peer.deviceId!,
         devicePriv: state.devicePriv,
         rootPub: state.rootPub,
         senderAccountId: state.accountId,
@@ -2142,32 +2157,32 @@ class AppSession extends ChangeNotifier {
     if (bundle.wasClaimedUnauthenticated) {
       developer.log(
         'server refused our prekey-bundle claim credentials for '
-        '${convo.peerAccountId}; session starts without a one-time prekey',
+        '${peer.accountId}; session starts without a one-time prekey',
         name: 'prekeys',
       );
     }
 
     final dhCert = DHIdentityCertificate(
-      accountId: convo.peerAccountId,
-      deviceId: convo.peerDeviceId!,
+      accountId: peer.accountId,
+      deviceId: peer.deviceId!,
       dhPubKey: bundle.dhIdentityPubKey,
       issuedAt: bundle.dhIdentityCert.issuedAt,
       signature: bundle.dhIdentityCert.signature,
     );
-    if (!core.verifyDHIdentityCertificate(dhCert, convo.peerDevicePubKey!)) {
+    if (!core.verifyDHIdentityCertificate(dhCert, peer.devicePubKey!)) {
       throw StateError('invalid dh identity certificate');
     }
 
     final spkCert = SignedPrekeyCertificate(
-      accountId: convo.peerAccountId,
-      deviceId: convo.peerDeviceId!,
+      accountId: peer.accountId,
+      deviceId: peer.deviceId!,
       keyId: bundle.signedPrekey.keyId,
       dhIdentityPubKey: bundle.signedPrekey.dhIdentityPubKey,
       prekeyPubKey: bundle.signedPrekey.pubKey,
       issuedAt: bundle.signedPrekey.issuedAt,
       signature: bundle.signedPrekey.signature,
     );
-    if (!core.verifySignedPrekeyCertificate(spkCert, convo.peerDevicePubKey!)) {
+    if (!core.verifySignedPrekeyCertificate(spkCert, peer.devicePubKey!)) {
       throw StateError('invalid signed prekey certificate');
     }
     if (!listEquals(
@@ -2190,7 +2205,7 @@ class AppSession extends ChangeNotifier {
       localDhIdentityPriv: state.dhIdentityPriv!,
       remote: remote,
     );
-    state.sessions[convo.peerAccountId] = result.session;
+    state.sessions[peer.accountId] = result.session;
     return (result.session, result.initial);
   }
 
@@ -2419,7 +2434,7 @@ class AppSession extends ChangeNotifier {
         sentAt: message.timestamp,
       );
 
-      await _encryptAndSend(convo, content.encode(), messageId: message.id);
+      await _encryptAndSend(convo.peer, content.encode(), messageId: message.id);
     } catch (e) {
       message.sendState = MessageSendState.failed;
       message.sendError = describeError(e);
@@ -2499,7 +2514,7 @@ class AppSession extends ChangeNotifier {
   /// stored identity and gets a fresh random one, which is fine -- a repeated
   /// receipt is a no-op for the peer.
   Future<void> _encryptAndSend(
-    Conversation convo,
+    PeerEndpoint peer,
     Uint8List plaintext, {
     String? messageId,
   }) {
@@ -2507,7 +2522,7 @@ class AppSession extends ChangeNotifier {
     // now has federation disabled is a dead end (replies blocked inbound), so
     // stop sending -- covers both real messages and receipts. Already received
     // messages remain readable; only sending is blocked.
-    if (federationLocked(convo)) {
+    if (federationLockedFor(peer.server)) {
       throw StateError(
         'Federation is turned off on your server, so you can\'t message '
         'contacts on other servers.',
@@ -2518,17 +2533,17 @@ class AppSession extends ChangeNotifier {
     // followed by a "read" one) must never both read the ratchet session
     // before either has written its advanced state back.
     final wireMessageId = messageId ?? _randomHex(16);
-    return _withPeerSessionLock(convo.peerAccountId, () async {
+    return _withPeerSessionLock(peer.accountId, () async {
       // Remembered so a failed POST can put the ratchet back where it was.
       // Encrypting advances the session, and committing that advance for a
       // message the peer never received burns a message number: they see a
       // gap, which their ratchet bridges only up to a bound before it counts
       // as a desync (SRV-03's too_many_skipped). Retrying used to widen that
       // gap on every attempt.
-      final previousSession = state.sessions[convo.peerAccountId];
-      final (session, initial) = await _getOrCreateCryptoSession(convo);
+      final previousSession = state.sessions[peer.accountId];
+      final (session, initial) = await _getOrCreateCryptoSession(peer);
       final enc = core.sessionEncrypt(session: session, plaintext: plaintext);
-      state.sessions[convo.peerAccountId] = enc.session;
+      state.sessions[peer.accountId] = enc.session;
 
       final payload = core.buildEnvelope(
         initial: initial,
@@ -2536,11 +2551,11 @@ class AppSession extends ChangeNotifier {
         ciphertext: enc.ciphertext,
       );
       try {
-        if (convo.peerServer == null) {
+        if (peer.server == null) {
           await api.sendMessage(
             creds: state.credentials,
             messageId: wireMessageId,
-            recipientDeviceId: convo.peerDeviceId!,
+            recipientDeviceId: peer.deviceId!,
             payload: payload,
           );
         } else {
@@ -2555,18 +2570,18 @@ class AppSession extends ChangeNotifier {
             issuedAt: DateTime.now().toUtc(),
             rootPriv: state.rootPriv,
           );
-          await _clientFor(convo.peerServer).sendFederatedMessage(
+          await _clientFor(peer.server).sendFederatedMessage(
             devicePriv: state.devicePriv,
             rootPub: state.rootPub,
             senderAccountId: state.accountId,
             cert: cert,
             messageId: wireMessageId,
-            recipientDeviceId: convo.peerDeviceId!,
+            recipientDeviceId: peer.deviceId!,
             payload: payload,
           );
         }
       } catch (_) {
-        _rollBackSession(convo.peerAccountId, previousSession);
+        _rollBackSession(peer.accountId, previousSession);
         rethrow;
       }
     });
@@ -2613,7 +2628,7 @@ class AppSession extends ChangeNotifier {
       if (!(await AppSettings.load()).readReceiptsEnabled) return;
       await _ensurePeerDeviceResolved(convo);
       await _encryptAndSend(
-        convo,
+        convo.peer,
         ReceiptSignal(status: status, upToSentAt: upToSentAt).encode(),
       );
       if (status == ReceiptStatus.read) {

@@ -243,8 +243,15 @@ over APP-08's outbox, and the group UI.
   and `v: 5` as `GroupControl` following the `RekeySignal` pattern. A
   one-to-one message stays byte-identical, and an older build still shows a
   neutral placeholder rather than misfiling a group message into a DM
-- **Open** — the send and receive plumbing around that wire layer, then the UI.
-  Three things must not be lost, all recorded in the design document:
-  simultaneous X3DH establishment, holding control envelopes that arrive out of
-  order, and moving the peer endpoint off `Conversation` so a fan-out does not
-  have to litter the chat list to reach a member
+- 2026-08-02 — the peer endpoint is out of `Conversation`: `PeerEndpoint` holds
+  the address half, the send core takes one instead of a conversation, and
+  `Conversation` forwards its old field names so no call site changed.
+  Behaviour-neutral by construction and measured that way. A fan-out can now
+  reach a group member without inventing a one-to-one conversation for them
+- **Open** — the fan-out itself and the receive path, then the UI. Three things
+  must not be lost, all recorded in the design document: simultaneous X3DH
+  establishment, holding control envelopes that arrive out of order, and that
+  each copy of a group message needs its own *random* stable wire id — reusing
+  one id would have two members on the same server collide on `409`, and
+  deriving it from the message id would let servers recognise the copies as one
+  message
