@@ -48,12 +48,17 @@ MessageSendState _sendStateFromJson(String? v) => switch (v) {
 /// Tolerant of anything unexpected, like the enum parse above: history
 /// written by an older build simply has no "attachments" key, and a
 /// malformed entry costs its own attachment rather than the whole message.
+///
+/// Decoded as `local`, because this is our own stored history: an outgoing
+/// picture still waiting to be sent has no blob id yet, and dropping it here
+/// would turn a queued photo into a text-only message when the outbox
+/// retries it.
 List<MessageAttachment> _attachmentsFromJson(dynamic raw) {
   if (raw is! List || raw.isEmpty) return const [];
   final out = <MessageAttachment>[];
   for (final entry in raw) {
     if (entry is! Map<String, dynamic>) continue;
-    final parsed = MessageAttachment.fromJson(entry);
+    final parsed = MessageAttachment.fromJson(entry, local: true);
     if (parsed != null) out.add(parsed);
   }
   return out;

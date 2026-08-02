@@ -112,6 +112,30 @@ the failed bubble vanished exactly when the user went to make it succeed.
 Three saves fix it: at compose, when a retry starts, and when a send fails. The
 failure save is best-effort and never masks the original error.
 
+**A queued picture was then lost on the retry**, arriving as text only — found
+by the same device test one round later. `MessageAttachment.fromJson` drops any
+entry with an empty `blob_id`, which is right for something off the wire (an
+attachment with no blob to fetch is malformed, and a broken image is worse than
+none) and wrong for our own history, where an empty blob id is exactly what an
+outgoing picture looks like before its upload has returned one. Persisting
+unsent messages made those entries reachable for the first time, so the guard
+started eating them. `fromJson` now takes a `local` flag: our own stored history
+tolerates the empty id, the wire path does not.
+
+Two consequences of the persistence fix worth noting together with it. The
+placeholder entry is what `_recoverAttachment` rebuilds the upload from, so
+losing it cost not just the reference but the mime type and dimensions as well.
+And `sweepOrphanedMedia` deletes files no message refers to — before unsent
+messages were persisted, a queued photo's own file was swept at the next
+startup, so even a correct retry would have found nothing on disk.
+
+**Replies were checked at the same time and were already fine.** `reply_to_id`,
+`reply_preview_text` and `reply_preview_mine` are all persisted and read back,
+and `_deliver` rebuilds the wire quote from them, flipping `mine` for the
+recipient's perspective as it always did. An empty preview text — a reply to a
+photo with no caption — is a real value rather than an absent one and survives
+as such. Tested now rather than assumed.
+
 **Retries are idempotent now, which they were not.** `_encryptAndSend` minted a
 fresh random wire `message_id` per attempt, so a POST that actually arrived but
 whose response was lost would be delivered a second time by the retry. A real
