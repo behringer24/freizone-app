@@ -137,10 +137,24 @@ class MessageAttachment {
   /// Parses one attachment entry, returning null if it is unusable (missing
   /// the blob reference or key). A malformed entry is dropped rather than
   /// failing the whole message -- the text still deserves to arrive.
-  static MessageAttachment? fromJson(Map<String, dynamic> j) {
+  ///
+  /// [local] relaxes exactly one rule, for entries read back from our OWN
+  /// stored history rather than off the wire: an empty `blob_id` is allowed.
+  /// That is what an outgoing picture looks like before its upload has
+  /// returned an id (see AppSession's placeholder attachment), and since
+  /// APP-08 step 2 an unsent message is persisted -- so dropping those
+  /// entries silently turned a queued photo into a text-only message on the
+  /// retry. From a peer the strict rule still holds: an entry with no blob to
+  /// fetch is malformed, and rendering a broken image is worse than dropping
+  /// it.
+  static MessageAttachment? fromJson(
+    Map<String, dynamic> j, {
+    bool local = false,
+  }) {
     final blobId = j['blob_id'] as String?;
     final keyB64 = j['key'] as String?;
-    if (blobId == null || blobId.isEmpty || keyB64 == null) return null;
+    if (blobId == null || keyB64 == null) return null;
+    if (!local && blobId.isEmpty) return null;
 
     Uint8List? decode(String? b64) {
       if (b64 == null) return null;

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -270,6 +271,87 @@ void main() {
       expect(restored.pendingApproval, isTrue);
       expect(restored.peerReadUpTo, convo.peerReadUpTo);
       expect(restored.sentReadReceiptUpTo, convo.sentReadReceiptUpTo);
+    });
+
+    test('a queued picture survives the round trip, blob id or not', () {
+      // What sendMessage puts in the transcript while the upload is still in
+      // flight: everything needed to render our own copy, but no blob
+      // reference yet -- the server assigns that. Dropping it on load turned
+      // a retried photo into a text-only message.
+      final convo = Conversation(peerAccountId: 'peer1');
+      convo.messages.add(
+        StoredMessage(
+          text: 'look at this',
+          mine: true,
+          timestamp: DateTime.utc(2026, 8, 2),
+          sendState: MessageSendState.failed,
+          attachments: [
+            MessageAttachment(
+              kind: 'image',
+              blobId: '',
+              key: Uint8List(0),
+              mimeType: 'image/jpeg',
+              byteSize: 4242,
+              width: 1600,
+              height: 1200,
+              thumb: Uint8List.fromList([1, 2, 3]),
+            ),
+          ],
+        ),
+      );
+
+      final restored = Conversation.fromJson(convo.toJson());
+      final attachment = restored.messages.single.attachments.single;
+      expect(attachment.blobId, isEmpty);
+      // The metadata is what _recoverAttachment rebuilds the upload from, so
+      // every field of it has to come back.
+      expect(attachment.mimeType, 'image/jpeg');
+      expect(attachment.byteSize, 4242);
+      expect(attachment.width, 1600);
+      expect(attachment.height, 1200);
+      expect(attachment.thumb, isNotNull);
+    });
+
+    test('a peer may still not send an attachment with no blob to fetch', () {
+      // The relaxed rule is for our own history only. Off the wire an entry
+      // with no blob id is malformed, and a broken image is worse than none.
+      final fromPeer = MessageContent.decode(
+        Uint8List.fromList(
+          utf8.encode(
+            '{"v":1,"id":"m1","text":"hi","attachments":'
+            '[{"kind":"image","blob_id":"","key":"","mime":"image/jpeg"}]}',
+          ),
+        ),
+        fallbackId: 'fallback',
+      );
+      expect(fromPeer.text, 'hi');
+      expect(fromPeer.attachments, isEmpty);
+    });
+
+    test('a reply keeps its quote across the round trip', () {
+      // The other half of what a retried message carries: _deliver rebuilds
+      // the wire quote from these three fields, so a restored reply that lost
+      // them would arrive as a plain message.
+      final convo = Conversation(peerAccountId: 'peer1');
+      convo.messages.add(
+        StoredMessage(
+          text: 'agreed',
+          mine: true,
+          timestamp: DateTime.utc(2026, 8, 2),
+          sendState: MessageSendState.failed,
+          replyToId: 'quoted-1',
+          // Empty is a real value here -- replying to a photo with no
+          // caption -- and must not be confused with absent.
+          replyPreviewText: '',
+          replyPreviewMine: false,
+        ),
+      );
+
+      final restored = Conversation.fromJson(convo.toJson()).messages.single;
+      expect(restored.isReply, isTrue);
+      expect(restored.replyToId, 'quoted-1');
+      expect(restored.replyPreviewText, '');
+      expect(restored.replyPreviewMine, isFalse);
     });
 
     test('senderAccountId is absent unless a message actually names one', () {

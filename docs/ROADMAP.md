@@ -118,6 +118,12 @@ optimistic — the message appears immediately and shows its own state.
   idempotent now — a stable wire `message_id` per message plus treating `409`
   as delivered, where before every attempt minted a fresh id and could deliver
   twice
+- 2026-08-02 — retry then lost the *picture*, arriving as text only:
+  `MessageAttachment.fromJson` drops an entry with an empty `blob_id`, which is
+  right off the wire and wrong for our own history, where that is precisely
+  what an outgoing picture looks like before its upload returns an id. Now
+  distinguished by a `local` flag. Replies were checked at the same time and
+  were already correct; there is a test for that now too
 
 ### APP-09 — New-user onboarding guidance
 Status: `planned`
