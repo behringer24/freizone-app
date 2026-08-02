@@ -11,6 +11,7 @@ import '../push/push_manager.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
+import '../state/group_conversation.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/unread_dot.dart';
@@ -20,6 +21,7 @@ import 'admin_screen.dart';
 import 'backup_screen.dart';
 import 'blocked_contacts_screen.dart';
 import 'chat_screen.dart';
+import 'group_chat_screen.dart';
 import 'invite_screen.dart';
 import 'my_address_screen.dart';
 import 'settings_screen.dart';
@@ -103,10 +105,83 @@ class _ChatListScreenState extends State<ChatListScreen> {
     }
   }
 
-  /// One chat-list row, shared between the "Message requests" section
-  /// and the regular list below -- both need the exact same tile, since
-  /// the preview text (e.g. a request's greeting, if any) is what
-  /// actually answers "who is this."
+  /// One chat-list row, for either kind of chat.
+  ///
+  /// Groups sit in the same list as one-to-one chats rather than behind a tab,
+  /// so there is exactly one place that answers "what is new" -- and the
+  /// horizontal swipe is already taken by switching accounts.
+  Widget _buildChatTile(
+    BuildContext context,
+    AppSession session,
+    ChatTarget chat,
+  ) => chat is GroupConversation
+      ? _buildGroupTile(context, session, chat)
+      : _buildConversationTile(context, session, chat as Conversation);
+
+  Widget _buildGroupTile(
+    BuildContext context,
+    AppSession session,
+    GroupConversation group,
+  ) {
+    return ListTile(
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // A group id is the same 21-character bech32m string an account id
+          // is, so the deterministic avatar colour works unchanged.
+          PeerAvatar(accountId: group.groupId, radius: 20),
+          if (group.hasUnread)
+            const Positioned(top: -2, right: -2, child: UnreadDot()),
+        ],
+      ),
+      title: Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: Icon(
+              Icons.group,
+              size: 16,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              group.titleFor(session.state.server),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+      subtitle: Text(
+        group.invitePending
+            ? 'You have been invited to this group'
+            : group.lastMessagePreview,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: group.invitePending
+            ? TextStyle(color: Theme.of(context).colorScheme.primary)
+            : null,
+      ),
+      trailing: Text(
+        _formatTimestamp(group.lastActivityAt),
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => GroupChatScreen(
+            session: session,
+            groupId: group.groupId,
+            settings: widget.settings,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Shared between the "Message requests" section and the regular list --
+  /// both need the exact same tile, since the preview text (a request's
+  /// greeting, if any) is what actually answers "who is this."
   Widget _buildConversationTile(
     BuildContext context,
     AppSession session,
@@ -310,6 +385,54 @@ class _ChatListScreenState extends State<ChatListScreen> {
     }
   }
 
+  /// Founds a group. Local only until somebody is invited -- there is no
+  /// server to register it with.
+  Future<void> _createGroup(BuildContext context) async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New group'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Group name'),
+          onSubmitted: (v) => Navigator.pop(context, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || !context.mounted) return;
+
+    try {
+      final group = await widget.session.createGroup(name: name);
+      if (!context.mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => GroupChatScreen(
+            session: widget.session,
+            groupId: group.groupId,
+            settings: widget.settings,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(describeError(e))));
+    }
+  }
+
   Future<void> _openNewChatSheet(BuildContext context) async {
     final peerAccountId = await showModalBottomSheet<String>(
       context: context,
@@ -375,7 +498,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             ? null
             : _buildBackupNudge(context, session);
 
-        final conversations = session.conversations;
+        final conversations = session.chats;
         if (conversations.isEmpty) {
           return _withNudge(
             nudge,
@@ -407,8 +530,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
         // regular chats -- but rendered with the exact same tile, since
         // the preview text (their greeting, if any) is what actually
         // answers "who is this."
-        final pending = conversations.where((c) => c.pendingApproval).toList();
-        final regular = conversations.where((c) => !c.pendingApproval).toList();
+        final pending = conversations
+            .whereType<Conversation>()
+            .where((c) => c.pendingApproval)
+            .toList();
+        final regular = conversations
+            .where((c) => c is! Conversation || !c.pendingApproval)
+            .toList();
 
         // A tonal surface a step above the plain background -- Material
         // 3's surfaceContainer* tokens are built exactly for this ("a
@@ -443,7 +571,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                         ),
                       ),
                       for (final convo in pending) ...[
-                        _buildConversationTile(context, session, convo),
+                        _buildChatTile(context, session, convo),
                         if (convo != pending.last)
                           const Divider(height: 1, indent: 72),
                       ],
@@ -463,7 +591,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
               itemCount: regular.length,
               separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
               itemBuilder: (context, i) =>
-                  _buildConversationTile(context, session, regular[i]),
+                  _buildChatTile(context, session, regular[i]),
             ),
           ],
           ),
@@ -574,6 +702,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   ),
                 );
               }
+              if (value == 'new_group') {
+                _createGroup(context);
+              }
               if (value == 'settings') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -604,6 +735,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 value: 'blocked',
                 child: Text('Blocked contacts'),
               ),
+              const PopupMenuItem(value: 'new_group', child: Text('New group')),
               const PopupMenuItem(value: 'settings', child: Text('Settings')),
             ],
           ),

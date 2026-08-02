@@ -266,4 +266,9 @@ over APP-08's outbox, and the group UI.
     sends or reads a `v: 2` receipt in a group yet
   - **batch delivery** in the fan-out, and **attachments in a group** (one
     upload per distinct recipient server)
-  - the UI
+  - the UI — **first cut done 2026-08-03**: groups in the one chat list with
+    their own glyph and author-prefixed preview, a `GroupChatScreen` with
+    author lines and a k-of-N send indicator, creating a group, and joining one
+    behind a notice that says the group will see your address. Still to come:
+    filter chips, the delivery sheet, the group info screen (member list, role
+    actions, invite, leave/dissolve), and system lines for state events

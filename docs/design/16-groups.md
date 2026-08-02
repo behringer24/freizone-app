@@ -340,6 +340,26 @@ pending / failed recipients, and a retry there re-sends **only the failed
 recipients**, never the whole fan-out. A permanent "7/20" counter in every
 bubble was rejected: it is a number nobody cares about five minutes later.
 
+### First cut, shipped 2026-08-03
+
+The chat list, a group transcript, creating a group, inviting, and accepting.
+Enough to use a group; not yet everything described here.
+
+**A separate `GroupChatScreen`, against the earlier plan of one shared
+transcript screen.** `ChatScreen` is built end to end around a peer — blocking,
+message requests, the secure-session reset, receipt watermarks, the peer
+profile — and none of that exists in a group. Threading a `ChatTarget` through
+~1450 untested lines would have put the screen people use every day at risk for
+a feature nobody has tried yet. The cost is two transcript renderers that can
+drift, which is real; merging them is worth doing once the group side has
+stopped moving, and is deliberately a decision to revisit rather than a
+permanent split.
+
+Still missing from this section: the filter chips, the delivery sheet behind
+the send indicator, the group info screen and everything on it (member list,
+role actions, invite by QR, leave/dissolve), and system lines in the transcript
+for state events. Inviting exists as a session call but has no UI yet.
+
 ### Group info screen
 
 Server administration lives behind the AppBar menu because it is server-wide and
