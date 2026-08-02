@@ -129,9 +129,25 @@ The rest follows:
 
 ## Receiving
 
+- **Simultaneous session establishment has to be handled, and today is not.**
+  A joining member reaches for every existing member at once and they reach
+  back, so most new pairs in a group start with each side holding its own X3DH
+  initiator session and neither able to read the other's. In a 1:1 chat
+  somebody speaks first and this effectively never happens, which is why
+  `AppSession._handleIncoming` only builds a responder session when there is no
+  session at all. PROTOCOL §5 now specifies the rule: the lower `account_id`'s
+  session wins, and the loser is kept **for reading only** — without that,
+  every message sent before the two converge is stranded undecryptable. This
+  found `cmd/devclient` first; the app needs the same, and it is the one item
+  here that is a correctness requirement rather than a feature.
 - `MessageContent.decode` must accept a **set** of known versions instead of
   comparing against `currentVersion`. Today `v: 4` would render as "newer app
   feature" in our own build.
+- **Control envelopes arrive out of order.** An `events` envelope routinely
+  overtakes the `snapshot` carrying the genesis it depends on, so events that
+  are not admissible *yet* go into a small bounded hold buffer and are retried
+  whenever new facts arrive. Events rejected for a reason no later fact can
+  change — a bad signature, another group's id — are dropped.
 - `v: 4` → a group message: resolve the group, append to its transcript,
   compare `state_hash`.
 - `v: 5` → group control: applied via `GroupApplyEvents`, **never stored and
