@@ -1,0 +1,294 @@
+# Design: Groups (client side)
+
+Status: **planned** · Roadmap: [APP-16](../ROADMAP.md) · Depends on: SRV-01, APP-08 step 2
+· Also affects: shared Go core, freizone-server (`pkg/group`)
+
+The protocol itself — group identity, the authority model, event encoding,
+convergence — is designed in freizone-server's
+[design/01-groups.md](https://github.com/behringer24/freizone-server/blob/master/docs/design/01-groups.md)
+and is not repeated here. The one-line recap that matters for this document: a
+group is a **self-certifying cryptographic object with no server behind it**.
+Messages ride the existing pairwise Double Ratchets with **no group key**, and
+membership plus roles are a **grow-only set of signed facts** that converges via
+a `state_hash` carried on every group message.
+
+This document covers only what that means for this repo.
+
+## What already works in our favour
+
+Worth stating first, because it decides how large this item actually is:
+
+- **The per-peer send primitive is already correct.** `AppSession._deliver` /
+  `_encryptAndSend` handle device resolution, prekey claim, first-contact
+  session establishment, federation and re-key. A fan-out is a loop over that,
+  not a new send path.
+- **Session serialization already exists per peer.** `_withPeerSessionLock`
+  is per peer, so a fan-out takes N locks in sequence and never needs a global
+  one.
+- **Unknown envelope versions already degrade correctly.**
+  `MessageContent.decode` renders a neutral placeholder for a `v` it does not
+  know, which is exactly what an older build must do with a group message.
+- **`pendingApproval`** (the 1:1 "message request" state) is the precedent for
+  an unaccepted group invitation — same idea, same place in the UI vocabulary.
+- **`MessageAttachment`** needs no change at all: one blob key per attachment,
+  uploaded once per distinct recipient server, referenced per recipient.
+
+## Group logic lives in the Go core
+
+`pkg/group` lands in freizone-server (public, like `pkg/ratchet` and
+`pkg/wire`) and is reached over FFI, following APP-01's precedent of keeping
+key material and format rules on the Go side. One implementation serves the
+app, `cmd/devclient` and any future client, and it is testable without Flutter.
+
+Four new exports in `native/core.go`, in the established JSON-in/JSON-out shape:
+
+| Export | Does |
+|---|---|
+| `GroupCreate` | Derives the group root key from the account root key and a fresh `group_nonce`, emits genesis + the founder's own add/accept, returns the initial state blob |
+| `GroupSignEvent` | Builds an event's signing bytes, signs with the device key (or the group root key for founder-only events), returns the event with its `signer` block |
+| `GroupApplyEvents` | Merges incoming events into a state blob; returns the new blob, its `state_hash`, and a per-event verdict (`applied` / `rejected` + reason) |
+| `GroupResolveState` | Folds a state blob into the derived view the UI renders: members with roles, pending invitees, name, topic, my own role |
+
+The **state blob is opaque to Dart** — it is persisted and handed back, never
+interpreted, exactly as a `RatchetSessionJson` is today. Dart renders only
+`GroupResolveState`'s output. That keeps the convergence rules in one place and
+means a Dart bug cannot produce a state that disagrees with another client's.
+
+The group root key is derived **inside the core** from the account root key
+(`HKDF-SHA256(account_root_seed, "Freizone-Group-Root-v1" || group_nonce)`), so
+the seed never crosses the FFI boundary — the same reason `pkg/mnemonic` lives
+where it does. Because the nonce is stored in the genesis event, a founder who
+restores from the seed phrase and receives the group state from any member can
+re-derive the key with no extra backup material.
+
+## Data model: a `ChatTarget` base
+
+`Conversation` is built around `peerAccountId`, and `chat_screen.dart` (~1450
+lines) plus `chat_list_screen.dart` are built around `Conversation`. A group has
+no peer.
+
+So: extract a slim **`ChatTarget`** base carrying what the screens actually
+need — a stable id, a title, `messages`, `lastActivityAt`, `hasUnread`,
+`pinnedMessageIds` — and let `Conversation` (1:1) and `GroupConversation`
+inherit from it.
+
+- Stays 1:1-only: `peerServer`, `peerDeviceId`, `peerDevicePubKey`, `blocked`,
+  `pendingApproval`, and the single receipt watermark pair.
+- New on `GroupConversation`: `groupId`, the derived roles view, `myRole`,
+  `invitePending`, and **per-member receipt watermarks** — a map
+  `account_id → delivered/read`, because "read by 12" cannot be expressed by
+  the single `peerReadUpTo` value a 1:1 conversation uses. The wire format needs
+  nothing for this: a `v: 2` receipt already names a `message_id`, the author
+  resolves the group locally, and the envelope already says who sent it.
+
+**The refactor is its own commit, before any group code**, with no behaviour
+change. Mixing it into the feature would make both unreviewable.
+
+## Persistence: one file per group
+
+The profile JSON is rewritten on **every single message** — the documented
+reason image bytes were kept out of it. A group's fact set has the opposite
+write profile: ~80 KB that changes rarely.
+
+- `groups/<group_id>.json` — the opaque state blob, written atomically
+  (temp + rename). Since the fact set is grow-only, a lost write costs at most
+  one re-sync, never a corrupt state.
+- The **transcript stays in the profile JSON**, alongside 1:1 conversations, so
+  the chat list, unread handling and pinning keep one loading path.
+- Deleting a group deletes both, and `sweepOrphanedMedia` already covers the
+  attachment files.
+
+## Sending: fan-out over a durable outbox
+
+**APP-08 step 2 is a hard prerequisite, not a nice-to-have.** A fan-out that
+dies at recipient 7 of 20 loses the rest permanently today, because
+`Conversation.toJson` deliberately drops `pending`/`failed` messages. That is
+correct for 1:1 and fatal for a group.
+
+**Groups also settle step 2's open fork: enqueue plaintext, not ciphertext.** A
+group message must be encrypted N times against N different sessions; the
+ciphertext model would commit N ciphertexts to N specific session states at
+enqueue time, any of which a `Reset secure session` or an SRV-03 re-key
+invalidates. Plaintext in the queue, encryption at the moment of sending, strict
+serialization per peer — the option APP-08 lists second — is the only one that
+composes with fan-out.
+
+The rest follows:
+
+- **One outbox item per (message_id, recipient device)**, so progress is k/N, a
+  partial fan-out is visible rather than silent, and a retry can address the
+  failed recipients alone (see the delivery sheet under "UI").
+- **Batch where possible**: group the items by recipient server and use
+  `POST /v1/messages/batch` (or the federated variant) where that server's
+  `GET /v1/server-status` advertises `batch_messages`, falling back to
+  individual posts per server otherwise. In a non-federated community that is
+  N→1.
+- **Receipts go to the author only**, keeping traffic linear.
+- **Above ~50 members the client warns.** This is not a protocol limit — see the
+  server-side design for why — so it is purely a UI guard.
+
+## Receiving
+
+- `MessageContent.decode` must accept a **set** of known versions instead of
+  comparing against `currentVersion`. Today `v: 4` would render as "newer app
+  feature" in our own build.
+- `v: 4` → a group message: resolve the group, append to its transcript,
+  compare `state_hash`.
+- `v: 5` → group control: applied via `GroupApplyEvents`, **never stored and
+  never notified**, but still acknowledged and deleted from the queue — the same
+  contract `v: 3` re-key signals already follow.
+- **`state_hash` mismatch** → send our full snapshot, at most once per distinct
+  foreign hash, so two permanently divergent peers cannot ping-pong.
+- **A group message from an account we do not consider a member** is held in a
+  small bounded buffer with a TTL and re-evaluated after the snapshot exchange,
+  rather than dropped — that is the normal state of affairs for a member whose
+  join we have not seen yet.
+- The push wake path is unchanged: a wake means "sync", exactly as today.
+
+## UI
+
+Three properties of the existing UI decide most of this before taste enters:
+
+- **The horizontal swipe axis is taken.** `chat_list_screen.dart`'s body is a
+  `PageView.builder` where a swipe switches *accounts*. A "Chats | Groups"
+  `TabBar` is exactly the gesture users would try there, so tabs are out.
+- **The account switcher is already `AppBar.bottom`.** A second strip beneath it
+  would compete for the same mental slot ("which account" vs. "which kind of
+  chat") and make the title area three layers deep.
+- **The bubble already has the slot a sender name needs**: the reply quote
+  renders its author bold at 12 px, left-aligned, inside the bubble.
+
+### Chat list: one list, no second surface
+
+`_buildConversationTile` is nearly generic already, and a group row is the same
+tile:
+
+- **Avatar** — `avatarColorFor(groupId)` works unchanged, since a group id is
+  also a 21-character bech32m string, so a group gets a deterministic colour for
+  free. Only `PeerAvatarLabel` needs a group case (initials of the name instead
+  of an id fragment).
+- **Prefix icon** — `Icons.group` in the exact slot that holds the
+  `federationLocked` padlock today.
+- **Preview** — `lastMessagePreview` prefixes the author in a group:
+  `"Clara: see you tomorrow"`.
+
+Groups and 1:1 chats share one list, sorted by `lastActivityAt`. The reason is
+not effort: there should be exactly one place that answers "what is new", and
+`hasAnyUnread` already aggregates across everything for the switcher badge.
+
+**Filter chips** (All / Unread / Groups) sit at the top of the list *body*, not
+in the AppBar — a third permanent bar under the title and the switcher strip
+would cost too much vertical space. They are a filter, not a navigation level,
+so they introduce no swipe conflict.
+
+### Bubbles: the author line
+
+First child of the bubble's `Column`, only when `!mine` **and** the target is a
+group:
+
+```dart
+if (senderLabel != null)
+  Align(                       // the Column is CrossAxisAlignment.end
+    alignment: Alignment.centerLeft,
+    child: Text(senderLabel,
+      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12,
+                       color: senderColor)),
+  ),
+```
+
+- The surrounding `Column` is `CrossAxisAlignment.end`, so the label must align
+  itself explicitly.
+- **Colour comes from `avatarColorFor(accountId)`** — the same function the
+  avatar uses, so a name in the transcript and a face in the member list are
+  visibly the same person rather than two unrelated colours.
+- Only the first of a run of consecutive messages from one author shows the
+  label. That is a decision for the list builder, not the bubble.
+- **`peerTitle` in a reply quote must become the quoted message's author**, not
+  the conversation partner. In a 1:1 chat those are the same; in a group they
+  are not.
+
+### Send state: one checkmark, details on tap
+
+A group send is no longer `sent` or `failed` but "k of N delivered". The bubble
+keeps its existing status slot: a clock while any recipient is outstanding, the
+familiar checkmarks once all have been accepted, a warning triangle when some
+failed for good. **Tapping it opens a delivery sheet** listing delivered /
+pending / failed recipients, and a retry there re-sends **only the failed
+recipients**, never the whole fan-out. A permanent "7/20" counter in every
+bubble was rejected: it is a number nobody cares about five minutes later.
+
+### Group info screen
+
+Server administration lives behind the AppBar menu because it is server-wide and
+spans many accounts. Group moderation is the opposite — it is always *about one
+member* — so it belongs where the members are listed.
+
+`GroupInfoScreen`, the group counterpart to `peer_profile_screen.dart`, opens by
+**tapping the AppBar title** in the chat, the standard gesture and currently
+unbound:
+
+- Name and topic, editable from moderator upwards.
+- Member list with role badges, reusing `role_icon.dart` at the switcher's
+  established size (white circle radius 12, icon 16) so "admin" looks the same
+  everywhere in the app.
+- **Role actions live in a member row's long-press menu**, the same pattern
+  `_showChatOptions` uses for chat rows, gated by the caller's own group role
+  exactly as `_canInvite` gates by `session.myRole`. Moderator management appears
+  **only** for the founder.
+- Invite, via contact picker or a `freizone://group` QR.
+- "Leave group" at the bottom — replaced by "Dissolve group" for the founder,
+  who cannot leave.
+
+### Everything else
+
+- An unaccepted invitation renders like the existing message-request state.
+- **Join-time disclosure notice**: everyone in a group learns everyone else's
+  address, forced by pairwise fan-out. The UI says so rather than letting it be
+  discovered.
+- State events render as centered system lines, reusing
+  `StoredMessageKind.systemInfo`.
+- A late-arriving revocation can retroactively undo an action (a removed member
+  returns). That gets its own system line rather than letting the member list
+  change silently.
+- Above ~50 members, adding another warns.
+
+### Plumbing this exposes
+
+- `AppSession.ensureAttachmentDownloaded` and `_deleteConversationMedia` are
+  keyed on `peerAccountId` and have to move to the chat target.
+- `_deliveryStatusFor` becomes per-recipient aggregation instead of a single
+  watermark comparison.
+- `MessageContent.decode` accepting a version *set* (see "Receiving") is what
+  keeps our own build from rendering `v: 4` as "newer app feature".
+
+## Testing
+
+- **Go (`pkg/group`)**: fold determinism regardless of event order, mutual
+  concurrent removal, a late revocation invalidating an act, snapshot merge
+  idempotency, rejection of every unauthorized rank combination.
+- **`cmd/devclient`**: a full group across the two local Docker instances,
+  including one federated member — the reference path, before any UI exists.
+- **Dart**: the version-set decode, `ChatTarget` persistence round-trips, the
+  per-member receipt watermarks.
+- **On device**: the two-instance setup from `docker-compose.local.yml`.
+
+## Phases
+
+1. `ChatTarget` refactor — no behaviour change, own commit. Includes moving
+   `ensureAttachmentDownloaded` and `_deleteConversationMedia` off
+   `peerAccountId`.
+2. APP-08 step 2: the durable outbox, plaintext model.
+3. `pkg/group` + the four FFI exports + Dart bindings.
+4. Group state store and persistence, still no UI.
+5. Send/receive path, fan-out, batch, receipts.
+6. UI.
+7. A federated group across both local instances, end to end.
+
+## Out of scope
+
+- **Broadcast** — SRV-16.
+- **Group history on a newly linked device** — APP-02. A new device gets current
+  *state* from any peer's snapshot, not past messages.
+- **Group avatars.** A blob lives on the *recipient's* server, so a group picture
+  would be one upload per member and a re-upload for every join. Name and topic
+  only in v1.
