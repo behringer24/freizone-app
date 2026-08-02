@@ -182,7 +182,7 @@ per-chat direct-share targets.
   the sender's `content://` stream — under our own control
 
 ### APP-16 — Groups (client side)
-Status: `planned` · Depends on: SRV-01, APP-08 step 2 · Also affects: shared Go core
+Status: `in progress` · Depends on: SRV-01, APP-08 step 2 · Also affects: shared Go core
 Design: [design/16-groups.md](design/16-groups.md)
 
 The client half of SRV-01. Group logic (event signing, the fold, `state_hash`,
@@ -196,3 +196,11 @@ over APP-08's outbox, and the group UI.
   permanently today — and groups settle step 2's open fork, because a group
   message must be encrypted per recipient, which only the plaintext-queue
   variant supports
+- 2026-08-02 — phase 1 shipped: the `ChatTarget` base under `Conversation`, and
+  the media path moved off `peerAccountId` onto a chat-neutral id. No behaviour
+  change by construction, and measured that way — analyzer output unchanged,
+  tests 216 → 219
+- **Open** — APP-08 step 2 (the durable outbox) is next, then `pkg/group` over
+  FFI. Two receive-path requirements the reference client turned up are recorded
+  in the design document and must not be lost: simultaneous X3DH establishment,
+  and holding control envelopes that arrive out of order
