@@ -99,6 +99,11 @@ optimistic — the message appears immediately and shows its own state.
   network call, and delivery state is visible per message
 - **Open** — a durable outgoing queue that survives app death and retries on its
   own, which is also what the attachment upload path needs
+- 2026-08-02 — step 2's open fork (queue ciphertext or plaintext?) decided by
+  APP-16: **plaintext**, encrypted at send time. A group message is encrypted
+  once per recipient, so queued ciphertext would commit N copies to N specific
+  session states that a single re-key invalidates. Groups also make step 2 a
+  prerequisite rather than an improvement
 
 ### APP-09 — New-user onboarding guidance
 Status: `planned`
@@ -175,3 +180,19 @@ per-chat direct-share targets.
 - 2026-07-31 — shipped, on an own platform channel rather than a dependency:
   MainActivity already had one, and it keeps the security-relevant part — reading
   the sender's `content://` stream — under our own control
+
+### APP-16 — Groups (client side)
+Status: `planned` · Depends on: SRV-01, APP-08 step 2 · Also affects: shared Go core
+Design: [design/16-groups.md](design/16-groups.md)
+
+The client half of SRV-01. Group logic (event signing, the fold, `state_hash`,
+snapshot merge) lives in the shared Go core as `pkg/group` behind four FFI
+exports, with the state blob opaque to Dart. Here: a `ChatTarget` base under
+`Conversation` and a new `GroupConversation`, one state file per group, fan-out
+over APP-08's outbox, and the group UI.
+
+- Designed 2026-08-02. Two findings that shape the order of work: APP-08 step 2
+  is a hard prerequisite, since a fan-out dying mid-way loses the remainder
+  permanently today — and groups settle step 2's open fork, because a group
+  message must be encrypted per recipient, which only the plaintext-queue
+  variant supports
