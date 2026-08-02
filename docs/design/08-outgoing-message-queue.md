@@ -146,6 +146,46 @@ message with the disk copy while the original send completes against the
 orphaned object, the retry hits the 409 and settles as delivered instead of
 sending twice.
 
+**Does the Double Ratchet constraint still bite?** It still holds — it is
+designed around, not gone. Encryption happens at the moment of sending, under
+the per-peer lock, so there is only ever one encryption in flight per peer and
+it happens in send order. That is precisely what choosing plaintext over
+ciphertext bought.
+
+What the durable outbox *did* expose is that the ratchet advances before the
+POST, and a committed advance for a message nobody received burns a message
+number. The peer's ratchet bridges gaps, but only up to a bound
+(SRV-03's `too_many_skipped`), and retrying widened the gap every attempt —
+made durable, at that, by the new save-on-failure. So a failed POST now rolls
+the session back to where it was, and the retry re-encrypts the same message
+number. Safe even when the POST secretly succeeded and only its response was
+lost, because the retry carries the same wire id and the server answers `409`.
+
+The rollback matters most in a case that had nothing to do with gaps. A
+first-contact send creates the session as a side effect, and
+`_getOrCreateCryptoSession` returns no `initial` block once a session exists —
+so a first message that failed would be retried **without its X3DH prekey
+block**, to a peer who has no session and therefore could never decrypt it. The
+outbox turned that from a message that quietly vanished into one retried three
+times into a black hole. Rolling the session away entirely means the retry
+starts a fresh X3DH with a fresh prekey block; it costs one of the peer's
+one-time prekeys per attempt, which is a far better trade than a message that
+can never arrive.
+
+**Why every send goes through the durable record, not only a backgrounded one.**
+The record exists from the moment the user hits send, on every send, connected
+or not — there is no separate "queue" object, the transcript is the queue and
+`flushOutbox` scans it. Persisting only on backgrounding would miss exactly the
+events that lose messages: an OOM kill, a force-stop or a crash gives no
+lifecycle callback, and the dangerous window is between hitting send and the
+POST returning. The cost is that the profile is rewritten two or three times per
+send instead of once — the same write the app already performs for every
+received message and every receipt, so a doubling of an existing cost rather
+than a new one. It is still the same whole-file rewrite that keeps image bytes
+out of the profile and puts group state in its own file (APP-16); moving the
+outbox to a small file of its own is the natural next step if that write ever
+starts to hurt, and is deliberately not done on speculation.
+
 **Not covered by tests, and worth saying plainly.** The model half is: what
 gets persisted, and that a pending message restores as failed. The runtime half
 — the flush firing on reconnect, the picture read back from disk, and the three

@@ -2336,6 +2336,13 @@ class AppSession extends ChangeNotifier {
     // before either has written its advanced state back.
     final wireMessageId = messageId ?? _randomHex(16);
     return _withPeerSessionLock(convo.peerAccountId, () async {
+      // Remembered so a failed POST can put the ratchet back where it was.
+      // Encrypting advances the session, and committing that advance for a
+      // message the peer never received burns a message number: they see a
+      // gap, which their ratchet bridges only up to a bound before it counts
+      // as a desync (SRV-03's too_many_skipped). Retrying used to widen that
+      // gap on every attempt.
+      final previousSession = state.sessions[convo.peerAccountId];
       final (session, initial) = await _getOrCreateCryptoSession(convo);
       final enc = core.sessionEncrypt(session: session, plaintext: plaintext);
       state.sessions[convo.peerAccountId] = enc.session;
@@ -2345,36 +2352,64 @@ class AppSession extends ChangeNotifier {
         header: enc.header,
         ciphertext: enc.ciphertext,
       );
-      if (convo.peerServer == null) {
-        await api.sendMessage(
-          creds: state.credentials,
-          messageId: wireMessageId,
-          recipientDeviceId: convo.peerDeviceId!,
-          payload: payload,
-        );
-      } else {
-        // The recipient's server has no local row for this device, so
-        // the request carries a freshly-signed certificate instead of
-        // relying on one cached at registration time -- see
-        // docs/PROTOCOL.md §9.
-        final cert = core.signDeviceCertificate(
-          accountId: state.accountId,
-          deviceId: state.deviceId,
-          devicePub: state.devicePub,
-          issuedAt: DateTime.now().toUtc(),
-          rootPriv: state.rootPriv,
-        );
-        await _clientFor(convo.peerServer).sendFederatedMessage(
-          devicePriv: state.devicePriv,
-          rootPub: state.rootPub,
-          senderAccountId: state.accountId,
-          cert: cert,
-          messageId: wireMessageId,
-          recipientDeviceId: convo.peerDeviceId!,
-          payload: payload,
-        );
+      try {
+        if (convo.peerServer == null) {
+          await api.sendMessage(
+            creds: state.credentials,
+            messageId: wireMessageId,
+            recipientDeviceId: convo.peerDeviceId!,
+            payload: payload,
+          );
+        } else {
+          // The recipient's server has no local row for this device, so
+          // the request carries a freshly-signed certificate instead of
+          // relying on one cached at registration time -- see
+          // docs/PROTOCOL.md §9.
+          final cert = core.signDeviceCertificate(
+            accountId: state.accountId,
+            deviceId: state.deviceId,
+            devicePub: state.devicePub,
+            issuedAt: DateTime.now().toUtc(),
+            rootPriv: state.rootPriv,
+          );
+          await _clientFor(convo.peerServer).sendFederatedMessage(
+            devicePriv: state.devicePriv,
+            rootPub: state.rootPub,
+            senderAccountId: state.accountId,
+            cert: cert,
+            messageId: wireMessageId,
+            recipientDeviceId: convo.peerDeviceId!,
+            payload: payload,
+          );
+        }
+      } catch (_) {
+        _rollBackSession(convo.peerAccountId, previousSession);
+        rethrow;
       }
     });
+  }
+
+  /// Undoes the ratchet advance of a send that did not go out.
+  ///
+  /// With a session that already existed, restoring it means the retry
+  /// re-encrypts the same message *number* rather than the next one, so the
+  /// peer sees no gap at all. Safe even if the POST secretly succeeded and
+  /// only its response was lost: the retry carries the same wire message id,
+  /// so the server answers `409` and the duplicate is never delivered.
+  ///
+  /// With a session that was created *for* this send, the rollback removes it
+  /// entirely, and that is the important case. `_getOrCreateCryptoSession`
+  /// returns no `initial` block once a session exists, so a first-contact send
+  /// that failed would otherwise be retried without the X3DH prekey block --
+  /// to a peer who has no session and therefore cannot decrypt it, ever.
+  /// Starting over costs one of their one-time prekeys per attempt, which is a
+  /// far better trade than a message that can never arrive.
+  void _rollBackSession(String peerAccountId, RatchetSessionJson? previous) {
+    if (previous == null) {
+      state.sessions.remove(peerAccountId);
+    } else {
+      state.sessions[peerAccountId] = previous;
+    }
   }
 
   /// Sends a delivery/read receipt to convo's peer, gated by
