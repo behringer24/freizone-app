@@ -147,6 +147,9 @@ Future<IncomingMessageResult?> processIncomingMessage(
   DecryptResult? dec;
   var usedResponder = false; // adopted a fresh responder session (X3DH)
   var didRekey = false; // ...replacing an existing one (the peer reset theirs)
+  // ...or lost the tie-break for who sends on which, so the responder session
+  // is kept for reading only (see below).
+  var keepOwnSendingSession = false;
 
   if (session == null) {
     // First contact: an initial is required to establish a responder session.
@@ -164,12 +167,17 @@ Future<IncomingMessageResult?> processIncomingMessage(
     ); // may throw -> propagates to _handleIncoming's catch
     usedResponder = true;
   } else if (initial != null) {
-    // A session already exists yet the peer sent a fresh X3DH initial: they
-    // reset their secure session (see resetSecureSession) and re-keyed.
-    // Accept it -- build a fresh responder session and adopt it ONLY if it
-    // actually decrypts this envelope. The core's session calls are pure, so
-    // a failed attempt leaves the live session intact; fall back to it for a
-    // merely-redelivered initial whose real session is still the current one.
+    // A session already exists yet the peer sent a fresh X3DH initial. That is
+    // ambiguous: either they reset their secure session and re-keyed (SRV-03),
+    // or they simply established one at the same moment we did -- rare between
+    // two people chatting, routine in a group, where a joining member reaches
+    // for everyone at once and everyone reaches back. The two need opposite
+    // handling, and the wire cannot tell them apart, so the decrypted content
+    // decides (docs/PROTOCOL.md §5).
+    //
+    // Either way, adopt nothing that does not actually decrypt: the core's
+    // session calls are pure, so a failed attempt leaves the live session
+    // intact and a merely-redelivered initial falls through below.
     try {
       final fresh = core.respondToSession(
         localDhIdentityPriv: state.dhIdentityPriv!,
@@ -182,9 +190,25 @@ Future<IncomingMessageResult?> processIncomingMessage(
         header: parsed.header,
         ciphertext: parsed.ciphertext,
       );
-      session = fresh;
       usedResponder = true;
-      didRekey = true;
+
+      // A v: 3 envelope means the peer threw their session away, so theirs is
+      // the only one they can read: adopt it whatever the ids say.
+      final deliberateRekey = RekeySignal.tryDecode(dec.plaintext) != null;
+      // Otherwise it is a race, and the tie-break is the ordering rule
+      // re-keying already uses: the lower account id's session wins.
+      final peerWins =
+          msg.senderAccountId.compareTo(state.accountId) < 0;
+
+      if (deliberateRekey || peerWins) {
+        session = fresh;
+        didRekey = true;
+      } else {
+        // Ours wins, so we keep sending on it -- but they are still sending on
+        // theirs until our next message reaches them. Keeping this one for
+        // reading is what stops those in-flight messages being stranded.
+        keepOwnSendingSession = true;
+      }
     } catch (_) {
       dec = null; // not a genuine re-key for us -- fall back below.
     }
@@ -213,11 +237,34 @@ Future<IncomingMessageResult?> processIncomingMessage(
           shouldNotify: false,
         );
       }
-      rethrow; // classified by the caller -> see recordDesyncEvidence
+
+      // One more session to try before calling this a failure: the losing half
+      // of a simultaneous establishment, kept for reading. The peer goes on
+      // sending from it until our next message reaches them, and those
+      // follow-ups carry no initial -- so this is the only thing that can read
+      // them, and without it they would look like a desync.
+      final inbound = state.inboundSessions[msg.senderAccountId];
+      if (inbound == null) rethrow; // -> see recordDesyncEvidence
+      try {
+        dec = core.sessionDecrypt(
+          session: inbound,
+          header: parsed.header,
+          ciphertext: parsed.ciphertext,
+        );
+      } catch (_) {
+        throw e; // the original failure, not this one
+      }
+      keepOwnSendingSession = true;
     }
   }
 
-  state.sessions[msg.senderAccountId] = dec.session;
+  if (keepOwnSendingSession) {
+    // We read this on a session we do not send from: our own won the
+    // tie-break, so the advance belongs to the read-only half.
+    state.inboundSessions[msg.senderAccountId] = dec.session;
+  } else {
+    state.sessions[msg.senderAccountId] = dec.session;
+  }
   // Recorded here, the moment the ratchet has actually advanced -- before any
   // of the return paths below (receipt, blocked, stored message) diverge, and
   // never for a failed decrypt, which leaves the session untouched and must
@@ -927,6 +974,7 @@ class AppSession extends ChangeNotifier {
     );
     if (fresh == null) return;
     state.sessions = fresh.sessions;
+    state.inboundSessions = fresh.inboundSessions;
     state.conversations = fresh.conversations;
     state.oneTimePrekeys = fresh.oneTimePrekeys;
     state.nextOtpkKeyId = fresh.nextOtpkKeyId;

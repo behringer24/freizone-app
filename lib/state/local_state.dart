@@ -97,6 +97,7 @@ class AppState {
     this.nextOtpkKeyId = 0,
     Map<int, OneTimePrekeyState>? oneTimePrekeys,
     Map<String, RatchetSessionJson>? sessions,
+    Map<String, RatchetSessionJson>? inboundSessions,
     Map<String, Conversation>? conversations,
     Map<String, GroupConversation>? groups,
     Set<String>? knownPeerIds,
@@ -109,6 +110,7 @@ class AppState {
     this.pushMechanism,
   }) : oneTimePrekeys = oneTimePrekeys ?? {},
        sessions = sessions ?? {},
+       inboundSessions = inboundSessions ?? {},
        conversations = conversations ?? {},
        groups = groups ?? {},
        knownPeerIds = knownPeerIds ?? {},
@@ -147,6 +149,9 @@ class AppState {
       ),
     ),
     sessions: (j['sessions'] as Map<String, dynamic>?)?.map(
+      (k, v) => MapEntry(k, v as Map<String, dynamic>),
+    ),
+    inboundSessions: (j['inbound_sessions'] as Map<String, dynamic>?)?.map(
       (k, v) => MapEntry(k, v as Map<String, dynamic>),
     ),
     conversations: (j['conversations'] as Map<String, dynamic>?)?.map(
@@ -205,6 +210,18 @@ class AppState {
   /// Keyed by peer account id -- mirrors cmd/devclient's own simplifying
   /// assumption of a single active session per peer.
   Map<String, RatchetSessionJson> sessions;
+
+  /// Sessions kept only for READING, keyed by peer.
+  ///
+  /// Two parties who establish with each other at the same moment each hold
+  /// their own initiator session and neither can read the other's. That is
+  /// rare in a one-to-one chat, where somebody speaks first, and routine in a
+  /// group, where a joining member reaches for everyone at once and everyone
+  /// reaches back. A tie-break on the lower account id decides which session
+  /// both sides will *send* on (docs/PROTOCOL.md §5); the losing one is kept
+  /// here rather than discarded, so the messages already in flight on it can
+  /// still be read instead of looking like a desync.
+  Map<String, RatchetSessionJson> inboundSessions;
 
   /// Keyed by peer account id -- the UI/history layer on top of
   /// [sessions]'s crypto layer.
@@ -383,6 +400,7 @@ class AppState {
         (k, v) => MapEntry(k.toString(), v.toJson()),
       ),
     if (sessions.isNotEmpty) 'sessions': sessions,
+    if (inboundSessions.isNotEmpty) 'inbound_sessions': inboundSessions,
     if (conversations.isNotEmpty)
       'conversations': conversations.map((k, v) => MapEntry(k, v.toJson())),
     if (groups.isNotEmpty)
