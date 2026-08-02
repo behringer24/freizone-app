@@ -248,10 +248,12 @@ over APP-08's outbox, and the group UI.
   `Conversation` forwards its old field names so no call site changed.
   Behaviour-neutral by construction and measured that way. A fan-out can now
   reach a group member without inventing a one-to-one conversation for them
-- **Open** — the fan-out itself and the receive path, then the UI. Three things
-  must not be lost, all recorded in the design document: simultaneous X3DH
-  establishment, holding control envelopes that arrive out of order, and that
-  each copy of a group message needs its own *random* stable wire id — reusing
-  one id would have two members on the same server collide on `409`, and
-  deriving it from the message id would let servers recognise the copies as one
-  message
+- 2026-08-02 — the send fan-out works for text: one separately encrypted copy
+  per joined member over that member's own pairwise ratchet, a `GroupDelivery`
+  per recipient carrying its own random stable wire id and delivery state, and
+  a retry that addresses only the copies that never arrived. A member removed
+  while a copy was queued no longer receives it
+- **Open** — the receive path, then batch delivery and group attachments, then
+  the UI. Two things must not be lost, both in the design document:
+  simultaneous X3DH establishment, and holding control envelopes that arrive
+  out of order

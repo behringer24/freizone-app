@@ -108,6 +108,96 @@ void main() {
     });
   });
 
+  group('GroupDelivery', () {
+    StoredMessage fanOut(List<MessageSendState> states) => StoredMessage(
+      text: 'hallo',
+      mine: true,
+      timestamp: DateTime.utc(2026, 8, 2, 12),
+      sendState: MessageSendState.pending,
+      deliveries: [
+        for (var i = 0; i < states.length; i++)
+          GroupDelivery(
+            accountId: 'qmember$i',
+            wireMessageId: 'wire$i',
+            state: states[i],
+          ),
+      ],
+    );
+
+    test('every recipient gets its own wire id', () {
+      // The trap: sharing the message id across recipients would make two
+      // members on the same server collide -- the second copy answered 409
+      // and recorded as delivered to somebody who never received it.
+      final message = fanOut([MessageSendState.sent, MessageSendState.pending]);
+      final ids = message.deliveries.map((d) => d.wireMessageId).toSet();
+      expect(ids, hasLength(2));
+      // And none of them is the message's own id, which would let a server
+      // recognise the copies as one group message.
+      expect(ids.contains(message.id), isFalse);
+    });
+
+    test('the aggregate is what the bubble renders', () {
+      expect(
+        fanOut([
+          MessageSendState.sent,
+          MessageSendState.pending,
+        ]).aggregateSendState,
+        MessageSendState.pending,
+      );
+      expect(
+        fanOut([
+          MessageSendState.sent,
+          MessageSendState.failed,
+        ]).aggregateSendState,
+        MessageSendState.failed,
+      );
+      expect(
+        fanOut([
+          MessageSendState.sent,
+          MessageSendState.sent,
+        ]).aggregateSendState,
+        MessageSendState.sent,
+      );
+      expect(fanOut([MessageSendState.sent]).deliveredCount, 1);
+    });
+
+    test('a one-to-one message has no deliveries and keeps its own state', () {
+      final message = StoredMessage(
+        text: 'hallo',
+        mine: true,
+        timestamp: DateTime.utc(2026, 8, 2, 12),
+        sendState: MessageSendState.failed,
+      );
+      expect(message.isGroupSend, isFalse);
+      expect(message.toJson().containsKey('deliveries'), isFalse);
+      expect(message.aggregateSendState, MessageSendState.failed);
+    });
+
+    test('a partly-delivered fan-out survives a restart, in flight excepted', () {
+      final message = fanOut([
+        MessageSendState.sent,
+        MessageSendState.pending,
+        MessageSendState.failed,
+      ]);
+      final restored = StoredMessage.fromJson(message.toJson());
+
+      expect(restored.deliveries.map((d) => d.state).toList(), [
+        MessageSendState.sent,
+        // Nothing is in flight in a process that no longer exists, so this
+        // copy comes back as one to retry -- and only this copy: the one that
+        // arrived is not sent again.
+        MessageSendState.failed,
+        MessageSendState.failed,
+      ]);
+      // The wire ids come back too, which is what makes that retry idempotent.
+      expect(restored.deliveries.map((d) => d.wireMessageId).toList(), [
+        'wire0',
+        'wire1',
+        'wire2',
+      ]);
+    });
+  });
+
   group('AppState.groups', () {
     AppState stateWith(GroupConversation? chat) {
       final state = AppState(
