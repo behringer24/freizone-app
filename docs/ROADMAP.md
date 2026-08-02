@@ -124,6 +124,13 @@ optimistic — the message appears immediately and shows its own state.
   what an outgoing picture looks like before its upload returns an id. Now
   distinguished by a `local` flag. Replies were checked at the same time and
   were already correct; there is a test for that now too
+- 2026-08-02 — verified working on device. A follow-up question about the
+  Double Ratchet then found the last hole: a failed POST left the ratchet
+  advanced, so every retry widened the gap the peer has to bridge — and worse,
+  a failed *first contact* left a session behind, which makes
+  `_getOrCreateCryptoSession` omit the X3DH prekey block on the retry,
+  producing a message the peer could never decrypt. A failed send now rolls the
+  session back
 
 ### APP-09 — New-user onboarding guidance
 Status: `planned`
