@@ -84,6 +84,21 @@ inherit from it.
 **The refactor is its own commit, before any group code**, with no behaviour
 change. Mixing it into the feature would make both unreviewable.
 
+**Shipped 2026-08-02.** `ChatTarget` and `StoredMessage` live in
+`state/chat_target.dart`, which `conversation.dart` re-exports — so every
+existing `import 'conversation.dart'` keeps working and the diff stays at the
+files that actually changed. The media path moved off `peerAccountId` to a
+neutral `chatId` (`MediaStore.fileFor`/`thumbFor`/`chatDir`/`deleteChatMedia`,
+`AppSession.ensureAttachmentDownloaded`/`_deleteChatMedia`/`_storeOwnAttachment`,
+`ImageAttachment`); the layout on disk is unchanged, since a group id is the
+same 21-character bech32m string a peer's account id is. `StoredMessage` also
+gained an optional `senderAccountId`, null for every one-to-one message and
+therefore absent from existing history — the one forward-looking addition, made
+now rather than touching the same class twice. Verified against a baseline taken
+before the change: `flutter analyze` unchanged at 33 pre-existing issues, tests
+216 → 219, the three new ones pinning the persisted key set so a field lost in
+the extraction fails loudly instead of quietly failing to load.
+
 ## Persistence: one file per group
 
 The profile JSON is rewritten on **every single message** — the documented
@@ -290,9 +305,8 @@ unbound:
 
 ## Phases
 
-1. `ChatTarget` refactor — no behaviour change, own commit. Includes moving
-   `ensureAttachmentDownloaded` and `_deleteConversationMedia` off
-   `peerAccountId`.
+1. **`ChatTarget` refactor — done 2026-08-02**, including moving the media path
+   off `peerAccountId`. See the data-model section above.
 2. APP-08 step 2: the durable outbox, plaintext model.
 3. `pkg/group` + the four FFI exports + Dart bindings.
 4. Group state store and persistence, still no UI.

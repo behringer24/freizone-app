@@ -400,7 +400,7 @@ Future<void> _writeAttachmentThumbs(
       await media.writeFile(
         media.thumbFor(
           accountId: state.accountId,
-          peerAccountId: peerAccountId,
+          chatId: peerAccountId,
           messageId: content.id,
         ),
         thumb,
@@ -1546,7 +1546,7 @@ class AppSession extends ChangeNotifier {
     convo.hasUnread = false;
     // Pictures go with the history they belonged to -- clearing a chat but
     // leaving its images on disk would be both surprising and a slow leak.
-    await _deleteConversationMedia(peerAccountId);
+    await _deleteChatMedia(peerAccountId);
     await LocalStateStore.saveProfile(state);
     if (hadUnread && !hasAnyUnread)
       unawaited(clearMessageNotification(state.accountId));
@@ -1567,20 +1567,20 @@ class AppSession extends ChangeNotifier {
     if (removed == null) return;
     if (_openConversationPeerId == peerAccountId)
       _openConversationPeerId = null;
-    await _deleteConversationMedia(peerAccountId);
+    await _deleteChatMedia(peerAccountId);
     await LocalStateStore.saveProfile(state);
     if (removed.hasUnread && !hasAnyUnread)
       unawaited(clearMessageNotification(state.accountId));
     notifyListeners();
   }
 
-  /// Deletes one conversation's stored pictures. Best-effort: leftover files
+  /// Deletes one chat's stored pictures. Best-effort: leftover files
   /// waste space but break nothing, and this always runs alongside a more
   /// important deletion that must not fail because of them.
-  Future<void> _deleteConversationMedia(String peerAccountId) async {
+  Future<void> _deleteChatMedia(String chatId) async {
     try {
       final media = await MediaStore.instance();
-      await media.deleteConversationMedia(state.accountId, peerAccountId);
+      await media.deleteChatMedia(state.accountId, chatId);
     } catch (_) {
       // See above.
     }
@@ -1685,7 +1685,7 @@ class AppSession extends ChangeNotifier {
   /// Saves the sender's own copy of a picture they just sent, so it renders
   /// straight away instead of being downloaded back from the server.
   Future<void> _storeOwnAttachment(
-    String peerAccountId,
+    String chatId,
     String messageId,
     OutgoingAttachment attachment,
   ) async {
@@ -1694,7 +1694,7 @@ class AppSession extends ChangeNotifier {
       await media.writeFile(
         media.fileFor(
           accountId: state.accountId,
-          peerAccountId: peerAccountId,
+          chatId: chatId,
           messageId: messageId,
         ),
         attachment.bytes,
@@ -1704,7 +1704,7 @@ class AppSession extends ChangeNotifier {
         await media.writeFile(
           media.thumbFor(
             accountId: state.accountId,
-            peerAccountId: peerAccountId,
+            chatId: chatId,
             messageId: messageId,
           ),
           thumb,
@@ -1731,7 +1731,7 @@ class AppSession extends ChangeNotifier {
   /// recipient device, so the sender's own upload is not retrievable by them
   /// on any server -- their copy is the local one written at send time.
   Future<File?> ensureAttachmentDownloaded({
-    required String peerAccountId,
+    required String chatId,
     required StoredMessage message,
   }) async {
     if (message.attachments.isEmpty) return null;
@@ -1740,7 +1740,7 @@ class AppSession extends ChangeNotifier {
     final media = await MediaStore.instance();
     final target = media.fileFor(
       accountId: state.accountId,
-      peerAccountId: peerAccountId,
+      chatId: chatId,
       messageId: message.id,
     );
     if (await target.exists()) return target;

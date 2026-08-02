@@ -20,12 +20,16 @@ class ImageAttachment extends StatefulWidget {
   const ImageAttachment({
     super.key,
     required this.session,
-    required this.peerAccountId,
+    required this.chatId,
     required this.message,
   });
 
   final AppSession session;
-  final String peerAccountId;
+
+  /// The chat this picture belongs to -- a peer's account id for a one-to-one
+  /// conversation, a group id for a group. It only ever names the directory
+  /// the file lives in, so both work unchanged.
+  final String chatId;
   final StoredMessage message;
 
   @override
@@ -53,12 +57,12 @@ class _ImageAttachmentState extends State<ImageAttachment> {
 
     final full = media.fileFor(
       accountId: widget.session.state.accountId,
-      peerAccountId: widget.peerAccountId,
+      chatId: widget.chatId,
       messageId: widget.message.id,
     );
     final thumb = media.thumbFor(
       accountId: widget.session.state.accountId,
-      peerAccountId: widget.peerAccountId,
+      chatId: widget.chatId,
       messageId: widget.message.id,
     );
     final haveFull = await full.exists();
@@ -83,7 +87,7 @@ class _ImageAttachmentState extends State<ImageAttachment> {
       return;
     }
     final downloaded = await widget.session.ensureAttachmentDownloaded(
-      peerAccountId: widget.peerAccountId,
+      chatId: widget.chatId,
       message: widget.message,
     );
     if (!mounted || downloaded == null) return;

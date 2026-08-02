@@ -1344,7 +1344,7 @@ class _MessageBubble extends StatelessWidget {
                   if (message.hasAttachments) ...[
                     ImageAttachment(
                       session: session,
-                      peerAccountId: peerAccountId,
+                      chatId: peerAccountId,
                       message: message,
                     ),
                     if (message.text.isNotEmpty) const SizedBox(height: 6),

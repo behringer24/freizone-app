@@ -60,15 +60,18 @@ class MediaStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Directory holding one account's media, one subdirectory per peer.
+  /// Directory holding one account's media, one subdirectory per chat.
   ///
-  /// Nesting by peer makes deleting a conversation a single recursive
+  /// Nesting by chat makes deleting a conversation a single recursive
   /// directory removal rather than a hunt for individual files.
   Directory accountDir(String accountId) =>
       Directory(_join([_root, 'media', accountId]));
 
-  Directory conversationDir(String accountId, String peerAccountId) =>
-      Directory(_join([_root, 'media', accountId, peerAccountId]));
+  /// [chatId] is a [ChatTarget]'s id: a peer's account id for a one-to-one
+  /// chat, a group id for a group. Both are 21-character bech32m strings, so
+  /// the layout on disk is the same either way and needs no second scheme.
+  Directory chatDir(String accountId, String chatId) =>
+      Directory(_join([_root, 'media', accountId, chatId]));
 
   /// The full-resolution file for one message's attachment.
   ///
@@ -78,14 +81,14 @@ class MediaStore extends ChangeNotifier {
   /// bytes, so they collide with nothing and leak nothing.
   File fileFor({
     required String accountId,
-    required String peerAccountId,
+    required String chatId,
     required String messageId,
     String extension = 'jpg',
   }) => File(_join([
     _root,
     'media',
     accountId,
-    peerAccountId,
+    chatId,
     '$messageId.$extension',
   ]));
 
@@ -93,13 +96,13 @@ class MediaStore extends ChangeNotifier {
   /// something can be shown before the real file downloads.
   File thumbFor({
     required String accountId,
-    required String peerAccountId,
+    required String chatId,
     required String messageId,
   }) => File(_join([
     _root,
     'media',
     accountId,
-    peerAccountId,
+    chatId,
     '$messageId.thumb.jpg',
   ]));
 
@@ -113,10 +116,10 @@ class MediaStore extends ChangeNotifier {
     await tmp.rename(target.path);
   }
 
-  /// Deletes one conversation's media. Called when its chat is cleared or
-  /// deleted, so pictures don't outlive the conversation they belong to.
-  Future<void> deleteConversationMedia(String accountId, String peerAccountId) =>
-      _deleteDir(conversationDir(accountId, peerAccountId));
+  /// Deletes one chat's media. Called when it is cleared or deleted, so
+  /// pictures don't outlive the conversation they belong to.
+  Future<void> deleteChatMedia(String accountId, String chatId) =>
+      _deleteDir(chatDir(accountId, chatId));
 
   /// Deletes every picture belonging to an account, for account removal.
   Future<void> deleteAccountMedia(String accountId) =>

@@ -177,4 +177,89 @@ void main() {
       expect(restored.messages.single.sendState, MessageSendState.sent);
     });
   });
+
+  group('ChatTarget', () {
+    test('a conversation is keyed by its peer', () {
+      final convo = Conversation(peerAccountId: 'peer1');
+      expect(convo, isA<ChatTarget>());
+      // Anything keyed by a chat -- the chat map, the media directory --
+      // uses this, and for a one-to-one chat it is still the peer's id.
+      expect(convo.id, 'peer1');
+    });
+
+    test('splitting the base out did not change what gets persisted', () {
+      // A fully populated conversation, so a field silently lost or renamed
+      // in the ChatTarget extraction shows up here rather than as history
+      // that quietly fails to load after an update.
+      final convo = Conversation(
+        peerAccountId: 'peer1',
+        displayName: 'Anna',
+        peerServer: 'https://other.example.org',
+        peerDeviceId: 'aabbccddeeff0011',
+        peerDevicePubKey: Uint8List.fromList(List.filled(32, 7)),
+        lastActivityAt: DateTime.utc(2026, 8, 2, 12),
+        hasUnread: true,
+        pinnedMessageIds: ['m1'],
+        blocked: true,
+        pendingApproval: true,
+        peerDeliveredUpTo: DateTime.utc(2026, 8, 2, 11),
+        peerReadUpTo: DateTime.utc(2026, 8, 2, 11, 30),
+        sentDeliveredReceiptUpTo: DateTime.utc(2026, 8, 2, 10),
+        sentReadReceiptUpTo: DateTime.utc(2026, 8, 2, 10, 30),
+      );
+
+      expect(convo.toJson().keys.toSet(), {
+        'peer_account_id',
+        'display_name',
+        'messages',
+        'last_activity_at',
+        'has_unread',
+        'pinned_message_ids',
+        'peer_server',
+        'peer_device_id',
+        'peer_device_pub_key',
+        'blocked',
+        'pending_approval',
+        'peer_delivered_up_to',
+        'peer_read_up_to',
+        'sent_delivered_receipt_up_to',
+        'sent_read_receipt_up_to',
+      });
+
+      final restored = Conversation.fromJson(convo.toJson());
+      expect(restored.displayName, 'Anna');
+      expect(restored.peerServer, 'https://other.example.org');
+      expect(restored.peerDeviceId, 'aabbccddeeff0011');
+      expect(restored.peerDevicePubKey, convo.peerDevicePubKey);
+      expect(restored.lastActivityAt, convo.lastActivityAt);
+      expect(restored.hasUnread, isTrue);
+      expect(restored.pinnedMessageIds, ['m1']);
+      expect(restored.blocked, isTrue);
+      expect(restored.pendingApproval, isTrue);
+      expect(restored.peerReadUpTo, convo.peerReadUpTo);
+      expect(restored.sentReadReceiptUpTo, convo.sentReadReceiptUpTo);
+    });
+
+    test('senderAccountId is absent unless a message actually names one', () {
+      // Null for every one-to-one message, where "mine" already answers who
+      // wrote it -- so existing history is byte-identical.
+      final plain = StoredMessage(
+        text: 'hi',
+        mine: false,
+        timestamp: DateTime.utc(2026),
+      );
+      expect(plain.toJson().containsKey('sender_account_id'), isFalse);
+
+      final authored = StoredMessage(
+        text: 'hi',
+        mine: false,
+        timestamp: DateTime.utc(2026),
+        senderAccountId: 'peer2',
+      );
+      expect(
+        StoredMessage.fromJson(authored.toJson()).senderAccountId,
+        'peer2',
+      );
+    });
+  });
 }
