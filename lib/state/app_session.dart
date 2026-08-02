@@ -1945,6 +1945,109 @@ class AppSession extends ChangeNotifier {
     return endpoint;
   }
 
+  /// Call when a group's screen opens: clears its unread flag.
+  Future<void> enterGroup(String groupId) async {
+    final chat = state.groups[groupId];
+    if (chat == null || !chat.hasUnread) return;
+    chat.hasUnread = false;
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+  }
+
+  /// Invites an account, and tells everyone else.
+  ///
+  /// The invitee gets the whole fact set -- they have nothing to merge it
+  /// into -- while everyone else gets just the new one, with the chain that
+  /// authorizes it riding along inside the event itself.
+  Future<void> inviteToGroup(
+    String groupId,
+    String accountId, {
+    String? server,
+  }) async {
+    final memberServer = server ?? state.server;
+    final event = signGroupEvent(
+      groupId: groupId,
+      type: 'member_add',
+      subject: accountId,
+      server: memberServer,
+    );
+    await applyGroupEvents(groupId, [event]);
+
+    await _sendGroupSnapshotTo(groupId, accountId, memberServer);
+    await _broadcastGroupEvents(groupId, [event], skip: {accountId});
+  }
+
+  /// Accepts an invitation addressed to this account.
+  ///
+  /// Announcing it is as much the invitee's job as the inviter's: they have
+  /// the strongest interest in every member knowing to send to them.
+  Future<void> acceptGroupInvite(String groupId) async {
+    final event = signGroupEvent(
+      groupId: groupId,
+      type: 'join_accept',
+      subject: state.accountId,
+    );
+    await applyGroupEvents(groupId, [event]);
+    await _broadcastGroupEvents(groupId, [event]);
+  }
+
+  /// Sends a few new facts to every member except this account and any in
+  /// [skip] (an invitee who just received the whole snapshot).
+  ///
+  /// Recipients deliberately include members who have not accepted yet: a
+  /// membership change is exactly the kind of fact a pending invitee needs.
+  Future<void> _broadcastGroupEvents(
+    String groupId,
+    List<Map<String, dynamic>> events, {
+    Set<String> skip = const {},
+  }) async {
+    final current = _groupStates[groupId];
+    if (current == null) return;
+    final control = GroupControl(
+      kind: GroupControlKind.events,
+      groupId: groupId,
+      stateHash: current.stateHash,
+      events: events,
+    );
+
+    for (final member in current.resolved.members) {
+      if (member.accountId == state.accountId) continue;
+      if (skip.contains(member.accountId)) continue;
+      try {
+        await _sendGroupControl(
+          groupId,
+          member.accountId,
+          member.server,
+          control,
+        );
+      } catch (e) {
+        // One unreachable member must not stop the others hearing about it.
+        lastError = 'group update to ${member.accountId}: ${describeError(e)}';
+      }
+    }
+  }
+
+  Future<void> _sendGroupSnapshotTo(
+    String groupId,
+    String accountId,
+    String server,
+  ) async {
+    final current = _groupStates[groupId];
+    if (current == null) return;
+    await _sendGroupControl(
+      groupId,
+      accountId,
+      server,
+      GroupControl(
+        kind: GroupControlKind.snapshot,
+        groupId: groupId,
+        stateHash: current.stateHash,
+        events: (current.state['events'] as List<dynamic>? ?? const [])
+            .cast<Map<String, dynamic>>(),
+      ),
+    );
+  }
+
   /// Sends a message into a group: one separately encrypted copy per member.
   ///
   /// There is no group key. Every copy rides that member's own pairwise
