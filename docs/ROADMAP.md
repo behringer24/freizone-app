@@ -255,10 +255,9 @@ over APP-08's outbox, and the group UI.
   while a copy was queued no longer receives it
 - **Open**, in the order they are likely to be done:
   - the receive path — `v: 4` into the transcript with the `state_hash`
-    comparison, `v: 5` applied without being stored or notified, holding
-    control envelopes that arrive out of order, and **simultaneous X3DH
-    establishment**, which this app does not handle at all today (see the
-    receiving section of the design document; the reference client found it)
+    comparison, `v: 5` applied without being stored or notified, and holding
+    control envelopes that arrive out of order. **Simultaneous X3DH
+    establishment is done** (2026-08-03)
   - **group receipts** — designed but unbuilt. `GroupConversation` already has
     the per-member watermark maps and the wire needs nothing new, but nothing
     sends or reads a `v: 2` receipt in a group yet

@@ -103,4 +103,26 @@ void main() {
       );
     });
   });
+
+  group('AppState.inboundSessions', () {
+    test('omitted when empty, so existing profiles are unchanged', () {
+      expect(_minimalState().toJson().containsKey('inbound_sessions'), isFalse);
+    });
+
+    test('survives a round trip, separately from the sending session', () {
+      // The losing half of a simultaneous establishment. It has to persist:
+      // the peer keeps sending on it until our next message reaches them, and
+      // those follow-ups carry no X3DH initial, so nothing else could read
+      // them after a restart.
+      final state = _minimalState();
+      state.sessions['peer1'] = {'which': 'ours, for sending'};
+      state.inboundSessions['peer1'] = {'which': 'theirs, for reading'};
+
+      final restored = AppState.fromJson(state.toJson());
+      expect(restored.sessions['peer1'], {'which': 'ours, for sending'});
+      expect(restored.inboundSessions['peer1'], {
+        'which': 'theirs, for reading',
+      });
+    });
+  });
 }

@@ -196,7 +196,16 @@ The rest follows:
 
 ## Receiving
 
-- **Simultaneous session establishment has to be handled, and today is not.**
+- **Simultaneous session establishment. Done 2026-08-03**, and it turned up a
+  contradiction in the protocol text rather than just a missing implementation:
+  a `prekey` block over an existing session is *ambiguous*, and the rule
+  written for groups would have broken the re-key it shares a shape with.
+  A deliberate re-key (`v: 3`) is now adopted unconditionally, since the
+  session the tie-break would keep is one the peer can no longer read;
+  everything else is treated as a race and settled on the lower account id,
+  with the losing session kept in `AppState.inboundSessions` for reading.
+  PROTOCOL §5 says so now, and the residual gap — a re-key riding an ordinary
+  message, which the spec permits — is tracked as SRV-17.
   A joining member reaches for every existing member at once and they reach
   back, so most new pairs in a group start with each side holding its own X3DH
   initiator session and neither able to read the other's. In a 1:1 chat
