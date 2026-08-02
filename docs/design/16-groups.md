@@ -232,6 +232,29 @@ The rest follows:
   are not admissible *yet* go into a small bounded hold buffer and are retried
   whenever new facts arrive. Events rejected for a reason no later fact can
   change — a bad signature, another group's id — are dropped.
+
+**Shipped 2026-08-03**, and where the group receive path *lives* was forced by
+something easy to miss: `processIncomingMessage` advances the ratchet and marks
+the envelope processed **before** it looks at the payload, and both are
+irreversible. So whoever decrypts a group envelope has to act on it, or the
+facts inside are gone for good — including the background push isolate, which
+decrypts and has no `AppSession`. Handling group envelopes there and handing
+them up to be dealt with later would have silently lost every membership change
+that arrived while the app was closed.
+
+So `group_receive.dart` holds plain functions over `AppState`, reachable
+without a session, and the hold buffer is `AppState.pendingGroupEvents` —
+persisted for the same reason: the snapshot that unblocks a held event may be a
+long way behind, and the envelope it came in cannot be replayed.
+
+The one thing that stays with `AppSession` is *sending*: answering a
+`sync_request`, or a `state_hash` mismatch, needs somewhere to send from. Its
+cached folded view is also what goes stale when the isolate-safe half writes
+the file, so a group envelope makes it re-read that group from disk.
+
+A group message whose group is not known yet still gets a transcript rather
+than being dropped — same reason again: the ratchet has moved past it, so there
+is no second chance. It shows as an unnamed group until the facts catch up.
 - `v: 4` → a group message: resolve the group, append to its transcript,
   compare `state_hash`.
 - `v: 5` → group control: applied via `GroupApplyEvents`, **never stored and

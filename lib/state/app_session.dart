@@ -29,7 +29,9 @@ import '../util/freizone_address.dart';
 import '../util/server_url.dart';
 import 'app_settings.dart';
 import 'conversation.dart';
+import 'group_control.dart';
 import 'group_conversation.dart';
+import 'group_receive.dart';
 import 'group_store.dart';
 import 'media_store.dart';
 import 'message_content.dart';
@@ -73,10 +75,26 @@ class IncomingMessageResult {
     required this.peerAccountId,
     required this.shouldNotify,
     this.deliveredUpTo,
+    this.groupId,
+    this.peerGroupStateHash,
+    this.groupSnapshotRequested = false,
   });
 
   final String peerAccountId;
   final bool shouldNotify;
+
+  /// The group this envelope belonged to, if any (APP-16) -- so a caller that
+  /// caches folded group state knows which one to refresh.
+  final String? groupId;
+
+  /// The sender's own view of that group's fact set. A caller that can send
+  /// compares it with ours and offers a snapshot on a mismatch; comparing is
+  /// free here, which is why it rides along on every group envelope rather
+  /// than being asked for.
+  final String? peerGroupStateHash;
+
+  /// They asked for our fact set outright.
+  final bool groupSnapshotRequested;
 
   /// The receipt anchor of a genuinely new, stored (not blocked, not a
   /// receipt) message -- the sender's own send-time stamp when the
@@ -322,6 +340,27 @@ Future<IncomingMessageResult?> processIncomingMessage(
     );
   }
 
+  // Group membership and roles (APP-16). Handled here rather than handed up,
+  // because the ratchet has already advanced past this envelope and the id is
+  // already marked processed -- whoever decrypts a group envelope has to act
+  // on it, or the facts inside are gone for good. That includes the background
+  // push isolate, which is why this lives in group_receive.dart as a plain
+  // function rather than an AppSession method.
+  //
+  // Never stored, never notified: membership is not a message. The caller
+  // still acks it out of the queue like any other processed envelope.
+  final control = GroupControl.tryDecode(dec.plaintext);
+  if (control != null) {
+    final outcome = await applyGroupControl(state, core, control);
+    return IncomingMessageResult(
+      peerAccountId: msg.senderAccountId,
+      shouldNotify: false,
+      groupId: outcome.groupId,
+      peerGroupStateHash: outcome.peerStateHash,
+      groupSnapshotRequested: outcome.wantsSnapshot,
+    );
+  }
+
   final receipt = ReceiptSignal.tryDecode(dec.plaintext);
   if (receipt != null) {
     // A receipt never creates a conversation (no putIfAbsent here, unlike
@@ -356,6 +395,36 @@ Future<IncomingMessageResult?> processIncomingMessage(
     dec.plaintext,
     fallbackId: generateMessageId(),
   );
+
+  // A group message goes into its own transcript, not into a one-to-one
+  // conversation with whoever happened to send it -- which is exactly what an
+  // older build does with it, and the reason group content is `v: 4` rather
+  // than `v: 1` plus a field.
+  if (content.isGroupMessage) {
+    if (blocked) {
+      // Decrypted so the ratchet and the queue stay clean, then dropped -- the
+      // same treatment a blocked peer's one-to-one message gets.
+      return IncomingMessageResult(
+        peerAccountId: msg.senderAccountId,
+        shouldNotify: false,
+        groupId: content.groupId,
+      );
+    }
+    final stored = storeGroupMessage(
+      state,
+      content,
+      msg.senderAccountId,
+      now,
+      openChatId: openConversationPeerId,
+    );
+    return IncomingMessageResult(
+      peerAccountId: msg.senderAccountId,
+      shouldNotify: openConversationPeerId != content.groupId,
+      deliveredUpTo: stored.receiptAnchor,
+      groupId: content.groupId,
+      peerGroupStateHash: content.stateHash,
+    );
+  }
 
   final isFirstContact = !state.knownPeerIds.contains(msg.senderAccountId);
   // Captured before putIfAbsent creates the entry -- distinguishes the
@@ -1295,6 +1364,20 @@ class AppSession extends ChangeNotifier {
         return;
       }
 
+      // A group envelope changed the fact set on disk, so the folded view
+      // this session caches is stale -- and it is what the chat list and the
+      // group screen read.
+      final groupId = result.groupId;
+      if (groupId != null) {
+        await _refreshGroupFromDisk(groupId);
+        await _reconcileGroup(
+          groupId,
+          result.peerAccountId,
+          result.peerGroupStateHash,
+          snapshotRequested: result.groupSnapshotRequested,
+        );
+      }
+
       if (result.shouldNotify) {
         // Without this call, the launcher icon's badge (which Android
         // derives from active notifications, not anything drawn in-app)
@@ -1991,6 +2074,81 @@ class AppSession extends ChangeNotifier {
     final message = chat?.messageById(messageId);
     if (chat == null || message == null || !message.isGroupSend) return;
     await _fanOut(chat, message);
+  }
+
+  /// Re-reads one group's fact set after something else wrote it.
+  ///
+  /// The receive path applies events without an AppSession -- it has to, since
+  /// the background push isolate decrypts too -- so the folded view cached
+  /// here is the thing that goes stale, not the file.
+  Future<void> _refreshGroupFromDisk(String groupId) async {
+    final blob = await GroupStateStore.load(state.accountId, groupId);
+    if (blob == null) return;
+    try {
+      _groupStates[groupId] = core.groupResolveState(blob);
+      _refreshGroupName(groupId);
+    } catch (e) {
+      lastError = 'group $groupId failed to reload: ${describeError(e)}';
+    }
+  }
+
+  /// Answers a peer whose view of a group differs from ours, or who asked
+  /// outright.
+  ///
+  /// Sending our whole fact set is the entire repair mechanism: union of a
+  /// grow-only set is idempotent and commutative, so it converges without a
+  /// delta protocol or version vectors -- and a snapshot cannot invent
+  /// anything, since every fact in it is individually signed.
+  Future<void> _reconcileGroup(
+    String groupId,
+    String peerAccountId,
+    String? peerStateHash, {
+    bool snapshotRequested = false,
+  }) async {
+    final current = _groupStates[groupId];
+    if (current == null) return;
+    if (!snapshotRequested) {
+      if (peerStateHash == null || peerStateHash.isEmpty) return;
+      if (peerStateHash == current.stateHash) return;
+      // Answer any given foreign hash at most once, so two peers that stay
+      // divergent for a reason a snapshot cannot fix do not trade snapshots
+      // forever.
+      final seen = '$peerAccountId:$peerStateHash';
+      if (!_answeredGroupHashes.add(seen)) return;
+    }
+
+    final member = current.resolved.memberById(peerAccountId);
+    if (member == null) return;
+    try {
+      await _sendGroupControl(
+        groupId,
+        peerAccountId,
+        member.server,
+        GroupControl(
+          kind: GroupControlKind.snapshot,
+          groupId: groupId,
+          stateHash: current.stateHash,
+          events: (current.state['events'] as List<dynamic>? ?? const [])
+              .cast<Map<String, dynamic>>(),
+        ),
+      );
+    } catch (e) {
+      lastError = 'sending group snapshot failed: ${describeError(e)}';
+    }
+  }
+
+  final Set<String> _answeredGroupHashes = {};
+
+  /// Sends one control envelope to one member.
+  Future<void> _sendGroupControl(
+    String groupId,
+    String accountId,
+    String server,
+    GroupControl control,
+  ) async {
+    final peer = _endpointFor(accountId, server);
+    await _ensurePeerDeviceResolved(peer);
+    await _encryptAndSend(peer, control.encode());
   }
 
   Future<void> _storeGroupState(GroupStateResult result, {String? groupId}) async {
