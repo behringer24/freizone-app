@@ -1790,6 +1790,161 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Address records for members this account has no one-to-one conversation
+  /// with. A member it *does* have one with reuses that conversation's
+  /// endpoint, so device resolution is shared -- and the ratchet always is,
+  /// since sessions are keyed by account id either way.
+  final Map<String, PeerEndpoint> _groupPeers = {};
+
+  PeerEndpoint _endpointFor(String accountId, String server) {
+    // "Our own server" is the null the send path expects, not a string to
+    // compare later.
+    final foreign = sameServer(server, state.server) ? null : server;
+
+    final existing = state.conversations[accountId]?.peer;
+    if (existing != null) {
+      existing.server ??= foreign;
+      return existing;
+    }
+    final endpoint = _groupPeers.putIfAbsent(
+      accountId,
+      () => PeerEndpoint(accountId: accountId, server: foreign),
+    );
+    endpoint.server ??= foreign;
+    return endpoint;
+  }
+
+  /// Sends a message into a group: one separately encrypted copy per member.
+  ///
+  /// There is no group key. Every copy rides that member's own pairwise
+  /// ratchet, which is what makes removing somebody take effect immediately
+  /// and need no re-key anywhere (see the design document).
+  Future<void> sendGroupMessage(
+    String groupId,
+    String text, {
+    String? replyToId,
+  }) async {
+    final chat = state.groups[groupId];
+    final resolved = _groupStates[groupId]?.resolved;
+    if (chat == null || resolved == null) {
+      throw StateError('no group $groupId');
+    }
+    if (resolved.dissolved) {
+      throw StateError('This group has been dissolved.');
+    }
+    final me = resolved.memberById(state.accountId);
+    if (me == null || !me.joined) {
+      throw StateError('You are not a member of this group.');
+    }
+
+    final quoted = replyToId == null ? null : chat.messageById(replyToId);
+    final now = DateTime.now().toUtc();
+
+    final message = StoredMessage(
+      id: generateMessageId(),
+      text: text,
+      mine: true,
+      timestamp: now,
+      replyToId: quoted?.id,
+      replyPreviewText: quoted?.text,
+      replyPreviewMine: quoted?.mine,
+      sendState: MessageSendState.pending,
+      // Only members who have accepted. An invitation must not disclose the
+      // invitee's address to the group before they agree to it, and until they
+      // accept there is nothing to send them anyway.
+      deliveries: [
+        for (final member in resolved.members)
+          if (member.joined && member.accountId != state.accountId)
+            GroupDelivery(
+              accountId: member.accountId,
+              wireMessageId: _randomHex(16),
+            ),
+      ],
+    );
+
+    chat.messages.add(message);
+    chat.lastActivityAt = now;
+    notifyListeners();
+    // Persisted before the network is touched, exactly as a one-to-one send
+    // is (APP-08 step 2) -- and it matters more here, since a fan-out has
+    // many more ways to be interrupted part-way.
+    await LocalStateStore.saveProfile(state);
+
+    await _fanOut(chat, message);
+  }
+
+  /// Delivers every outstanding copy of a group message.
+  ///
+  /// One recipient's failure never stops the others: in a group, one member
+  /// being unreachable is not everybody else's problem. Each copy carries its
+  /// own stable wire id, so a retry is idempotent per recipient.
+  Future<void> _fanOut(GroupConversation chat, StoredMessage message) async {
+    final resolved = _groupStates[chat.groupId]?.resolved;
+    if (resolved == null) return;
+
+    for (final delivery in message.deliveries) {
+      if (delivery.isSent) continue;
+      delivery.state = MessageSendState.pending;
+      try {
+        final member = resolved.memberById(delivery.accountId);
+        if (member == null) {
+          // Removed while this was queued: their copy is no longer owed, and
+          // sending it would leak group traffic to somebody now outside it.
+          delivery.state = MessageSendState.sent;
+          continue;
+        }
+        final peer = _endpointFor(member.accountId, member.server);
+        await _ensurePeerDeviceResolved(peer);
+
+        final content = MessageContent(
+          id: message.id,
+          text: message.text,
+          groupId: chat.groupId,
+          // Our own view, so a recipient notices a divergence without anyone
+          // having to ask (see the receive path).
+          stateHash: _groupStates[chat.groupId]?.stateHash,
+          replyToId: message.replyToId,
+          replyPreview: message.replyToId == null
+              ? null
+              : ReplyPreview(
+                  text: message.replyPreviewText ?? '',
+                  mine: !(message.replyPreviewMine ?? false),
+                ),
+          senderServer: peer.isFederated ? state.server : null,
+          sentAt: message.timestamp,
+        );
+
+        await _encryptAndSend(
+          peer,
+          content.encode(),
+          messageId: delivery.wireMessageId,
+        );
+        delivery.state = MessageSendState.sent;
+        delivery.error = null;
+      } catch (e) {
+        delivery.state = MessageSendState.failed;
+        delivery.error = describeError(e);
+      }
+    }
+
+    message.sendState = message.aggregateSendState;
+    message.sendError = message.hasFailed
+        ? 'Not delivered to '
+              '${message.deliveries.length - message.deliveredCount} of '
+              '${message.deliveries.length} members.'
+        : null;
+    await LocalStateStore.saveProfile(state);
+    notifyListeners();
+  }
+
+  /// Re-sends only the copies of a group message that never arrived.
+  Future<void> retryGroupSend(String groupId, String messageId) async {
+    final chat = state.groups[groupId];
+    final message = chat?.messageById(messageId);
+    if (chat == null || message == null || !message.isGroupSend) return;
+    await _fanOut(chat, message);
+  }
+
   Future<void> _storeGroupState(GroupStateResult result, {String? groupId}) async {
     final id = groupId ?? result.groupId;
     if (id.isEmpty) return;
@@ -2053,7 +2208,7 @@ class AppSession extends ChangeNotifier {
   /// the next message or the next reconnect sweep), not correctness.
   Future<void> _sendRekeySignal(Conversation convo, RekeyReason reason) async {
     try {
-      await _ensurePeerDeviceResolved(convo);
+      await _ensurePeerDeviceResolved(convo.peer);
       await _encryptAndSend(convo.peer, RekeySignal(reason: reason).encode());
       await LocalStateStore.saveProfile(state);
     } catch (e) {
@@ -2397,7 +2552,7 @@ class AppSession extends ChangeNotifier {
     OutgoingAttachment? attachment,
   ) async {
     try {
-      await _ensurePeerDeviceResolved(convo);
+      await _ensurePeerDeviceResolved(convo.peer);
 
       // Uploaded BEFORE the message is sent: the message carries the blob
       // id, so publishing it first would briefly point at something that
@@ -2487,14 +2642,17 @@ class AppSession extends ChangeNotifier {
   /// device yet. Shared by [sendMessage] and [_sendReceipt], since a
   /// receipt needs somewhere to send to just as much as a real message
   /// does, even if the user has never sent this peer anything themselves.
-  Future<void> _ensurePeerDeviceResolved(Conversation convo) async {
-    if (convo.peerDeviceId != null) return;
+  Future<void> _ensurePeerDeviceResolved(PeerEndpoint peer) async {
+    if (peer.deviceId != null) return;
     final (_, verified) = await _resolvePeerDevice(
-      convo.peerAccountId,
-      _clientFor(convo.peerServer),
+      peer.accountId,
+      _clientFor(peer.server),
     );
-    convo.peerDeviceId = verified.deviceId;
-    convo.peerDevicePubKey = verified.devicePubKey;
+    peer.deviceId = verified.deviceId;
+    peer.devicePubKey = verified.devicePubKey;
+    // A conversation's endpoint is part of the profile, so this is worth
+    // keeping; a group member's standalone one is not persisted and simply
+    // gets looked up again next run, which is one cheap GET.
     await LocalStateStore.saveProfile(state);
   }
 
@@ -2626,7 +2784,7 @@ class AppSession extends ChangeNotifier {
   ) async {
     try {
       if (!(await AppSettings.load()).readReceiptsEnabled) return;
-      await _ensurePeerDeviceResolved(convo);
+      await _ensurePeerDeviceResolved(convo.peer);
       await _encryptAndSend(
         convo.peer,
         ReceiptSignal(status: status, upToSentAt: upToSentAt).encode(),

@@ -64,6 +64,53 @@ List<MessageAttachment> _attachmentsFromJson(dynamic raw) {
   return out;
 }
 
+/// One recipient's copy of a group message (APP-16).
+///
+/// A group send is N separately encrypted copies, so "sent" is not one state
+/// but N of them, and a retry has to be able to address just the ones that
+/// failed.
+class GroupDelivery {
+  GroupDelivery({
+    required this.accountId,
+    required this.wireMessageId,
+    this.state = MessageSendState.pending,
+    this.error,
+  });
+
+  factory GroupDelivery.fromJson(Map<String, dynamic> j) => GroupDelivery(
+    accountId: j['account_id'] as String,
+    wireMessageId: j['wire_message_id'] as String,
+    // Nothing is in flight in a process that no longer exists, so a copy
+    // written while pending comes back as a failure to retry -- the same rule
+    // the message as a whole follows.
+    state: _sendStateFromJson(j['state'] as String?),
+  );
+
+  final String accountId;
+
+  /// The id the recipient's server de-duplicates by, so a retry cannot deliver
+  /// a second copy: the server answers `409` and that counts as delivered.
+  ///
+  /// Random and per recipient, deliberately. Sharing the message's own id
+  /// across recipients would make two members on the same server collide --
+  /// the second copy answered `409` and recorded as delivered to somebody who
+  /// never got it. Deriving it from the message id would fix that and let a
+  /// server, or two servers comparing notes, recognise N copies as one group
+  /// message.
+  final String wireMessageId;
+
+  MessageSendState state;
+  String? error;
+
+  bool get isSent => state == MessageSendState.sent;
+
+  Map<String, dynamic> toJson() => {
+    'account_id': accountId,
+    'wire_message_id': wireMessageId,
+    if (state != MessageSendState.sent) 'state': state.name,
+  };
+}
+
 /// One decrypted (or about-to-be-sent) chat line, persisted locally --
 /// the server never stores plaintext or keeps history. [id] identifies
 /// this message for replies/delete/pin; messages from before those
@@ -85,7 +132,9 @@ class StoredMessage {
     this.kind = StoredMessageKind.normal,
     this.attachments = const [],
     this.sendState = MessageSendState.sent,
-  }) : id = id ?? generateMessageId();
+    List<GroupDelivery>? deliveries,
+  }) : id = id ?? generateMessageId(),
+       deliveries = deliveries ?? [];
 
   /// A local, non-encrypted info line shown centered in the transcript
   /// (e.g. "Secure session was reset"). Never transmitted; see
@@ -113,6 +162,9 @@ class StoredMessage {
     kind: _storedMessageKindFromJson(j['kind'] as String?),
     attachments: _attachmentsFromJson(j['attachments']),
     sendState: _sendStateFromJson(j['send_state'] as String?),
+    deliveries: ((j['deliveries'] as List<dynamic>?) ?? const [])
+        .map((d) => GroupDelivery.fromJson(d as Map<String, dynamic>))
+        .toList(),
   );
 
   Map<String, dynamic> toJson() => {
@@ -134,6 +186,8 @@ class StoredMessage {
     // ("this server doesn't accept pictures") may no longer be true, and a
     // stale explanation is worse than the plain "not sent" the retry shows.
     if (sendState != MessageSendState.sent) 'send_state': sendState.name,
+    if (deliveries.isNotEmpty)
+      'deliveries': deliveries.map((d) => d.toJson()).toList(),
   };
 
   final String id;
@@ -181,6 +235,29 @@ class StoredMessage {
 
   bool get isPending => sendState == MessageSendState.pending;
   bool get hasFailed => sendState == MessageSendState.failed;
+
+  /// One entry per recipient of a group message, empty for a one-to-one one.
+  ///
+  /// [sendState] stays the single value the bubble renders -- it is the
+  /// aggregate over these, written by the fan-out -- while these are what a
+  /// retry addresses and what "delivered to 7 of 20" is counted from.
+  final List<GroupDelivery> deliveries;
+
+  bool get isGroupSend => deliveries.isNotEmpty;
+  int get deliveredCount => deliveries.where((d) => d.isSent).length;
+
+  /// The aggregate of [deliveries]: still going while any copy is in flight,
+  /// failed once none is but some never arrived, sent when all of them did.
+  MessageSendState get aggregateSendState {
+    if (deliveries.isEmpty) return sendState;
+    if (deliveries.any((d) => d.state == MessageSendState.pending)) {
+      return MessageSendState.pending;
+    }
+    if (deliveries.any((d) => d.state == MessageSendState.failed)) {
+      return MessageSendState.failed;
+    }
+    return MessageSendState.sent;
+  }
 
   /// For a RECEIVED message: the sender's own clock reading at send time,
   /// carried inside the encrypted content (message_content.dart's sentAt)

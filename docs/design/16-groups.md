@@ -182,7 +182,14 @@ The rest follows:
   `POST /v1/messages/batch` (or the federated variant) where that server's
   `GET /v1/server-status` advertises `batch_messages`, falling back to
   individual posts per server otherwise. In a non-federated community that is
-  N→1.
+  N→1. **Not yet done** — the fan-out posts individually, which works against
+  every server and is exactly what the fallback would do anyway. Batch is an
+  optimization, and doing it needs `_encryptAndSend` split so the payload can
+  be produced without posting it.
+- **Attachments in a group are not sent yet.** A picture has to be uploaded
+  once per distinct recipient *server*, against that server's own blob
+  capability, which is a second concern layered on the fan-out rather than
+  part of it. Text first.
 - **Receipts go to the author only**, keeping traffic linear.
 - **Above ~50 members the client warns.** This is not a protocol limit — see the
   server-side design for why — so it is purely a UI guard.
