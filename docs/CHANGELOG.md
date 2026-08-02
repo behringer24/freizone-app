@@ -1,13 +1,24 @@
 # Changelog
 
-User-facing changes to the Freizone Android app, newest first. Each entry
-covers everything since the previous one and is written to be usable
-as-is (or lightly trimmed) for a Play Store / App Store release listing.
-Internal/roadmap reference codes in parentheses, e.g. `(SRV-03)`, point back
-to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
-`freizone-server/docs/ROADMAP.md`.
+All notable changes to the Freizone Android app are documented here. The format
+follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
+uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.12.7+16 — 2026-08-01
+Each release heading records the Android `versionCode` alongside the
+`versionName`, because Google Play orders uploads by the former.
+
+Entries are written to be usable as-is, or lightly trimmed, for a Play Store
+release listing — so they describe what changed *for the user*, not how it was
+built. Reference codes in parentheses (e.g. `APP-12`, `SRV-03`) point at the item
+in [`ROADMAP.md`](ROADMAP.md) or in
+[freizone-server's roadmap](https://github.com/behringer24/freizone-server/blob/master/docs/ROADMAP.md),
+each of which links the full design document.
+
+## [Unreleased]
+
+Nothing yet.
+
+## [0.12.7] — 2026-08-01 (versionCode 16)
 
 ### Fixed
 - **A chat that stopped being readable now repairs itself.** If the encryption
@@ -22,7 +33,7 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
   effect once you sent the next message, because your contact had no way of
   hearing about it before that. It now tells them right away.
 
-## 0.12.6+15 — 2026-08-01
+## [0.12.6] — 2026-08-01 (versionCode 15)
 
 ### Fixed
 - **Notifications no longer stop arriving after a long time away.** When the
@@ -38,7 +49,7 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
   accounts are registered for notifications, with a tap through to the details
   per account and a "Re-register now" button.
 
-## 0.12.5+14 — 2026-08-02
+## [0.12.5] — 2026-08-02 (versionCode 14)
 
 ### Fixed
 - When sharing into Freizone from another app, the account sections on the
@@ -48,7 +59,7 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
   screen after leaving and returning to the app, even though the keyboard
   itself was gone.
 
-## 0.12.4+13 — 2026-08-01
+## [0.12.4] — 2026-08-01 (versionCode 13)
 
 ### Added
 - **Tappable links.** Web addresses, `www.` addresses, and email addresses in
@@ -76,7 +87,7 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 - Updated the privacy policy to cover pictures shared into Freizone from
   other apps, and the new optional share-shortcuts feature above.
 
-## 0.12.3+12 — 2026-07-30
+## [0.12.3] — 2026-07-30 (versionCode 12)
 
 ### Changed
 - **Add a caption to a picture you're sending.** Choosing a photo no longer
@@ -94,7 +105,7 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 - Replying to a picture, and pinning one, now shows a small preview of that
   picture instead of an empty line. (APP-04)
 
-## 0.12.2+11 — 2026-07-30
+## [0.12.2] — 2026-07-30 (versionCode 11)
 
 ### Changed
 - Freizone now checks whether the person you're writing to can actually
@@ -104,7 +115,7 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
   picture that's too large for the other side is refused right away,
   telling you the actual limit, instead of failing mid-send. (APP-04)
 
-## 0.12.1+10 — 2026-07-30
+## [0.12.1] — 2026-07-30 (versionCode 10)
 
 ### Fixed
 - **Sending a picture works.** Choosing a photo from the gallery did
@@ -117,7 +128,7 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
   server, so your storage allowance isn't slowly used up by images you
   already have. (APP-04, SRV-07)
 
-## 0.12.0+9 — 2026-07-29
+## [0.12.0] — 2026-07-29 (versionCode 9)
 
 ### Added
 - **Send pictures.** Tap the image button in a chat to pick a photo from
@@ -127,7 +138,7 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
   in. Like everything else in Freizone, images are end-to-end encrypted —
   the server stores them without ever being able to see them. (APP-04)
 
-## 0.11.8+8 — 2026-07-28
+## [0.11.8] — 2026-07-28 (versionCode 8)
 
 ### Fixed
 - Some conversations could permanently stop receiving new messages after a
@@ -147,7 +158,11 @@ to the fuller technical writeup in `docs/ROADMAP.md` (this repo) and
 - Assorted reliability and diagnostic-logging improvements, and dependency
   maintenance.
 
-## 1.0.6+6 — 2026-07-27
+## [1.0.6] — 2026-07-27 (versionCode 6)
+
+Numbered above 1.0 by accident; the line was renamed down to 0.11.x afterwards,
+so this release is *older* than the 0.11.8 entry above it despite the higher
+version. `versionCode` is the only monotonic ordering here.
 
 ### Added
 - **Account recovery from a seed phrase** (Settings → Recovery phrase to
