@@ -253,7 +253,123 @@ over APP-08's outbox, and the group UI.
   per recipient carrying its own random stable wire id and delivery state, and
   a retry that addresses only the copies that never arrived. A member removed
   while a copy was queued no longer receives it
+- 2026-08-03 — the group info screen's invite, from Andreas' first test run of
+  it: the address field now takes every form the rest of the app does (short
+  id-prefix, dash-grouped full id, `*server`, `*local`), and the address is
+  resolved to the canonical full id *before* the `member_add` is signed. It
+  previously signed whatever was typed, which folded in a **phantom member** —
+  listed and invited, but unreachable, because every certificate in that
+  account's chain is signed over the canonical id: the snapshot send failed with
+  "invalid dh identity certificate", so the invitee heard nothing at all. An
+  address that resolves to nothing now adds no member. Enforced in the core too
+  (SRV-01), on the signing side only. A group invitation also **notifies** the
+  invitee now and shows the group unread — nothing is ever sent into a group
+  before they accept, so it was the one membership change worth waking someone
+  for, and it was completely silent
+- 2026-08-03 — second test run: the invitee got nothing at all, and the cause
+  was in the core, not the invite. `loadGroupState` (native/group.go) accepted
+  `null` and an absent blob as "no facts yet" but not `{}` — which is exactly
+  what Dart's `const <String, dynamic>{}` encodes to, and exactly what
+  `applyGroupControl` passes for a group it has never heard of. `State
+  .UnmarshalJSON` then failed the call with "stored state has no genesis
+  event" (a check that is right for a blob genuinely read back from disk), so
+  the invitee's first snapshot threw on arrival: no group, no notification, no
+  way to accept, and no second chance either — the ratchet had already advanced
+  past the envelope and its id was already marked processed, so a redelivery is
+  ignored by design. Only re-inviting could fix it. Recognizing "no facts"
+  by *probing for events* rather than pattern-matching the bytes, so
+  `{"events":[]}` and any future field-only blob behave the same. Covered by a
+  test that merges a real snapshot into the blob the receive path actually
+  passes — the old tests only ever used `nil` and `null`
+- 2026-08-03 — SRV-17 landed on the client side too, and it belongs here because
+  simultaneous establishment is a *group* phenomenon: the prekey block now
+  carries a tri-state `rekey`, the send path states it on every establishment
+  (`_encryptAndSend`'s `afterOwnReset`, true only behind a deliberate reset), and
+  the receive path takes the sender's word instead of sniffing for a `v: 3`
+  payload. `parsed.rekey ?? (RekeySignal.tryDecode(...) != null)` — the fallback
+  survives for peers on older builds, and `false` is trusted as an answer rather
+  than read as "unknown". Needs a native-core rebuild
+- 2026-08-03 — invite/accept round trip verified end to end between two
+  accounts, and the two gaps it surfaced closed: **declining an invitation**
+  (a self-signed `leave`, which the fold already deletes the member row for
+  whether or not the invitee had joined — so no new event type, and the group
+  learns the refusal instead of keeping an invitation open forever; the group is
+  then forgotten locally, transcript and pictures included), and **tapping a
+  group notification** now opens the group. The payload carries a *tagged* group
+  id rather than letting the tap guess from the id's version marker, so a
+  payload left in the tray by an older build still opens the peer chat it meant.
+  Opening a group clears the account's notification and launcher badge, which
+  until now only a one-to-one chat did
+- 2026-08-03 — convergence, after Andreas saw a third member take several
+  messages from all three before everyone saw everyone. Three gaps, all now
+  closed:
+  - a control envelope that failed to send was **lost** —
+    `_broadcastGroupEvents` swallowed the failure per member and nothing retried
+    it. Now recorded as a *snapshot debt* (`AppState.groupSnapshotDebts`,
+    persisted: the failure is usually the network, and being closed in that
+    state is when it must not be forgotten) and paid off as a whole snapshot on
+    reconnect, on resume, and on opening the group. A snapshot rather than the
+    lost events: the fact set is grow-only and the fold dedupes by event id, so
+    "everything I know" needs no bookkeeping of what went missing. A debt
+    against a non-member is dropped rather than paid — sending group facts to
+    somebody now outside the group would disclose the membership, and with it
+    every member's address
+  - convergence was **reactive only**: nothing ever sent a `sync_request`, only
+    answered one, so a device that was itself behind stayed behind until
+    somebody else spoke. Opening a group now asks one member (the founder if
+    joined, else any joined member — any member holds the whole set, so one
+    answer is as good as ten), at most once per group per five minutes
+  - `flushOutbox` covered **only one-to-one** messages, so a fan-out that died
+    part-way had no automatic second attempt at all, despite having as many ways
+    to fail as the group has members. Group sends are in the flush now, and
+    address only the copies that never arrived
+  - and the reason none of this was visible: `AppSession.lastError` was written
+    from a dozen places and **read by none**. The chat list now shows it in a
+    banner that stays until dismissed (the field itself is transient — the next
+    envelope that decrypts cleanly clears it — so the screen keeps its own copy)
+- 2026-08-03 — two gaps found while taking stock of what groups still need:
+  - a group message set `deliveredUpTo`, and the live path sends receipts over
+    the *conversation* with the sender — so a group message confirmed that
+    member's unrelated direct messages as delivered, or as read when their chat
+    was the readable one, and the watermark is monotonic so nothing walked it
+    back. Group receipts remain unbuilt; when they arrive they need their own
+    per-group, per-member field rather than this one
+  - `deleteGroup` (forget a group locally) had **no UI caller at all**: leaving
+    or dissolving left the group in the chat list for good, and a group whose
+    fact set failed to load could not be removed either. Now on the chat list's
+    long-press (the only route that needs no fact set) and in the info screen,
+    sharing one confirmation (`util/group_actions.dart`) that says a group one is
+    still a member of will simply come back -- pointing at leave/dissolve, which
+    are the signed facts. The group screen also stops offering a composer once
+    this account is no longer a member
+- 2026-08-03 — state events render as system lines (diffed from the folded view
+  before and after a batch, not translated event by event -- authority is decided
+  by the fold, so a late grant can retroactively admit an act and a revocation
+  can bring a removed member back; the batch is consulted only to tell "left"
+  from "was removed"). Same lines on both apply paths, so an inviter and an
+  invitee read the same history. `group_system_lines.dart` is pure, because the
+  receive half runs in the background isolate
+- 2026-08-03 — Andreas' test run of the new removal, plus three questions.
+  Removing a group while still a member was a trap: the fact set went, the others
+  kept sending, and an arriving message re-created a transcript with no name, no
+  member list, no info screen and a send that failed with "no group". Now
+  "Leave and remove" / "Decline and remove" in one step, and for the founder --
+  who cannot leave -- a refusal that points at dissolving. Around it: a group with
+  no facts yet says so instead of offering a composer, its info screen offers the
+  way out instead of "Group not found", and the receive path *asks* the member who
+  wrote for the facts (`_askForGroupFacts`) rather than waiting for a volunteer.
+  Re-invitation after a removal now notifies too -- the first check keyed on "this
+  group is new to this device", which a removal leaves false
 - **Open**, in the order they are likely to be done:
+  - ~~no history for a member who joins later~~ — **decided 2026-08-03: history
+    is never forwarded.** A new member gets the fact set, never past messages.
+    Pairwise fan-out leaves no group copy to forward: a backfill would be one
+    member re-sending everyone else's words on their own session, signed by the
+    forwarder and attributed to the author, and it would retroactively hand an
+    invitee exactly the traffic that "only joined members get a copy" withheld
+    while their invitation was open. Reasoning in
+    [design/16-groups.md](design/16-groups.md)'s out-of-scope section; the join
+    dialog now says so before you accept
   - ~~the receive path~~ — **done 2026-08-03**: `v: 4` into its own transcript,
     `v: 5` applied without being stored or notified, out-of-order events held
     and retried, `state_hash` compared on every group envelope and answered
@@ -261,14 +377,24 @@ over APP-08's outbox, and the group UI.
     lives in `group_receive.dart` as plain functions over `AppState`, because
     the background push isolate decrypts too and whoever decrypts must act:
     the ratchet has already advanced past the envelope
+  - **accepted, recorded, not fixed** (both in
+    [design/16-groups.md](design/16-groups.md)'s "Known gaps"): blocking is
+    one-directional inside a group — a blocked member is invisible to us,
+    including other members' replies to them, while our own copies still reach
+    them; and a deleted account keeps its member row forever, since no fact can
+    express "this account no longer exists" and no member could prove it. Only a
+    moderator removing them resolves the second one
   - **group receipts** — designed but unbuilt. `GroupConversation` already has
     the per-member watermark maps and the wire needs nothing new, but nothing
-    sends or reads a `v: 2` receipt in a group yet
+    sends or reads a `v: 2` receipt in a group yet. Whatever carries the anchor
+    must be per group and per member: reusing the one-to-one path is what caused
+    the cross-talk fixed above
   - **batch delivery** in the fan-out, and **attachments in a group** (one
     upload per distinct recipient server)
   - the UI — **first cut done 2026-08-03**: groups in the one chat list with
     their own glyph and author-prefixed preview, a `GroupChatScreen` with
-    author lines and a k-of-N send indicator, creating a group, and joining one
-    behind a notice that says the group will see your address. Still to come:
-    filter chips, the delivery sheet, the group info screen (member list, role
-    actions, invite, leave/dissolve), and system lines for state events
+    author lines and a k-of-N send indicator, creating a group, and joining or
+    declining one behind a notice that says the group will see your address.
+    The group info screen (member list, role actions, invite, leave/dissolve)
+    followed on the same day. Still to come: filter chips, the delivery sheet,
+    and system lines for state events

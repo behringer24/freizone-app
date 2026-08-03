@@ -141,13 +141,78 @@ func TestGroupResolveStateAcceptsAnUnknownGroup(t *testing.T) {
 	// What a device has before the first snapshot of a group it has just been
 	// invited to arrives. It must answer emptily rather than fail: the UI asks
 	// about a group it is only now hearing of.
-	for _, blob := range []json.RawMessage{nil, json.RawMessage("null")} {
+	//
+	// `{}` is in here for a concrete reason: it is what Dart's
+	// `const <String, dynamic>{}` encodes to, and that is what the receive path
+	// passes for an unknown group. It used to fail the whole call, which cost an
+	// invitee their invitation outright -- see loadGroupState.
+	for _, blob := range []json.RawMessage{
+		nil,
+		json.RawMessage("null"),
+		json.RawMessage("{}"),
+		json.RawMessage(`{"events":[]}`),
+		json.RawMessage(`{"events":null}`),
+	} {
 		out, err := doGroupResolveState(groupResolveStateRequest{State: blob})
 		if err != nil {
-			t.Fatalf("empty state: %v", err)
+			t.Fatalf("empty state %s: %v", blob, err)
 		}
 		if got := out.(*groupStateResponse); got.GroupID != "" || len(got.Resolved.Members) != 0 {
 			t.Fatalf("want an empty view, got %+v", got)
+		}
+	}
+}
+
+// The invitee's side of an invitation: a snapshot merged into the "nothing yet"
+// blob the receive path actually passes, rather than into a state built by an
+// earlier call in the same test. This is the path that was broken -- everything
+// downstream of it (the group appearing, the notification, being able to accept)
+// depends on this one call not failing.
+func TestGroupSnapshotIntoAnEmptyBlobIsAccepted(t *testing.T) {
+	founder := newGroupIdentity(t)
+	invitee := newGroupIdentity(t)
+	created := groupCreate(t, founder, "Wandergruppe")
+
+	added, _ := signAndApply(t, founder, created.State, groupSignEventRequest{
+		Type:    "member_add",
+		Subject: invitee.AccountID,
+		Server:  "https://b.example.org",
+	})
+
+	var snapshot struct {
+		Events []*group.Event `json:"events"`
+	}
+	if err := json.Unmarshal(added.State, &snapshot); err != nil {
+		t.Fatalf("reading the snapshot the inviter sends: %v", err)
+	}
+
+	for _, blob := range []json.RawMessage{nil, json.RawMessage("{}")} {
+		out, err := doGroupApplyEvents(groupApplyEventsRequest{
+			State:  blob,
+			Events: snapshot.Events,
+		})
+		if err != nil {
+			t.Fatalf("applying a snapshot onto %s: %v", blob, err)
+		}
+		got := out.(*groupStateResponse)
+		if len(got.Rejected) > 0 {
+			t.Fatalf("snapshot rejected: %+v", got.Rejected)
+		}
+		if got.GroupID != created.GroupID {
+			t.Fatalf("group id = %q, want %q", got.GroupID, created.GroupID)
+		}
+		if got.StateHash != added.StateHash {
+			t.Fatal("the invitee must end up on the inviter's state hash")
+		}
+		// Listed, and not joined: the invitation is a proposal until answered.
+		var pending bool
+		for _, m := range got.Resolved.Members {
+			if m.AccountID == invitee.AccountID {
+				pending = !m.Joined
+			}
+		}
+		if !pending {
+			t.Fatalf("want a pending membership for the invitee, got %+v", got.Resolved.Members)
 		}
 	}
 }

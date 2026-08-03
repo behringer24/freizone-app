@@ -17,6 +17,7 @@ import '../state/chat_target.dart';
 import '../state/group_conversation.dart';
 import '../util/avatar_color.dart';
 import '../util/errors.dart';
+import 'group_info_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
   const GroupChatScreen({
@@ -81,7 +82,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         title: const Text('Join this group?'),
         content: Text(
           'Everyone in this group will see your address, and you will see '
-          'theirs. There are ${resolved.members.length} member(s).',
+          'theirs. There are ${resolved.members.length} member(s).\n\n'
+          // Said before accepting, not discovered after: the empty transcript
+          // is by design and permanent. Nothing that was written before you
+          // join is ever forwarded -- there is no group copy of it to forward
+          // (see docs/design/16-groups.md).
+          'You will see messages from now on. Anything written before you join '
+          'stays with the people who were there.',
         ),
         actions: [
           TextButton(
@@ -107,6 +114,46 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
+  /// Declining takes this account out of the group's member list for everyone
+  /// (it is a signed `leave`, see AppSession.declineGroupInvite) and forgets the
+  /// group here. Confirmed first because both halves are one-way: the invitation
+  /// cannot be re-opened from this side, only re-issued from theirs.
+  Future<void> _decline() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Decline this invitation?'),
+        content: const Text(
+          'The group will see that you declined, and you will be removed from '
+          'its member list. This group then disappears from your chats — only '
+          'someone in the group can invite you again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep it'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Decline'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await widget.session.declineGroupInvite(widget.groupId);
+      // The group is gone from this account, so this screen has nothing left to
+      // render (its build would fall through to "Group not found").
+      navigator.pop();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(describeError(e))));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -120,16 +167,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(chat.titleFor(widget.session.state.server)),
-                if (resolved != null)
-                  Text(
-                    _subtitleFor(resolved),
-                    style: Theme.of(context).textTheme.bodySmall,
+            // Tapping the title opens the member list -- the standard gesture
+            // in every messenger, and unbound in ChatScreen today. Group
+            // moderation lives there rather than in a menu, because every
+            // action is about one member.
+            title: InkWell(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => GroupInfoScreen(
+                    session: widget.session,
+                    groupId: widget.groupId,
                   ),
-              ],
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(chat.titleFor(widget.session.state.server)),
+                  if (resolved != null)
+                    Text(
+                      _subtitleFor(resolved),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                ],
+              ),
             ),
           ),
           body: Column(
@@ -139,6 +200,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 _buildInviteBar(context, resolved)
               else if (resolved?.dissolved ?? false)
                 const _Notice('This group has been dissolved.')
+              // Left, or removed by a moderator. The transcript stays readable
+              // (it is ours), but a composer here would only produce "you are
+              // not a member of this group" on send -- so say it up front, and
+              // point at the one action left: getting it off this device, in
+              // the info screen behind the title.
+              else if (resolved != null &&
+                  resolved.memberById(widget.session.state.accountId) == null)
+                const _Notice('You are no longer a member of this group.')
+              // No facts about this group at all: a message overtook the
+              // snapshot that introduces it (delivery is unordered). Sending
+              // needs the member list, so there is nothing to send to yet.
+              else if (resolved == null)
+                const _Notice(
+                  'Waiting for this group\'s details from another member.',
+                )
               else
                 _buildComposer(context),
             ],
@@ -185,10 +261,27 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       top: false,
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: FilledButton.icon(
-          onPressed: () => _accept(resolved),
-          icon: const Icon(Icons.group_add),
-          label: const Text('Join group'),
+        child: Row(
+          children: [
+            // Declining is offered next to joining, not hidden in a menu: an
+            // invitation is a question, and a question with only one answer on
+            // screen is a nudge.
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _decline,
+                icon: const Icon(Icons.close),
+                label: const Text('Decline'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: () => _accept(resolved),
+                icon: const Icon(Icons.group_add),
+                label: const Text('Join group'),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -341,6 +434,15 @@ class _GroupBubble extends StatelessWidget {
         Icons.error_outline,
         'Delivered to ${message.deliveredCount} of '
             '${message.deliveries.length}',
+      ),
+      // Two checks mean "delivered to everyone owed a copy" -- which is
+      // vacuously true when nobody was owed one. A group whose only other
+      // members are pending invitees is owed nothing (see
+      // AppSession.sendGroupMessage: a copy goes only to members who have
+      // accepted), and a bare checkmark there reads as "it arrived".
+      MessageSendState.sent when message.deliveries.isEmpty => (
+        Icons.done_all,
+        'Nobody has accepted yet',
       ),
       MessageSendState.sent => (Icons.done_all, ''),
     };

@@ -129,6 +129,33 @@ void main() {
     });
   });
 
+  group('AppState.groupSnapshotDebts', () {
+    test('omitted when empty, so existing profiles are unchanged', () {
+      expect(
+        _minimalState().toJson().containsKey('group_snapshot_debts'),
+        isFalse,
+      );
+    });
+
+    test('what a member was never told survives a restart', () {
+      // The point of persisting it: the failure that creates a debt is usually
+      // the app losing its network, and being closed in that state is exactly
+      // when it must not be forgotten -- nothing in the protocol tells a member
+      // what they never received.
+      final state = _minimalState();
+      state.groupSnapshotDebts['p2xjx0000000000000000'] = {
+        'qben000000000000000b',
+        'qcaro00000000000000c',
+      };
+
+      final restored = AppState.fromJson(state.toJson());
+      expect(restored.groupSnapshotDebts['p2xjx0000000000000000'], {
+        'qben000000000000000b',
+        'qcaro00000000000000c',
+      });
+    });
+  });
+
   group('AppState.inboundSessions', () {
     test('omitted when empty, so existing profiles are unchanged', () {
       expect(_minimalState().toJson().containsKey('inbound_sessions'), isFalse);

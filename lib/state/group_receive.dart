@@ -16,6 +16,7 @@ import 'chat_target.dart';
 import 'group_control.dart';
 import 'group_conversation.dart';
 import 'group_store.dart';
+import 'group_system_lines.dart';
 import 'local_state.dart';
 import 'message_content.dart';
 
@@ -33,6 +34,7 @@ class GroupControlOutcome {
     required this.groupId,
     required this.peerStateHash,
     this.wantsSnapshot = false,
+    this.invited = false,
   });
 
   final String groupId;
@@ -42,13 +44,25 @@ class GroupControlOutcome {
 
   /// They asked for our fact set outright.
   final bool wantsSnapshot;
+
+  /// This envelope was an invitation *to us*, into a group this account had no
+  /// facts about until now -- the one membership change that is worth waking
+  /// the user for (see [applyGroupControl]).
+  final bool invited;
 }
 
 /// Applies a group control envelope to this account's stored fact set.
 ///
-/// Never stores anything in a transcript and never notifies: membership is not
-/// a message. The envelope is still acknowledged and deleted from the queue
-/// like any other processed one.
+/// Never stores anything in a transcript: membership is not a message. The
+/// envelope is still acknowledged and deleted from the queue like any other
+/// processed one.
+///
+/// The one thing it does report as notify-worthy is an invitation addressed to
+/// this account (see [GroupControlOutcome.invited]) -- being asked into a group
+/// is a decision waiting on the user, not group bookkeeping, and it is the
+/// invitee's only sign that anything happened at all: nothing is ever sent to a
+/// member who hasn't accepted, so without this a new group would just appear
+/// silently in the chat list.
 Future<GroupControlOutcome> applyGroupControl(
   AppState state,
   FreizoneCore core,
@@ -63,12 +77,21 @@ Future<GroupControlOutcome> applyGroupControl(
   }
 
   final stored = await GroupStateStore.load(state.accountId, control.groupId);
+  // Whether this account had *any* facts about this group before now. The same
+  // snapshot legitimately arrives from several members, so "the group is new to
+  // us" is what tells a first invitation apart from a re-delivery of it.
+  final isNewToUs = stored == null;
   final held = state.pendingGroupEvents.remove(control.groupId) ?? const [];
 
   // Retried together with the new facts: delivery is unordered, so a
   // membership event easily arrives before the snapshot carrying the genesis
   // it depends on.
   final batch = [...held, ...control.events];
+  // Folded before applying, so the transcript can say what changed (see
+  // group_system_lines.dart). One extra fold of a blob we already have, only on
+  // a control envelope -- membership changes are rare next to messages, and
+  // "who is in this group" changing silently is exactly what needs saying.
+  final before = stored == null ? null : core.groupResolveState(stored).resolved;
   final result = core.groupApplyEvents(
     state: stored ?? const <String, dynamic>{},
     events: batch,
@@ -77,11 +100,44 @@ Future<GroupControlOutcome> applyGroupControl(
   // The blob decides its own id -- a snapshot carries the genesis, and the id
   // follows from the key in it rather than from whatever the sender claimed.
   final groupId = result.groupId.isEmpty ? control.groupId : result.groupId;
+  var invited = false;
   if (result.groupId.isNotEmpty) {
     await GroupStateStore.save(state.accountId, groupId, result.state);
     // Being told about a group is how an invitation arrives, so the transcript
     // is created here rather than waiting for a message to land in it.
-    state.groups.putIfAbsent(groupId, () => GroupConversation(groupId: groupId));
+    final chat = state.groups.putIfAbsent(
+      groupId,
+      () => GroupConversation(groupId: groupId),
+    );
+    // An outstanding invitation for us: a membership we did not have before and
+    // have not accepted, so nothing will ever be sent into this group until the
+    // user answers. Marked unread as well as notified -- the chat list is where
+    // they will come looking for it.
+    //
+    // "Did not have before" rather than "the group is new to us", because being
+    // re-invited after a removal is an invitation too: the fact set stays on this
+    // device when a moderator removes us, so the group is *not* new the second
+    // time round and that first version of this check said nothing at all.
+    final meBefore = before?.memberById(state.accountId);
+    final me = result.resolved.memberById(state.accountId);
+    if (me != null && !me.joined && (isNewToUs || meBefore == null)) {
+      invited = true;
+      chat.hasUnread = true;
+    }
+
+    // Deliberately not marked unread: a membership change is worth recording
+    // where it happened, not worth a badge -- the invitation above is the one
+    // exception, and it has its own reason.
+    appendGroupSystemLines(
+      chat,
+      groupStateChangeLines(
+        before: before,
+        after: result.resolved,
+        myAccountId: state.accountId,
+        events: batch,
+      ),
+      at: DateTime.now().toUtc(),
+    );
   }
 
   _holdPremature(state, groupId, batch, result);
@@ -89,7 +145,33 @@ Future<GroupControlOutcome> applyGroupControl(
   return GroupControlOutcome(
     groupId: groupId,
     peerStateHash: control.stateHash,
+    invited: invited,
   );
+}
+
+/// Appends [lines] to [chat]'s transcript as centered system lines, one second
+/// apart from [at].
+///
+/// A transcript renders in insertion order, so the offsets are not what keeps
+/// these in sequence -- they keep the *timestamps* from being identical, since
+/// several changes can land in one batch ("invited" before "joined" is not the
+/// same story as the other way round) and identical stamps would make the day
+/// dividers and any future ordering by time arbitrary.
+///
+/// Shared by both apply paths -- our own actions (AppSession.applyGroupEvents)
+/// and a peer's (applyGroupControl) -- so a change reads identically whoever
+/// made it.
+void appendGroupSystemLines(
+  GroupConversation chat,
+  List<String> lines, {
+  required DateTime at,
+}) {
+  for (var i = 0; i < lines.length; i++) {
+    chat.messages.add(
+      StoredMessage.system(lines[i], at.add(Duration(seconds: i))),
+    );
+  }
+  if (lines.isNotEmpty) chat.lastActivityAt = at;
 }
 
 /// Keeps the events that could not be admitted *yet*, so a later arrival can

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/behringer24/freizone-server/pkg/devicecert"
+	"github.com/behringer24/freizone-server/pkg/ratchet"
 )
 
 func TestGenerateIdentityAndDeviceCertificateRoundTrip(t *testing.T) {
@@ -153,5 +154,69 @@ func assertValid(t *testing.T, respAny any, want bool) {
 	}
 	if v.Valid != want {
 		t.Errorf("valid = %v, want %v", v.Valid, want)
+	}
+}
+
+// SRV-17: the rekey flag has to survive the FFI boundary as a tri-state, since
+// the app's receive path distinguishes all three (see AppSession's
+// processIncomingMessage) -- "said nothing" is what makes it fall back to
+// reading the decrypted content, and false must not be mistaken for it.
+func TestBuildEnvelopeCarriesTheRekeyTriState(t *testing.T) {
+	yes, no := true, false
+	initial := &ratchet.InitialMessage{
+		SenderDHIdentityPub: []byte{1, 2, 3},
+		SenderEphemeralPub:  []byte{4, 5, 6},
+		SignedPrekeyID:      1,
+	}
+	header := ratchet.Header{DHPub: []byte{7, 8, 9}, PN: 0, N: 0}
+
+	for name, want := range map[string]*bool{
+		"deliberate re-key":      &yes,
+		"ordinary establishment": &no,
+		"says nothing":           nil,
+	} {
+		buildAny, err := doBuildEnvelope(buildEnvelopeRequest{
+			Initial:    initial,
+			Header:     header,
+			Ciphertext: []byte("ct"),
+			Rekey:      want,
+		})
+		if err != nil {
+			t.Fatalf("%s: doBuildEnvelope() error = %v", name, err)
+		}
+		parseAny, err := doParseEnvelope(parseEnvelopeRequest{
+			Payload: buildAny.(buildEnvelopeResponse).Payload,
+		})
+		if err != nil {
+			t.Fatalf("%s: doParseEnvelope() error = %v", name, err)
+		}
+		got := parseAny.(parseEnvelopeResponse).Rekey
+		switch {
+		case want == nil && got != nil:
+			t.Errorf("%s: rekey = %v, want it absent", name, *got)
+		case want != nil && got == nil:
+			t.Errorf("%s: rekey absent, want %v", name, *want)
+		case want != nil && *got != *want:
+			t.Errorf("%s: rekey = %v, want %v", name, *got, *want)
+		}
+	}
+
+	// No prekey block, nothing to qualify.
+	buildAny, err := doBuildEnvelope(buildEnvelopeRequest{
+		Header:     header,
+		Ciphertext: []byte("ct"),
+		Rekey:      &yes,
+	})
+	if err != nil {
+		t.Fatalf("doBuildEnvelope() error = %v", err)
+	}
+	parseAny, err := doParseEnvelope(parseEnvelopeRequest{
+		Payload: buildAny.(buildEnvelopeResponse).Payload,
+	})
+	if err != nil {
+		t.Fatalf("doParseEnvelope() error = %v", err)
+	}
+	if r := parseAny.(parseEnvelopeResponse).Rekey; r != nil {
+		t.Errorf("rekey = %v on an envelope without a prekey block, want absent", *r)
 	}
 }

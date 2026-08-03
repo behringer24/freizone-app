@@ -396,6 +396,13 @@ type buildEnvelopeRequest struct {
 	Initial    *ratchet.InitialMessage `json:"initial,omitempty"`
 	Header     ratchet.Header          `json:"header"`
 	Ciphertext []byte                  `json:"ciphertext"`
+
+	// Rekey states why a prekey block is attached (SRV-17): true for a
+	// deliberate re-key, false for an ordinary establishment, absent to say
+	// nothing. Absent is what a caller predating the field sends, and it costs
+	// the receiver the content-sniffing fallback -- so a caller that knows
+	// should always state it. See wire.PrekeyFields.Rekey.
+	Rekey *bool `json:"rekey,omitempty"`
 }
 
 type buildEnvelopeResponse struct {
@@ -406,7 +413,7 @@ type buildEnvelopeResponse struct {
 // docs/PROTOCOL.md): the Double Ratchet header, ciphertext, and (only for
 // a session's first message) the X3DH InitialMessage fields.
 func doBuildEnvelope(req buildEnvelopeRequest) (any, error) {
-	payload, err := wire.NewEnvelope(req.Initial, req.Header, req.Ciphertext).MarshalPayload()
+	payload, err := wire.NewEnvelopeRekey(req.Initial, req.Header, req.Ciphertext, req.Rekey).MarshalPayload()
 	if err != nil {
 		return nil, err
 	}
@@ -421,6 +428,12 @@ type parseEnvelopeResponse struct {
 	Initial    *ratchet.InitialMessage `json:"initial,omitempty"`
 	Header     ratchet.Header          `json:"header"`
 	Ciphertext []byte                  `json:"ciphertext"`
+
+	// Rekey is what the sender said about their prekey block, passed through
+	// verbatim including "said nothing" (absent), which the caller must handle
+	// rather than read as false -- see wire.PrekeyFields.Rekey. Absent whenever
+	// there is no prekey block at all.
+	Rekey *bool `json:"rekey,omitempty"`
 }
 
 // doParseEnvelope decodes a message's opaque wire payload back into its
@@ -439,13 +452,20 @@ func doParseEnvelope(req parseEnvelopeRequest) (any, error) {
 		return nil, err
 	}
 	var initial *ratchet.InitialMessage
+	var rekey *bool
 	if env.Prekey != nil {
 		initial, err = env.Prekey.ToInitialMessage()
 		if err != nil {
 			return nil, err
 		}
+		rekey = env.Prekey.Rekey
 	}
-	return parseEnvelopeResponse{Initial: initial, Header: header, Ciphertext: ciphertext}, nil
+	return parseEnvelopeResponse{
+		Initial:    initial,
+		Header:     header,
+		Ciphertext: ciphertext,
+		Rekey:      rekey,
+	}, nil
 }
 
 // --- HTTP request signing --------------------------------------------------

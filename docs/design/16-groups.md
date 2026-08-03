@@ -443,11 +443,59 @@ unbound:
 6. UI.
 7. A federated group across both local instances, end to end.
 
+## Known gaps
+
+Both established by testing on 2026-08-03, both accepted for now, both recorded
+because the behaviour is defensible but *not* obvious.
+
+- **Blocking is one-directional inside a group.** A blocked member's group
+  messages are decrypted (the ratchet and the queue have to stay clean) and then
+  dropped, exactly as their direct messages are — so they are invisible here,
+  including the replies other members write to them, which leaves visible holes
+  in a conversation. Their *membership facts* are still applied: blocking a person
+  must not freeze this device's view of who is in the group. And our own messages
+  still go to them — a group message is one copy per member, and withholding one
+  copy would silently give that member a different transcript from everyone
+  else's while telling nobody. The alternative, dropping them from our fan-out,
+  trades an invisible reader for an invisible gap in their history; neither is
+  obviously right, so the simpler one stands.
+- **A deleted account keeps its member row.** Nothing in a group's facts can say
+  "this account ceased to exist", and no member can prove it — so when an admin
+  deletes a user, every other member keeps them listed. Their messages simply
+  stop; sends to them fail permanently and visibly (the k-of-N indicator, and one
+  line in the error banner). A snapshot debt against them is dropped rather than
+  retried forever once their server answers `404`
+  (`AppSession._payGroupSnapshotDebts`), so the failure is stated once instead of
+  on every resume. The only thing that actually resolves it is a moderator
+  removing the member, which is a signed fact like any other.
+
 ## Out of scope
 
 - **Broadcast** — SRV-16.
 - **Group history on a newly linked device** — APP-02. A new device gets current
   *state* from any peer's snapshot, not past messages.
+- **Group history for a member who joins later** — decided 2026-08-03: it is
+  never forwarded. A new member gets the fact set and nothing that was said
+  before they accepted.
+
+  Not a simplification we might revisit: there is no group copy of a transcript
+  to forward. Pairwise fan-out means every message exists only as one copy per
+  recipient, encrypted for that recipient's ratchet, so a backfill would be
+  member X re-sending Y's and Z's words on X's own session — signed by X,
+  attributed to Y. What is authenticated hearsay in a chat log is exactly what a
+  signature is supposed to prevent, and it would put re-publishing other
+  people's messages in the hands of whoever happens to be online when somebody
+  joins.
+
+  It also runs directly against the rule that a copy goes only to members who
+  have *accepted*: an invitee is deliberately kept out of group traffic while
+  their invitation is open, and a backfill on `join_accept` would hand them
+  precisely what that rule withheld, retroactively.
+
+  Consequences accepted: a message sent while an invitation is still open
+  reaches nobody but the sender's own screen (hence the "Nobody has accepted
+  yet" hint next to its checkmarks), and joining shows an empty transcript,
+  which the join dialog says up front.
 - **Group avatars.** A blob lives on the *recipient's* server, so a group picture
   would be one upload per member and a re-upload for every join. Name and topic
   only in v1.

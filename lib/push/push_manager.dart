@@ -452,14 +452,22 @@ Future<void> _syncAndMaybeNotify(String? instance) async {
     // between and revert the ratchet -- and with several accounts, each
     // profile's snapshot aged through every preceding account's network sync
     // before finally being written back over whatever had changed since.
-    final peerAccountId = await LocalStateStore.withProfileLock(accountId, () async {
+    final notice = await LocalStateStore.withProfileLock(accountId, () async {
       final state = await LocalStateStore.loadProfile(accountId);
       if (state == null) return null;
       return _syncProfile(state);
     });
-    if (peerAccountId != null) {
-      await showMessageNotification(accountId, peerAccountId: peerAccountId);
-      _log('wake notified $accountId (peer $peerAccountId)');
+    if (notice != null) {
+      await showMessageNotification(
+        accountId,
+        peerAccountId: notice.peerAccountId,
+        groupId: notice.groupId,
+        invitation: notice.invitation,
+      );
+      _log(
+        'wake notified $accountId '
+        '(${notice.groupId ?? notice.peerAccountId})',
+      );
     }
   }
 }
@@ -470,9 +478,9 @@ Future<void> _syncAndMaybeNotify(String? instance) async {
 /// currently queued for [state]'s device, processes each, and tops up
 /// the one-time-prekey pool if it's running low (topUpOneTimePrekeysIfNeeded).
 /// A single malformed/undecryptable message is logged and skipped rather
-/// than aborting the rest of the sync. Returns the peer id of the last
-/// genuinely new (non-request) message found, or null if none turned up
-/// -- the caller's cue for whether to notify at all.
+/// than aborting the rest of the sync. Returns what the last genuinely
+/// notify-worthy envelope was (see [_WakeNotice]), or null if none turned
+/// up -- the caller's cue for whether to notify at all.
 ///
 /// Deliberately does NOT send "delivered" receipts (see receipt_signal
 /// .dart) for what it processes here -- that needs AppSession's sending
@@ -503,10 +511,22 @@ bool _giveUpOnEnvelope(
   return true;
 }
 
-Future<String?> _syncProfile(AppState state) async {
+/// What a wake found worth telling the user about: null when nothing was, and
+/// otherwise which chat to jump to on tap -- either a one-to-one
+/// [peerAccountId] or a [groupId], never both, since the two open different
+/// screens -- and whether what turned up was a group invitation rather than a
+/// message. Not just a peer id, because a group envelope is notify-worthy
+/// while having no one-to-one conversation to point at.
+typedef _WakeNotice = ({
+  String? peerAccountId,
+  String? groupId,
+  bool invitation,
+});
+
+Future<_WakeNotice?> _syncProfile(AppState state) async {
   final core = FreizoneCore();
   final api = ApiClient(baseUrl: state.server, core: core);
-  String? notifyPeerAccountId;
+  _WakeNotice? notice;
   try {
     final messages = await api.listMessages(state.credentials);
     _log('wake sync ${state.accountId}: ${messages.length} queued');
@@ -534,7 +554,15 @@ Future<String?> _syncProfile(AppState state) async {
           continue;
         }
         changed = true;
-        if (result.shouldNotify) notifyPeerAccountId = result.peerAccountId;
+        if (result.shouldNotify) {
+          notice = (
+            // A group envelope points at the group, never at a one-to-one chat
+            // with whoever happened to send it.
+            peerAccountId: result.groupId == null ? result.peerAccountId : null,
+            groupId: result.groupId,
+            invitation: result.groupInvite,
+          );
+        }
         deletions.add(api.deleteMessage(msg.messageId, state.credentials));
       } catch (e) {
         _log('background message decrypt failed: $e');
@@ -570,7 +598,7 @@ Future<String?> _syncProfile(AppState state) async {
   } finally {
     api.close();
   }
-  return notifyPeerAccountId;
+  return notice;
 }
 
 /// FCM tokens rotate occasionally; re-push the fresh one to every
@@ -664,12 +692,23 @@ Future<void> reregisterAllProfiles() async {
 /// time either path calls this, a message has actually been decrypted
 /// and confirmed worth surfacing.
 ///
-/// [peerAccountId] lets tapping the notification jump straight to that
-/// conversation instead of just switching to the right account -- see
-/// notification_navigation.dart.
+/// [peerAccountId] (a one-to-one conversation) or [groupId] (a group) lets
+/// tapping the notification jump straight to that chat instead of just
+/// switching to the right account -- see notification_navigation.dart. They
+/// are separate parameters rather than one id plus a flag because a caller
+/// always knows which of the two it has, and the two open different screens.
+///
+/// [invitation] only changes the wording: a group invitation is the one
+/// non-message thing worth surfacing (see group_receive.dart's
+/// applyGroupControl), and "new message(s)" would send the user looking for a
+/// message that isn't there. It deliberately shares this account's single
+/// notification id with messages, so an account never stacks up two
+/// notifications and clearMessageNotification still clears everything.
 Future<void> showMessageNotification(
   String instance, {
   String? peerAccountId,
+  String? groupId,
+  bool invitation = false,
 }) async {
   // instance is the waking account's own id -- purely local information
   // (never sent anywhere), so it's safe to show in the notification body
@@ -677,13 +716,15 @@ Future<void> showMessageNotification(
   // notification id so two accounts overlap into
   // one update, not a stack of duplicates, and so clearMessageNotification
   // cancels the right one.
-  final body = 'New message(s) for ${formatAccountIdForDisplay(instance)}';
+  final what = invitation ? 'Group invitation' : 'New message(s)';
+  final body = '$what for ${formatAccountIdForDisplay(instance)}';
   await _show(
     id: _notificationIdFor(instance),
     body: body,
     payload: encodeNotificationPayload(
       accountId: instance,
       peerAccountId: peerAccountId,
+      groupId: groupId,
     ),
   );
 }
