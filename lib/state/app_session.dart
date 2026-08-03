@@ -2116,6 +2116,18 @@ class AppSession extends ChangeNotifier {
     final resolved = _groupStates[chat.groupId]?.resolved;
     if (resolved == null) return;
 
+    // A group with nobody else in it yet. There is no copy owed to anyone, so
+    // the send is complete the moment it is made -- without this the message
+    // sits pending forever, since an empty delivery list makes
+    // aggregateSendState fall back to the message's own (pending) state.
+    if (message.deliveries.isEmpty) {
+      message.sendState = MessageSendState.sent;
+      message.sendError = null;
+      await LocalStateStore.saveProfile(state);
+      notifyListeners();
+      return;
+    }
+
     for (final delivery in message.deliveries) {
       if (delivery.isSent) continue;
       delivery.state = MessageSendState.pending;

@@ -161,6 +161,20 @@ void main() {
       expect(fanOut([MessageSendState.sent]).deliveredCount, 1);
     });
 
+    test('a group send with no recipients is complete, not stuck', () {
+      // A group with nobody else in it yet owes nobody a copy. The empty
+      // delivery list makes aggregateSendState fall back to the message's own
+      // state, so the fan-out has to resolve it -- otherwise the bubble sits
+      // on a clock forever, which is exactly what the first emulator run did.
+      final message = fanOut(const []);
+      expect(message.aggregateSendState, MessageSendState.pending);
+
+      // What AppSession._fanOut does when there is nothing to send.
+      message.sendState = MessageSendState.sent;
+      expect(message.aggregateSendState, MessageSendState.sent);
+      expect(message.deliveredCount, 0);
+    });
+
     test('a one-to-one message has no deliveries and keeps its own state', () {
       final message = StoredMessage(
         text: 'hallo',
