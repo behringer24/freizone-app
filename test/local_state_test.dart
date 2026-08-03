@@ -156,6 +156,31 @@ void main() {
     });
   });
 
+  group('AppState.groupPeerStateHashes', () {
+    test('omitted when empty, so existing profiles are unchanged', () {
+      expect(
+        _minimalState().toJson().containsKey('group_peer_state_hashes'),
+        isFalse,
+      );
+    });
+
+    test('what each member was last known to be on survives a restart', () {
+      // Without persisting it, every first message in every group after a
+      // restart would carry a whole snapshot again -- the fan-out only knows a
+      // member is level with us because we remember their last hash.
+      final state = _minimalState();
+      state.groupPeerStateHashes['p2xjx0000000000000000'] = {
+        'qben000000000000000b': 'abc123',
+      };
+
+      final restored = AppState.fromJson(state.toJson());
+      expect(
+        restored.groupPeerStateHashes['p2xjx0000000000000000'],
+        {'qben000000000000000b': 'abc123'},
+      );
+    });
+  });
+
   group('AppState.inboundSessions', () {
     test('omitted when empty, so existing profiles are unchanged', () {
       expect(_minimalState().toJson().containsKey('inbound_sessions'), isFalse);

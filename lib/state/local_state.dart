@@ -102,6 +102,7 @@ class AppState {
     Map<String, GroupConversation>? groups,
     Map<String, List<Map<String, dynamic>>>? pendingGroupEvents,
     Map<String, Set<String>>? groupSnapshotDebts,
+    Map<String, Map<String, String>>? groupPeerStateHashes,
     Set<String>? knownPeerIds,
     Map<String, BlockedPeer>? blockedPeers,
     Set<String>? processedMessageIds,
@@ -117,6 +118,7 @@ class AppState {
        groups = groups ?? {},
        pendingGroupEvents = pendingGroupEvents ?? {},
        groupSnapshotDebts = groupSnapshotDebts ?? {},
+       groupPeerStateHashes = groupPeerStateHashes ?? {},
        knownPeerIds = knownPeerIds ?? {},
        blockedPeers = blockedPeers ?? {},
        processedMessageIds = processedMessageIds ?? {},
@@ -175,6 +177,15 @@ class AppState {
     groupSnapshotDebts: (j['group_snapshot_debts'] as Map<String, dynamic>?)
         ?.map(
           (k, v) => MapEntry(k, (v as List<dynamic>).cast<String>().toSet()),
+        ),
+    groupPeerStateHashes:
+        (j['group_peer_state_hashes'] as Map<String, dynamic>?)?.map(
+          (k, v) => MapEntry(
+            k,
+            (v as Map<String, dynamic>).map(
+              (peer, hash) => MapEntry(peer, hash as String),
+            ),
+          ),
         ),
     knownPeerIds: (j['known_peer_ids'] as List<dynamic>?)
         ?.cast<String>()
@@ -271,6 +282,20 @@ class AppState {
   /// is "everything we know about this group", which is always readable from the
   /// group's own file.
   Map<String, Set<String>> groupSnapshotDebts;
+
+  /// The state hash each member last told us they were on, per group id.
+  ///
+  /// Read as "have we ever seen this member level with us": if the remembered
+  /// hash is our current one, they were up to date as of their last envelope, and
+  /// the fan-out sends them the message alone. Anything else -- a different hash,
+  /// or a member never heard from -- and their copy is preceded by the whole fact
+  /// set (AppSession._needsProactiveSnapshot), because state drives delivery: a
+  /// member missing facts leaves people out of their own fan-out, and their stale
+  /// hash is the only warning anyone gets.
+  ///
+  /// Persisted, so a restart does not make every first message in every group
+  /// carry a snapshot again. Costs one short string per member per group.
+  Map<String, Map<String, String>> groupPeerStateHashes;
 
   /// Group transcripts, keyed by group id (APP-16).
   ///
@@ -456,6 +481,8 @@ class AppState {
       'group_snapshot_debts': groupSnapshotDebts.map(
         (k, v) => MapEntry(k, v.toList()),
       ),
+    if (groupPeerStateHashes.isNotEmpty)
+      'group_peer_state_hashes': groupPeerStateHashes,
     if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
     if (blockedPeers.isNotEmpty)
       'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),

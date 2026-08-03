@@ -174,6 +174,24 @@ void appendGroupSystemLines(
   if (lines.isNotEmpty) chat.lastActivityAt = at;
 }
 
+/// Remembers what [senderAccountId] said their view of [groupId] was.
+///
+/// Written on every group envelope, control or message, by whichever isolate
+/// handles it -- the send path reads it to decide whether that member needs the
+/// whole fact set before their next copy (see
+/// AppState.groupPeerStateHashes). An empty hash is not recorded: it means the
+/// sender did not say, not that they have nothing.
+void recordGroupPeerStateHash(
+  AppState state,
+  String groupId,
+  String senderAccountId,
+  String? stateHash,
+) {
+  if (stateHash == null || stateHash.isEmpty || groupId.isEmpty) return;
+  (state.groupPeerStateHashes[groupId] ??= <String, String>{})[senderAccountId] =
+      stateHash;
+}
+
 /// Keeps the events that could not be admitted *yet*, so a later arrival can
 /// unblock them.
 ///

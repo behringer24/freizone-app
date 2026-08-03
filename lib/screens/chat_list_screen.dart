@@ -506,8 +506,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
         // while backing up the phrase can wait for the next screen.
         final error = _buildErrorBanner(context, session);
 
-        final conversations = session.chats;
-        if (conversations.isEmpty) {
+        final all = session.chats;
+        if (all.isEmpty) {
           return _withBanners(
             [error, nudge],
             Center(
@@ -527,6 +527,25 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   const SizedBox(height: 8),
                   const Text('Tap the button below to start one'),
                 ],
+              ),
+            ),
+          );
+        }
+
+        // The filter sits above the list *body*, not in the AppBar: a third
+        // permanent bar under the title and the account strip would cost too
+        // much vertical space, and this is a filter rather than a navigation
+        // level -- so it also introduces no conflict with the horizontal swipe
+        // between accounts.
+        final chips = _buildFilterChips(context, all);
+        final conversations = all.where(_filter.matches).toList();
+        if (conversations.isEmpty) {
+          return _withBanners(
+            [error, nudge, chips],
+            Center(
+              child: Text(
+                _filter.emptyLabel,
+                style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
           );
@@ -558,7 +577,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         ).colorScheme.surfaceContainerHigh;
 
         return _withBanners(
-          [error, nudge],
+          [error, nudge, chips],
           CustomScrollView(
           slivers: [
             if (pending.isNotEmpty)
@@ -605,6 +624,44 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ),
         );
       },
+    );
+  }
+
+  /// Which chats the list is showing. In memory rather than persisted: a filter
+  /// is where you are looking right now, and coming back to a list that silently
+  /// hides most of it is the kind of state nobody remembers setting.
+  _ChatFilter _filter = _ChatFilter.all;
+
+  Widget _buildFilterChips(BuildContext context, List<ChatTarget> all) {
+    // Counted over everything, not over the filtered view, so the numbers do not
+    // change as you switch between them.
+    final unread = all.where((c) => c.hasUnread).length;
+    final groups = all.whereType<GroupConversation>().length;
+    // Nothing to filter: one chat kind and nothing unread means three chips that
+    // all show the same list.
+    if (unread == 0 && (groups == 0 || groups == all.length)) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(
+        children: [
+          for (final filter in _ChatFilter.values)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FilterChip(
+                label: Text(switch (filter) {
+                  _ChatFilter.all => 'All',
+                  _ChatFilter.unread => 'Unread ($unread)',
+                  _ChatFilter.groups => 'Groups ($groups)',
+                }),
+                selected: _filter == filter,
+                onSelected: (_) => setState(() => _filter = filter),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -821,4 +878,29 @@ class _ChatListScreenState extends State<ChatListScreen> {
       ),
     );
   }
+}
+
+/// The chat list's filter: All / Unread / Groups, per the design document.
+///
+/// Deliberately not a tab bar. Tabs would say "these are separate places", and
+/// the whole point of one list is that there is exactly one place that answers
+/// "what is new" -- these only narrow it.
+enum _ChatFilter {
+  all,
+  unread,
+  groups;
+
+  bool matches(ChatTarget chat) => switch (this) {
+    _ChatFilter.all => true,
+    _ChatFilter.unread => chat.hasUnread,
+    _ChatFilter.groups => chat is GroupConversation,
+  };
+
+  /// What to say when the filter itself is why the list is empty -- distinct
+  /// from the "no conversations yet" empty state, which is about the account.
+  String get emptyLabel => switch (this) {
+    _ChatFilter.all => 'No conversations yet',
+    _ChatFilter.unread => 'Nothing unread',
+    _ChatFilter.groups => 'No groups yet',
+  };
 }

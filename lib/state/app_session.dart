@@ -76,8 +76,10 @@ class IncomingMessageResult {
     required this.peerAccountId,
     required this.shouldNotify,
     this.deliveredUpTo,
+    this.groupDeliveredUpTo,
     this.groupId,
     this.peerGroupStateHash,
+    this.peerServer,
     this.groupSnapshotRequested = false,
     this.groupInvite = false,
   });
@@ -103,6 +105,12 @@ class IncomingMessageResult {
   /// They asked for our fact set outright.
   final bool groupSnapshotRequested;
 
+  /// Where the sender said they live, from the envelope's own encrypted content
+  /// (MessageContent.senderServer) -- null for a same-server sender or an
+  /// envelope that carries no such field. The one way to reach a federated group
+  /// member this device has never messaged one-to-one.
+  final String? peerServer;
+
   /// The receipt anchor of a genuinely new, stored (not blocked, not a
   /// receipt) message in a *one-to-one* conversation -- the sender's own
   /// send-time stamp when the message carried one, local arrival time
@@ -110,17 +118,23 @@ class IncomingMessageResult {
   /// dropped/blocked message, or anything else that isn't itself a
   /// delivered chat message.
   ///
-  /// Also null for a group message, and not merely because group receipts are
-  /// unbuilt: a receipt is sent over a *conversation*, so an anchor taken from a
-  /// group message would confirm that member's unrelated direct messages
-  /// instead. When group receipts arrive they need their own field, per group
-  /// and per member -- not this one.
+  /// Always null for a group message: a receipt travels over a *conversation*,
+  /// so an anchor taken from a group message would confirm that member's
+  /// unrelated direct messages instead -- see [groupDeliveredUpTo].
+  ///
   /// Lets a caller that CAN send (AppSession, which has sending
   /// capability; a bare background sync currently doesn't -- see
   /// push_manager.dart's _syncProfile) decide whether to send a
   /// "delivered" receipt back, without processIncomingMessage itself
   /// needing to know how to send anything.
   final DateTime? deliveredUpTo;
+
+  /// The same anchor for a message that arrived in [groupId], kept in its own
+  /// field because the receipt it drives is addressed differently: to the
+  /// message's *author* ([peerAccountId]) and naming the group, so the author
+  /// moves that one member's watermark in the right transcript. Nobody else in
+  /// the group hears about it -- see ReceiptSignal.groupId.
+  final DateTime? groupDeliveredUpTo;
 }
 
 /// Decrypts and stores one incoming envelope into [state] -- the shared
@@ -377,6 +391,14 @@ Future<IncomingMessageResult?> processIncomingMessage(
   final control = GroupControl.tryDecode(dec.plaintext);
   if (control != null) {
     final outcome = await applyGroupControl(state, core, control);
+    // Their view, remembered per member: it is what the send path checks before
+    // deciding whether that member needs the whole fact set with their next copy.
+    recordGroupPeerStateHash(
+      state,
+      outcome.groupId,
+      msg.senderAccountId,
+      outcome.peerStateHash,
+    );
     return IncomingMessageResult(
       peerAccountId: msg.senderAccountId,
       shouldNotify: outcome.invited && openConversationPeerId != outcome.groupId,
@@ -388,6 +410,25 @@ Future<IncomingMessageResult?> processIncomingMessage(
   }
 
   final receipt = ReceiptSignal.tryDecode(dec.plaintext);
+  if (receipt != null && receipt.groupId != null) {
+    // A group receipt: one member telling *us*, the author, how far they have
+    // got with our messages in that group. Filed per member, never re-broadcast
+    // -- who has read what stays between reader and author (see
+    // ReceiptSignal.groupId).
+    final chat = state.groups[receipt.groupId];
+    if (chat != null && (await AppSettings.load()).readReceiptsEnabled) {
+      chat.recordMemberReceipt(
+        accountId: msg.senderAccountId,
+        status: receipt.status,
+        upTo: receipt.upToSentAt,
+      );
+    }
+    return IncomingMessageResult(
+      peerAccountId: msg.senderAccountId,
+      shouldNotify: false,
+      groupId: receipt.groupId,
+    );
+  }
   if (receipt != null) {
     // A receipt never creates a conversation (no putIfAbsent here, unlike
     // below) -- if there's no local record of this peer at all, there's
@@ -436,25 +477,29 @@ Future<IncomingMessageResult?> processIncomingMessage(
         groupId: content.groupId,
       );
     }
-    storeGroupMessage(
+    final stored = storeGroupMessage(
       state,
       content,
       msg.senderAccountId,
       now,
       openChatId: openConversationPeerId,
     );
+    recordGroupPeerStateHash(
+      state,
+      content.groupId!,
+      msg.senderAccountId,
+      content.stateHash,
+    );
     return IncomingMessageResult(
       peerAccountId: msg.senderAccountId,
       shouldNotify: openConversationPeerId != content.groupId,
-      // Deliberately no deliveredUpTo: group receipts don't exist yet, and a
-      // watermark measured in a group must never be reported over the *one-to-
-      // one* conversation with whoever sent it. It used to be, and the anchor
-      // then confirmed that peer's older direct messages as delivered -- or, if
-      // their chat happened to be the readable one, as read -- on the strength
-      // of a group message the user may never have opened. The watermark is
-      // monotonic, so nothing walked it back.
+      // Its own field, deliberately not deliveredUpTo: a receipt travels over a
+      // *conversation*, so reporting a group anchor through the one-to-one field
+      // confirmed that member's unrelated direct messages -- which it used to.
+      groupDeliveredUpTo: stored.receiptAnchor,
       groupId: content.groupId,
       peerGroupStateHash: content.stateHash,
+      peerServer: content.senderServer,
     );
   }
 
@@ -741,6 +786,26 @@ class AppSession extends ChangeNotifier {
 
   String? _lastError;
 
+  /// Records a failure: always to the log, and to [lastError] -- which the chat
+  /// list shows until dismissed -- only when it is worth a human's attention.
+  ///
+  /// A server that cannot be reached right now is not. It is the single most
+  /// common failure, it is retried automatically (the stream reconnects, the
+  /// outbox and the snapshot debts flush), and it is *already* on screen: the
+  /// account is dimmed with an offline badge. Turning each attempt into a red
+  /// banner as well would train the user to dismiss the one thing that is
+  /// supposed to mean "look at this" -- which is exactly what a stream connect
+  /// timing out did.
+  ///
+  /// Anything else -- a refused request, a device revoked, a malformed answer,
+  /// a decrypt given up on -- is surfaced: those do not fix themselves.
+  void _noteFailure(String what, Object error) {
+    final described = '$what: ${describeError(error)}';
+    developer.log(described, name: 'freizone');
+    if (isServerUnreachable(error)) return;
+    lastError = described;
+  }
+
   /// Live reachability of this session's home server, kept current by the
   /// SSE reconnect loop (see [_startStream]). The UI treats [unreachable]
   /// as "read-only": the account stays selectable and its cached chats
@@ -807,7 +872,7 @@ class AppSession extends ChangeNotifier {
       federationEnabled = status.federationEnabled;
       _ownBlobs = BlobCapability.from(status);
     } catch (e) {
-      lastError = 'checking registration policy failed: $e';
+      _noteFailure('checking registration policy failed', e);
     }
     notifyListeners();
   }
@@ -840,6 +905,42 @@ class AppSession extends ChangeNotifier {
   final Map<String, int> _outboxAttempts = {};
   static const int _maxOutboxAttempts = 3;
 
+  /// How many envelopes each server takes in one request, by server address --
+  /// 0 for a server that does not advertise batch delivery at all, so the
+  /// fan-out posts to it one at a time.
+  ///
+  /// Discovered per server rather than once, because a group legitimately spans
+  /// servers of different vintages: batching to one member's server and not to
+  /// another's is the normal case, not an edge (docs/PROTOCOL.md §4). Cached for
+  /// the session, like [_peerBlobs] -- a capability that changes needs a restart
+  /// to be noticed, which is the same trade the blob cache already makes.
+  final Map<String, int> _batchLimits = {};
+
+  /// The batch limit for [server] (null meaning our own), or 0 if unknown.
+  ///
+  /// A server that cannot be asked counts as "no batching": the fan-out then
+  /// posts individually, which works everywhere and fails per recipient rather
+  /// than losing the whole batch to one unreachable status call.
+  Future<int> _batchLimitFor(String? server) async {
+    final key = server ?? state.server;
+    final cached = _batchLimits[key];
+    if (cached != null) return cached;
+    try {
+      final status = await _clientFor(server).getServerStatus();
+      final limit = status.batchMessages
+          ? (status.maxBatchMessages > 0 ? status.maxBatchMessages : 1)
+          : 0;
+      _batchLimits[key] = limit;
+      return limit;
+    } catch (e) {
+      developer.log(
+        'batch capability of $key unknown: ${describeError(e)}',
+        name: 'groups',
+      );
+      return 0;
+    }
+  }
+
   /// What the server holding this conversation's attachments will accept.
   ///
   /// That is the RECIPIENT's server, not ours: a blob is uploaded to where
@@ -865,7 +966,7 @@ class AppSession extends ChangeNotifier {
       // Unreachable or erroring: unknown, not unsupported. Sending will
       // surface the real failure rather than us pre-emptively lying about
       // what the peer's server supports.
-      lastError = 'checking attachment support failed: $e';
+      _noteFailure('checking attachment support failed', e);
       return null;
     }
   }
@@ -1179,7 +1280,9 @@ class AppSession extends ChangeNotifier {
       prekeysReady = true;
     } catch (e) {
       reachability = ServerReachability.unreachable;
-      lastError = 'prekey upload failed: $e';
+      // The offline marking above is the visible half; the banner is only for a
+      // prekey upload that failed for a reason waiting will not fix.
+      _noteFailure('prekey upload failed', e);
     }
     notifyListeners();
     _startStream();
@@ -1220,7 +1323,9 @@ class AppSession extends ChangeNotifier {
       }
       notifyListeners();
     } catch (e) {
-      lastError = 'push registration failed: $e';
+      // Re-tried on every reconnect (see the stream's onConnected), so an
+      // unreachable server here is a "later" like any other.
+      _noteFailure('push registration failed', e);
       notifyListeners();
     }
   }
@@ -1354,7 +1459,10 @@ class AppSession extends ChangeNotifier {
       _sse!.connect(
         onMessage: _handleIncoming,
         onError: (e) {
-          lastError = 'stream error: $e';
+          // A connect that timed out or was refused is what _markStreamDropped
+          // is for: the offline badge, the grace period, and the retry loop.
+          // Only a stream failing for some *other* reason reaches the banner.
+          _noteFailure('stream error', e);
           _markStreamDropped();
         },
         onConnected: () {
@@ -1432,6 +1540,10 @@ class AppSession extends ChangeNotifier {
           result.peerAccountId,
           result.peerGroupStateHash,
           snapshotRequested: result.groupSnapshotRequested,
+          // Carried through so a group we hold no facts about can be asked
+          // about even when the only member who has written is federated and
+          // has never messaged us one-to-one.
+          peerServer: result.peerServer,
         );
       }
 
@@ -1463,6 +1575,21 @@ class AppSession extends ChangeNotifier {
       // AppSession's send-path helpers (_resolvePeerDevice,
       // _getOrCreateCryptoSession, _clientFor) to become standalone,
       // isolate-safe functions just for this.
+      // The group counterpart, addressed to the author of that one message
+      // rather than to the group (see _sendGroupReceipt). Read is confirmed on
+      // top when the user is actually looking at this group -- the same rule the
+      // one-to-one path uses below, and the reason enterGroup claims the open-
+      // chat slot.
+      final groupUpTo = result.groupDeliveredUpTo;
+      if (groupUpTo != null && groupId != null) {
+        unawaited(
+          _sendGroupDeliveredReceipt(groupId, result.peerAccountId, groupUpTo),
+        );
+        if (groupId == _readableConversation) {
+          unawaited(sendGroupReadReceipts(groupId));
+        }
+      }
+
       final upTo = result.deliveredUpTo;
       if (upTo != null) {
         final convo = state.conversations[result.peerAccountId];
@@ -2087,8 +2214,131 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Call when a group's screen opens: clears its unread flag, and asks one
-  /// member for their facts in case this device is the one that is behind.
+  /// Sends one receipt for [groupId], to [authorAccountId] alone.
+  ///
+  /// Addressed to the author rather than to the group, and that is the whole
+  /// design: who has read what is between the reader and the person who wrote
+  /// it. Fanning receipts out would hand every member a running attendance list
+  /// of everyone else, at N times the traffic, and there is no reading of the
+  /// protocol in which the other members are entitled to it.
+  Future<void> _sendGroupReceipt(
+    String groupId,
+    String authorAccountId,
+    String server,
+    ReceiptStatus status,
+    DateTime upTo,
+  ) async {
+    final peer = _endpointFor(authorAccountId, server);
+    await _ensurePeerDeviceResolved(peer);
+    await _encryptAndSend(
+      peer,
+      ReceiptSignal(
+        status: status,
+        upToSentAt: upTo,
+        groupId: groupId,
+      ).encode(),
+    );
+  }
+
+  /// Confirms delivery of one member's group message, to that member only.
+  ///
+  /// Errors are logged, not surfaced: a receipt is a courtesy, and failing to
+  /// send one must not look like a failure to receive the message it is about.
+  Future<void> _sendGroupDeliveredReceipt(
+    String groupId,
+    String authorAccountId,
+    DateTime upTo,
+  ) async {
+    try {
+      if (!(await AppSettings.load()).readReceiptsEnabled) return;
+      final member = _groupStates[groupId]?.resolved.memberById(authorAccountId);
+      if (member == null) return;
+      await _sendGroupReceipt(
+        groupId,
+        authorAccountId,
+        member.server,
+        ReceiptStatus.delivered,
+        upTo,
+      );
+    } catch (e) {
+      developer.log(
+        'sending group delivered receipt to $authorAccountId failed: $e',
+        name: 'receipts',
+      );
+    }
+  }
+
+  /// Tells every author in [groupId] how far their own messages have been read
+  /// -- one receipt each, to them alone, and only where it would say something
+  /// new (see GroupConversation.sentReceiptUpTo).
+  ///
+  /// A group transcript has many authors, so "read" is not one watermark but
+  /// one per author, each measured over that author's own messages: confirming
+  /// somebody else's newer message would tell an author their own was read when
+  /// it was not.
+  Future<void> sendGroupReadReceipts(String groupId) async {
+    if (!(await AppSettings.load()).readReceiptsEnabled) return;
+    final chat = state.groups[groupId];
+    final resolved = _groupStates[groupId]?.resolved;
+    if (chat == null || resolved == null) return;
+
+    final newestPerAuthor = <String, DateTime>{};
+    for (final message in chat.messages) {
+      final author = message.senderAccountId;
+      if (message.mine ||
+          author == null ||
+          message.kind != StoredMessageKind.normal) {
+        continue;
+      }
+      final anchor = message.receiptAnchor;
+      final current = newestPerAuthor[author];
+      if (current == null || anchor.isAfter(current)) {
+        newestPerAuthor[author] = anchor;
+      }
+    }
+
+    var changed = false;
+    for (final entry in newestPerAuthor.entries) {
+      final alreadyTold = chat.sentReceiptUpTo[entry.key];
+      if (alreadyTold != null && !entry.value.isAfter(alreadyTold)) continue;
+      // Somebody who has since left is owed nothing, and sending to them would
+      // be group traffic to an outsider.
+      final member = resolved.memberById(entry.key);
+      if (member == null) continue;
+      try {
+        await _sendGroupReceipt(
+          groupId,
+          entry.key,
+          member.server,
+          ReceiptStatus.read,
+          entry.value,
+        );
+        chat.sentReceiptUpTo[entry.key] = entry.value;
+        changed = true;
+      } catch (e) {
+        developer.log(
+          'sending group read receipt to ${entry.key} failed: $e',
+          name: 'receipts',
+        );
+      }
+    }
+    if (changed) await LocalStateStore.saveProfile(state);
+  }
+
+  /// Call when a group's screen closes -- the counterpart to [enterGroup],
+  /// mirroring [leaveConversation]. A group id and a peer id share the one
+  /// "currently open chat" slot, which is what lets an arriving group message
+  /// know the user is looking at it.
+  ///
+  /// Named for the screen, not the membership: [leaveGroup] is the signed act of
+  /// leaving the group itself, and the two must never be confused.
+  void exitGroup(String groupId) {
+    if (_openConversationPeerId == groupId) _openConversationPeerId = null;
+  }
+
+  /// Call when a group's screen opens: clears its unread flag, tells each author
+  /// how far their messages have been read, and asks one member for their facts
+  /// in case this device is the one that is behind.
   Future<void> enterGroup(String groupId) async {
     // Before the unread check, deliberately: whether the group has unread
     // messages says nothing about whether its member list is current, and the
@@ -2097,6 +2347,15 @@ class AppSession extends ChangeNotifier {
     // what somebody else never got.
     unawaited(_requestGroupSync(groupId));
     unawaited(_payGroupSnapshotDebts());
+    // Shares the one open-chat slot with conversations, so a group message
+    // arriving while its screen is on top is not marked unread (see
+    // storeGroupMessage's openChatId) and confirms itself read right away.
+    _openConversationPeerId = groupId;
+    // Regardless of the unread flag: the flag says "something arrived since you
+    // last looked", while a read receipt is owed for anything an author has not
+    // been told about yet -- including messages read on a previous run that
+    // could not be told at the time.
+    unawaited(sendGroupReadReceipts(groupId));
 
     final chat = state.groups[groupId];
     if (chat == null || !chat.hasUnread) return;
@@ -2398,7 +2657,9 @@ class AppSession extends ChangeNotifier {
         // but the fact must not be lost either, so they are owed a snapshot.
         _oweGroupSnapshot(groupId, member.accountId);
         owedSomebody = true;
-        lastError = 'group update to ${member.accountId}: ${describeError(e)}';
+        // A debt has been recorded, so an unreachable member is a "later", not a
+        // "look at this" -- see _noteFailure.
+        _noteFailure('group update to ${member.accountId}', e);
       }
     }
     // Only when something actually failed: this runs on every membership change,
@@ -2477,7 +2738,7 @@ class AppSession extends ChangeNotifier {
           // (_outboxAttempts) -- a message the user can see and retry by hand,
           // while an unsent fact leaves the group quietly disagreeing about who
           // is in it.
-          lastError = 'group sync to $accountId: ${describeError(e)}';
+          _noteFailure('group sync to $accountId', e);
         }
       }
     }
@@ -2594,6 +2855,11 @@ class AppSession extends ChangeNotifier {
       return;
     }
 
+    // Encrypt first, post afterwards -- one request per distinct recipient
+    // server instead of one per member (docs/PROTOCOL.md §7). Encryption cannot
+    // be batched: there is no group key, so every copy rides its own recipient's
+    // ratchet. Only the *transport* collapses.
+    final copies = <_GroupCopy>[];
     for (final delivery in message.deliveries) {
       if (delivery.isSent) continue;
       delivery.state = MessageSendState.pending;
@@ -2607,6 +2873,29 @@ class AppSession extends ChangeNotifier {
         }
         final peer = _endpointFor(member.accountId, member.server);
         await _ensurePeerDeviceResolved(peer);
+
+        // Their state hash has never been seen to agree with ours, so they may
+        // be missing facts -- and a fan-out is driven by state, so a member we
+        // do not know about gets nothing. Handing over the whole set before the
+        // message costs one envelope and is what the design asks for
+        // (freizone-server's docs/design/01-groups.md, "Convergence").
+        if (_needsProactiveSnapshot(chat.groupId, member.accountId)) {
+          try {
+            await _sendGroupSnapshotTo(
+              chat.groupId,
+              member.accountId,
+              member.server,
+            );
+          } catch (e) {
+            // The message itself still goes out; the facts are owed instead.
+            _oweGroupSnapshot(chat.groupId, member.accountId);
+            developer.log(
+              'proactive snapshot to ${member.accountId} failed: '
+              '${describeError(e)}',
+              name: 'groups',
+            );
+          }
+        }
 
         final content = MessageContent(
           id: message.id,
@@ -2626,17 +2915,21 @@ class AppSession extends ChangeNotifier {
           sentAt: message.timestamp,
         );
 
-        await _encryptAndSend(
-          peer,
-          content.encode(),
-          messageId: delivery.wireMessageId,
-        );
-        delivery.state = MessageSendState.sent;
-        delivery.error = null;
+        copies.add(await _encryptGroupCopy(peer, delivery, content.encode()));
       } catch (e) {
         delivery.state = MessageSendState.failed;
         delivery.error = describeError(e);
       }
+    }
+
+    // Grouped by the server that will hold the copy: our own for same-server
+    // members (null), the member's own for federated ones.
+    final byServer = <String?, List<_GroupCopy>>{};
+    for (final copy in copies) {
+      byServer.putIfAbsent(copy.peer.server, () => []).add(copy);
+    }
+    for (final entry in byServer.entries) {
+      await _postGroupCopies(entry.key, entry.value);
     }
 
     message.sendState = message.aggregateSendState;
@@ -2677,15 +2970,23 @@ class AppSession extends ChangeNotifier {
   ///
   /// Separate from [_requestGroupSync], which needs a member list to choose a
   /// member from -- exactly what is missing here. The sender of the envelope that
-  /// got us into this state is the only address we have, and their server is
-  /// taken from an existing conversation if there is one, falling back to our own
-  /// (right for the common case of a member on this server; a federated member we
-  /// have never spoken to one-to-one is simply out of reach until they send
-  /// again, and each of their messages retries this).
+  /// got us into this state is the only address we have.
+  ///
+  /// [peerServer] is where to reach them, and comes from the envelope's own
+  /// encrypted content (MessageContent.senderServer, which a cross-server sender
+  /// includes on every message precisely so a recipient's knowledge of it is
+  /// self-healing -- docs/PROTOCOL.md §9). Without it this fell back to our own
+  /// server, which is right for a member here and hopeless for a federated
+  /// member we have never spoken to one-to-one: the one case where a group we
+  /// hold no facts about could not recover on its own.
   ///
   /// Rate-limited with the same cooldown, so a burst of group messages that all
   /// find no facts produces one request, not one each.
-  Future<void> _askForGroupFacts(String groupId, String peerAccountId) async {
+  Future<void> _askForGroupFacts(
+    String groupId,
+    String peerAccountId, {
+    String? peerServer,
+  }) async {
     final now = DateTime.now().toUtc();
     final last = _lastGroupSyncRequest[groupId];
     if (last != null && now.difference(last) < _groupSyncRequestCooldown) return;
@@ -2695,7 +2996,11 @@ class AppSession extends ChangeNotifier {
       await _sendGroupControl(
         groupId,
         peerAccountId,
-        state.conversations[peerAccountId]?.peerServer ?? state.server,
+        // What the envelope itself said, then what an existing conversation
+        // knows, then our own server -- most specific first.
+        peerServer ??
+            state.conversations[peerAccountId]?.peerServer ??
+            state.server,
         GroupControl(kind: GroupControlKind.syncRequest, groupId: groupId),
       );
     } catch (e) {
@@ -2718,6 +3023,7 @@ class AppSession extends ChangeNotifier {
     String peerAccountId,
     String? peerStateHash, {
     bool snapshotRequested = false,
+    String? peerServer,
   }) async {
     final current = _groupStates[groupId];
     if (current == null) {
@@ -2727,7 +3033,11 @@ class AppSession extends ChangeNotifier {
       // Without asking outright, this state ends only if some member happens to
       // send a snapshot unprompted. So ask the one member we know exists,
       // because they just wrote to us.
-      await _askForGroupFacts(groupId, peerAccountId);
+      await _askForGroupFacts(
+        groupId,
+        peerAccountId,
+        peerServer: peerServer,
+      );
       return;
     }
     if (!snapshotRequested) {
@@ -2759,7 +3069,7 @@ class AppSession extends ChangeNotifier {
       // They asked, or their hash said they need it: owe it to them so the
       // answer is not lost with this one attempt.
       _oweGroupSnapshot(groupId, peerAccountId);
-      lastError = 'sending group snapshot failed: ${describeError(e)}';
+      _noteFailure('sending group snapshot to $peerAccountId', e);
     }
   }
 
@@ -3593,40 +3903,202 @@ class AppSession extends ChangeNotifier {
         rekey: initial == null ? null : afterOwnReset,
       );
       try {
-        if (peer.server == null) {
-          await api.sendMessage(
-            creds: state.credentials,
-            messageId: wireMessageId,
-            recipientDeviceId: peer.deviceId!,
-            payload: payload,
-          );
-        } else {
-          // The recipient's server has no local row for this device, so
-          // the request carries a freshly-signed certificate instead of
-          // relying on one cached at registration time -- see
-          // docs/PROTOCOL.md §9.
-          final cert = core.signDeviceCertificate(
-            accountId: state.accountId,
-            deviceId: state.deviceId,
-            devicePub: state.devicePub,
-            issuedAt: DateTime.now().toUtc(),
-            rootPriv: state.rootPriv,
-          );
-          await _clientFor(peer.server).sendFederatedMessage(
-            devicePriv: state.devicePriv,
-            rootPub: state.rootPub,
-            senderAccountId: state.accountId,
-            cert: cert,
-            messageId: wireMessageId,
-            recipientDeviceId: peer.deviceId!,
-            payload: payload,
-          );
-        }
+        await _postEnvelope(peer, wireMessageId, payload);
       } catch (_) {
         _rollBackSession(peer.accountId, previousSession);
         rethrow;
       }
     });
+  }
+
+  /// Puts one already-encrypted envelope on the wire, by whichever of the two
+  /// routes the recipient needs. Split out of [_encryptAndSend] because a group
+  /// fan-out encrypts every copy first and then posts them in batches, so the
+  /// two halves no longer always happen together (see [_fanOut]).
+  Future<void> _postEnvelope(
+    PeerEndpoint peer,
+    String wireMessageId,
+    Map<String, dynamic> payload,
+  ) async {
+    if (peer.server == null) {
+      await api.sendMessage(
+        creds: state.credentials,
+        messageId: wireMessageId,
+        recipientDeviceId: peer.deviceId!,
+        payload: payload,
+      );
+      return;
+    }
+    // The recipient's server has no local row for this device, so the request
+    // carries a freshly-signed certificate instead of relying on one cached at
+    // registration time -- see docs/PROTOCOL.md §9.
+    await _clientFor(peer.server).sendFederatedMessage(
+      devicePriv: state.devicePriv,
+      rootPub: state.rootPub,
+      senderAccountId: state.accountId,
+      cert: _freshDeviceCertificate(),
+      messageId: wireMessageId,
+      recipientDeviceId: peer.deviceId!,
+      payload: payload,
+    );
+  }
+
+  DeviceCertificate _freshDeviceCertificate() => core.signDeviceCertificate(
+    accountId: state.accountId,
+    deviceId: state.deviceId,
+    devicePub: state.devicePub,
+    issuedAt: DateTime.now().toUtc(),
+    rootPriv: state.rootPriv,
+  );
+
+  /// Encrypts one member's copy of a group message, leaving it ready to post.
+  ///
+  /// Holds that member's session lock for the encryption only, not for the POST
+  /// that follows: the whole point of batching is that many copies share one
+  /// request, and holding N locks across it invites deadlock. The advance is
+  /// committed here, and [_rollBackGroupCopy] undoes it afterwards only if the
+  /// session has not moved on since.
+  Future<_GroupCopy> _encryptGroupCopy(
+    PeerEndpoint peer,
+    GroupDelivery delivery,
+    Uint8List plaintext,
+  ) => _withPeerSessionLock(peer.accountId, () async {
+    final previousSession = state.sessions[peer.accountId];
+    final (session, initial) = await _getOrCreateCryptoSession(peer);
+    final enc = core.sessionEncrypt(session: session, plaintext: plaintext);
+    state.sessions[peer.accountId] = enc.session;
+    return _GroupCopy(
+      peer: peer,
+      delivery: delivery,
+      payload: core.buildEnvelope(
+        initial: initial,
+        header: enc.header,
+        ciphertext: enc.ciphertext,
+        // A fan-out never re-keys: it sends into whatever session exists, or
+        // establishes an ordinary one (SRV-17).
+        rekey: initial == null ? null : false,
+      ),
+      previousSession: previousSession,
+      committedSession: enc.session,
+    );
+  });
+
+  /// Posts every copy destined for one server, in as few requests as that server
+  /// allows, and resolves each delivery from its own result.
+  ///
+  /// A failure is per copy, never per batch -- one member at their queue cap is
+  /// not the other members' problem (docs/PROTOCOL.md §7). A whole request that
+  /// fails (network, or a server that turns out not to speak batch) falls back
+  /// to posting the same copies individually, so a group send never depends on
+  /// the newer route being there.
+  Future<void> _postGroupCopies(String? server, List<_GroupCopy> copies) async {
+    final limit = copies.length > 1 ? await _batchLimitFor(server) : 0;
+    if (limit <= 1) {
+      for (final copy in copies) {
+        await _postGroupCopy(copy);
+      }
+      return;
+    }
+
+    for (var i = 0; i < copies.length; i += limit) {
+      final chunk = copies.sublist(
+        i,
+        i + limit > copies.length ? copies.length : i + limit,
+      );
+      final items = [
+        for (final copy in chunk)
+          {
+            'message_id': copy.delivery.wireMessageId,
+            'recipient_device_id': copy.peer.deviceId!,
+            'payload': copy.payload,
+          },
+      ];
+      try {
+        final results = server == null
+            ? await api.sendMessagesBatch(
+                creds: state.credentials,
+                items: items,
+              )
+            : await _clientFor(server).sendFederatedMessagesBatch(
+                devicePriv: state.devicePriv,
+                rootPub: state.rootPub,
+                senderAccountId: state.accountId,
+                cert: _freshDeviceCertificate(),
+                items: items,
+              );
+        // Matched by id rather than by position: the contract says "in the
+        // submitted order", but a mis-ordered answer must not confirm the wrong
+        // member's copy.
+        final byId = {for (final r in results) r.messageId: r};
+        for (final copy in chunk) {
+          final result = byId[copy.delivery.wireMessageId];
+          if (result != null && result.isDelivered) {
+            copy.delivery.state = MessageSendState.sent;
+            copy.delivery.error = null;
+          } else {
+            _rollBackGroupCopy(copy);
+            copy.delivery.state = MessageSendState.failed;
+            copy.delivery.error = result == null
+                ? 'no answer for this copy'
+                : 'server said ${result.status}';
+          }
+        }
+      } catch (e) {
+        developer.log(
+          'batch send to ${server ?? 'our own server'} failed, posting '
+          'individually: ${describeError(e)}',
+          name: 'groups',
+        );
+        for (final copy in chunk) {
+          await _postGroupCopy(copy);
+        }
+      }
+    }
+  }
+
+  Future<void> _postGroupCopy(_GroupCopy copy) async {
+    try {
+      await _postEnvelope(
+        copy.peer,
+        copy.delivery.wireMessageId,
+        copy.payload,
+      );
+      copy.delivery.state = MessageSendState.sent;
+      copy.delivery.error = null;
+    } catch (e) {
+      _rollBackGroupCopy(copy);
+      copy.delivery.state = MessageSendState.failed;
+      copy.delivery.error = describeError(e);
+    }
+  }
+
+  /// Undoes one copy's ratchet advance, but only if nothing else has used that
+  /// session since it was encrypted.
+  ///
+  /// The check is what makes rolling back safe outside the lock: if another send
+  /// (or an incoming message) has advanced the session in the meantime, restoring
+  /// the old one would throw that work away and desync the pair -- far worse than
+  /// the single-message gap the rollback exists to avoid.
+  void _rollBackGroupCopy(_GroupCopy copy) {
+    if (!identical(state.sessions[copy.peer.accountId], copy.committedSession)) {
+      return;
+    }
+    _rollBackSession(copy.peer.accountId, copy.previousSession);
+  }
+
+  /// Whether [accountId] should be handed the whole fact set before the next
+  /// message: we have never seen their state hash agree with ours.
+  ///
+  /// The hash they last sent is remembered per member (see
+  /// AppState.groupPeerStateHashes). Equal means they were level as of their last
+  /// envelope; anything else -- different, or never heard from -- means a
+  /// snapshot is worth its one envelope, because state drives delivery and a
+  /// member who is missing facts silently leaves people out of their own
+  /// fan-out.
+  bool _needsProactiveSnapshot(String groupId, String accountId) {
+    final ours = _groupStates[groupId]?.stateHash;
+    if (ours == null || ours.isEmpty) return false;
+    return state.groupPeerStateHashes[groupId]?[accountId] != ours;
   }
 
   /// Undoes the ratchet advance of a send that did not go out.
@@ -3780,4 +4252,26 @@ class AppSession extends ChangeNotifier {
     }
     super.dispose();
   }
+}
+
+/// One member's encrypted copy of a group message, between being encrypted and
+/// being posted (see AppSession._fanOut).
+///
+/// Carries both sessions so the advance can be undone if the copy never goes
+/// out: [previousSession] is what to restore, [committedSession] is how to tell
+/// whether it is still ours to restore.
+class _GroupCopy {
+  _GroupCopy({
+    required this.peer,
+    required this.delivery,
+    required this.payload,
+    required this.previousSession,
+    required this.committedSession,
+  });
+
+  final PeerEndpoint peer;
+  final GroupDelivery delivery;
+  final Map<String, dynamic> payload;
+  final RatchetSessionJson? previousSession;
+  final RatchetSessionJson committedSession;
 }

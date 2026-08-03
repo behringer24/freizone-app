@@ -12,6 +12,7 @@
 // every group's file.
 import '../ffi/models.dart';
 import 'chat_target.dart';
+import 'receipt_signal.dart';
 
 /// One group conversation: the locally persisted transcript, plus the receipt
 /// bookkeeping that a group needs per member rather than per chat.
@@ -76,6 +77,47 @@ class GroupConversation extends ChatTarget {
   /// redraw. Keyed by author, since in a group a receipt goes to the person
   /// who wrote the message rather than to "the peer".
   final Map<String, DateTime> sentReceiptUpTo;
+
+  /// How many of [message]'s recipients have confirmed receiving, and reading,
+  /// it -- counted from the watermarks above against the message's own send
+  /// stamp, so one marker per member answers for every message they have caught
+  /// up with.
+  ///
+  /// Counted over the message's own delivery list rather than the current
+  /// membership: what "3 of 5" means is "the five this copy was owed to", and
+  /// somebody who joined afterwards was never owed one.
+  int deliveredCountFor(StoredMessage message) =>
+      _countAtLeast(message, memberDeliveredUpTo);
+
+  int readCountFor(StoredMessage message) =>
+      _countAtLeast(message, memberReadUpTo);
+
+  int _countAtLeast(StoredMessage message, Map<String, DateTime> watermarks) {
+    final anchor = message.receiptAnchor;
+    var count = 0;
+    for (final delivery in message.deliveries) {
+      final mark = watermarks[delivery.accountId];
+      if (mark != null && !mark.isBefore(anchor)) count++;
+    }
+    return count;
+  }
+
+  /// Records a member's confirmation, monotonically: an out-of-order or
+  /// duplicate older receipt never regresses an already-newer status. Returns
+  /// true if anything actually moved, so a caller can avoid a needless save.
+  bool recordMemberReceipt({
+    required String accountId,
+    required ReceiptStatus status,
+    required DateTime upTo,
+  }) {
+    final watermarks = status == ReceiptStatus.read
+        ? memberReadUpTo
+        : memberDeliveredUpTo;
+    final current = watermarks[accountId];
+    if (current != null && !upTo.isAfter(current)) return false;
+    watermarks[accountId] = upTo;
+    return true;
+  }
 
   /// The group's name if it has one, otherwise a short form of its id.
   ///

@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:freizone/state/chat_target.dart';
 import 'package:freizone/state/group_conversation.dart';
 import 'package:freizone/state/local_state.dart';
+import 'package:freizone/state/receipt_signal.dart';
 
 void main() {
   StoredMessage line(
@@ -243,6 +244,104 @@ void main() {
       final group = restored.groups['p2xjx0000000000000000']!;
       expect(group.displayName, 'Wandergruppe');
       expect(group.messages.single.text, 'hallo');
+    });
+  });
+
+  // Group receipts (APP-16). Two properties matter and neither is obvious from
+  // the maps alone: a count is over the copies a message was actually owed, and
+  // a watermark only ever moves forward.
+  StoredMessage mine(int minute, List<String> recipients) => StoredMessage(
+    text: 'x',
+    mine: true,
+    timestamp: DateTime.utc(2026, 8, 2, 12, minute),
+    deliveries: [
+      for (final r in recipients)
+        GroupDelivery(accountId: r, wireMessageId: 'w-$r-$minute'),
+    ],
+  );
+
+  group('GroupConversation receipts', () {
+    test('counts confirmations over the copies the message was owed', () {
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      final message = mine(0, ['ben', 'clara']);
+
+      expect(chat.deliveredCountFor(message), 0);
+      chat.recordMemberReceipt(
+        accountId: 'ben',
+        status: ReceiptStatus.delivered,
+        upTo: message.receiptAnchor,
+      );
+      expect(chat.deliveredCountFor(message), 1);
+      expect(chat.readCountFor(message), 0);
+
+      chat.recordMemberReceipt(
+        accountId: 'ben',
+        status: ReceiptStatus.read,
+        upTo: message.receiptAnchor,
+      );
+      expect(chat.readCountFor(message), 1);
+
+      // Somebody who was never owed a copy cannot raise the count -- a member
+      // who joined after this message was sent, say.
+      chat.recordMemberReceipt(
+        accountId: 'dora',
+        status: ReceiptStatus.read,
+        upTo: message.receiptAnchor,
+      );
+      expect(chat.readCountFor(message), 1);
+    });
+
+    test('one marker answers for every message a member has caught up with', () {
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      final first = mine(0, ['ben']);
+      final second = mine(5, ['ben']);
+
+      chat.recordMemberReceipt(
+        accountId: 'ben',
+        status: ReceiptStatus.read,
+        upTo: second.receiptAnchor,
+      );
+      expect(chat.readCountFor(first), 1);
+      expect(chat.readCountFor(second), 1);
+    });
+
+    test('a watermark never regresses', () {
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      final later = DateTime.utc(2026, 8, 2, 12, 10);
+      final earlier = DateTime.utc(2026, 8, 2, 12, 5);
+
+      expect(
+        chat.recordMemberReceipt(
+          accountId: 'ben',
+          status: ReceiptStatus.read,
+          upTo: later,
+        ),
+        isTrue,
+      );
+      // Delivery is unordered, so an older receipt legitimately arrives second.
+      expect(
+        chat.recordMemberReceipt(
+          accountId: 'ben',
+          status: ReceiptStatus.read,
+          upTo: earlier,
+        ),
+        isFalse,
+      );
+      expect(chat.memberReadUpTo['ben'], later);
+    });
+
+    test('the per-member watermarks survive a round trip', () {
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      chat.recordMemberReceipt(
+        accountId: 'ben',
+        status: ReceiptStatus.delivered,
+        upTo: DateTime.utc(2026, 8, 2, 12, 1),
+      );
+      chat.sentReceiptUpTo['clara'] = DateTime.utc(2026, 8, 2, 12, 2);
+
+      final restored = GroupConversation.fromJson(chat.toJson());
+      expect(restored.memberDeliveredUpTo['ben'], DateTime.utc(2026, 8, 2, 12, 1));
+      expect(restored.sentReceiptUpTo['clara'], DateTime.utc(2026, 8, 2, 12, 2));
     });
   });
 }

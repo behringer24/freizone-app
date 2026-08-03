@@ -494,6 +494,71 @@ class ApiClient {
     _checkStatus(resp, {202, 409});
   }
 
+  /// Enqueues several envelopes in one request (docs/PROTOCOL.md §7), the
+  /// same-server half of a group fan-out. [items] must already be within the
+  /// server's `max_batch_messages`; the caller splits, since only it knows how
+  /// to report a split's partial outcome per recipient.
+  ///
+  /// Returns one result per item, in the submitted order. Nothing throws for an
+  /// item that failed -- see [BatchSendResult].
+  Future<List<BatchSendResult>> sendMessagesBatch({
+    required DeviceCredentials creds,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final resp = await _signedRequest('POST', '/v1/messages/batch', {
+      'messages': items,
+    }, creds);
+    _checkStatus(resp, {200});
+    final decoded = json.decode(resp.body) as Map<String, dynamic>;
+    return ((decoded['results'] as List<dynamic>?) ?? const [])
+        .map((e) => BatchSendResult.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// The federated twin (docs/PROTOCOL.md §9): every copy for the recipients on
+  /// *this* server in one request, with the sender's identity block carried once
+  /// at the top level instead of per item -- which is the real saving, since
+  /// verifying a stranger's certificate chain is the expensive part and a group
+  /// send would otherwise repeat it for every member on that server.
+  Future<List<BatchSendResult>> sendFederatedMessagesBatch({
+    required Uint8List devicePriv,
+    required Uint8List rootPub,
+    required String senderAccountId,
+    required DeviceCertificate cert,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final body = {
+      'sender_account_id': senderAccountId,
+      'sender_root_pub_key': encodeB64(rootPub),
+      'sender_device_cert': {
+        'device_id': cert.deviceId,
+        'device_pub_key': encodeB64(cert.devicePubKey),
+        'issued_at': encodeTime(cert.issuedAt),
+        'signature': encodeB64(cert.signature),
+      },
+      'messages': items,
+    };
+    final bodyBytes = Uint8List.fromList(utf8.encode(json.encode(body)));
+    final keyId = encodeB64(cert.devicePubKey);
+    final headers = core.signHTTPRequest(
+      method: 'POST',
+      path: '/v1/federation/messages/batch',
+      body: bodyBytes,
+      deviceId: keyId,
+      devicePriv: devicePriv,
+    );
+    final req = http.Request('POST', _uri('/v1/federation/messages/batch'));
+    req.headers['Content-Type'] = 'application/json';
+    headers.forEach((key, value) => req.headers[key] = value);
+    req.bodyBytes = bodyBytes;
+    final resp = await _send(req);
+    _checkStatus(resp, {200});
+    final decoded = json.decode(resp.body) as Map<String, dynamic>;
+    return ((decoded['results'] as List<dynamic>?) ?? const [])
+        .map((e) => BatchSendResult.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<List<MessageResponse>> listMessages(DeviceCredentials creds) async {
     final resp = await _signedRequest('GET', '/v1/messages', null, creds);
     _checkStatus(resp, {200});

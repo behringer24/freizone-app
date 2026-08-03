@@ -360,6 +360,53 @@ over APP-08's outbox, and the group UI.
   wrote for the facts (`_askForGroupFacts`) rather than waiting for a volunteer.
   Re-invitation after a removal now notifies too -- the first check keyed on "this
   group is new to this device", which a removal leaves false
+- 2026-08-03 — the error banner learned to keep quiet. Andreas' first sighting of
+  it was `stream error: TimeoutException after 0:00:10` — a single SSE connect
+  attempt timing out, which the reconnect loop retries by design and the offline
+  badge already shows. Failures now go through `_noteFailure`, which always logs
+  and raises the banner only when the error is not mere unreachability
+  (`isServerUnreachable`): a red banner for the most common self-healing
+  condition would have trained the dismissal of the one thing meant to say "look
+  at this". Applied to the stream, the group broadcast, the snapshot debts,
+  prekey upload, push registration and the two capability checks
+- 2026-08-03 — five of the open items, in one pass:
+  - **group receipts**, and the design decision Andreas made with them: a
+    receipt goes **only to the author** of the message it is about. Reading is
+    between reader and author; fanning it out would hand every member a running
+    attendance list of everyone else, at N times the traffic. `ReceiptSignal`
+    gained an optional `group_id` (extending `v: 2` rather than minting a version,
+    so an older build reads it as a one-to-one receipt and moves that watermark a
+    little early -- a tick too soon, against a visible placeholder message if it
+    had been a new `v`). The author files it per member and the k-of-N indicator
+    counts over the copies that message was *owed*, not over current membership.
+    `enterGroup` now also claims the open-chat slot, which is what makes "read"
+    mean anything -- and `exitGroup` releases it, named for the screen so it is
+    never confused with the signed `leaveGroup`
+  - **filter chips** (All / Unread / Groups, with counts) above the list body,
+    hidden entirely when there is nothing to filter. In memory: a filter is where
+    you are looking now, not a setting
+  - **the large-group warning** at 50 members, wording the actual cost (one
+    encrypted copy per member per message) rather than a bare number
+  - **batch delivery**: the fan-out encrypts every copy first, then posts one
+    request per distinct recipient server (`/v1/messages/batch` and its federated
+    twin), splitting at that server's advertised limit and falling back to
+    individual posts for a server that does not advertise it *or* a batch request
+    that fails outright. Encryption cannot be batched -- there is no group key --
+    so only the transport collapses. The rollback that protects the ratchet had to
+    change shape: the per-peer lock is held for the encryption only, and a failed
+    copy is rolled back **only if that session has not moved since**, since
+    restoring over somebody else's advance would be worse than the one-message gap
+    the rollback avoids
+  - **the proactive snapshot** the design has asked for since the start
+    (freizone-server's `docs/design/01-groups.md`): a member whose `state_hash` has
+    never been seen to agree with ours gets the whole fact set before their next
+    copy. Their last hash is remembered per member and persisted, so a restart
+    does not put a snapshot in front of every first message again
+  - **`_askForGroupFacts`'s own edge**: the sender's server now comes from the
+    envelope's encrypted content (`MessageContent.senderServer`) instead of only
+    from an existing one-to-one conversation, so a group we hold no facts about
+    can be asked about even when the only member who has written is federated and
+    a stranger one-to-one
 - **Open**, in the order they are likely to be done:
   - ~~no history for a member who joins later~~ — **decided 2026-08-03: history
     is never forwarded.** A new member gets the fact set, never past messages.
@@ -384,18 +431,20 @@ over APP-08's outbox, and the group UI.
     them; and a deleted account keeps its member row forever, since no fact can
     express "this account no longer exists" and no member could prove it. Only a
     moderator removing them resolves the second one
-  - **group receipts** — designed but unbuilt. `GroupConversation` already has
-    the per-member watermark maps and the wire needs nothing new, but nothing
-    sends or reads a `v: 2` receipt in a group yet. Whatever carries the anchor
-    must be per group and per member: reusing the one-to-one path is what caused
-    the cross-talk fixed above
-  - **batch delivery** in the fan-out, and **attachments in a group** (one
-    upload per distinct recipient server)
+  - **attachments in a group** — the remaining large piece, and the receive half
+    is already there: `storeGroupMessage` keeps `content.attachments` and
+    `ensureAttachmentDownloaded` is keyed on a chat-neutral id. What is missing is
+    the *rendering* (`_GroupBubble` draws `message.text` only, so a picture that
+    has arrived is invisible) and the send side, which needs one upload per
+    distinct recipient server -- a blob lives on the recipient's server
+  - **the delivery sheet**: tapping the k-of-N indicator for the per-member
+    picture. The data behind it now exists (per-member delivered/read
+    watermarks); only the sheet is missing
   - the UI — **first cut done 2026-08-03**: groups in the one chat list with
     their own glyph and author-prefixed preview, a `GroupChatScreen` with
     author lines and a k-of-N send indicator, creating a group, and joining or
     declining one behind a notice that says the group will see your address.
     The group info screen (member list, role actions, invite, leave/dissolve)
-    and the state-change system lines followed on the same day. Still to come:
-    filter chips, the delivery sheet (tapping the k-of-N indicator for the
-    per-member picture), and the warning above ~50 members
+    the state-change system lines, the filter chips and the large-group warning
+    followed on the same day. Still to come: the delivery sheet (tapping the
+    k-of-N indicator for the per-member picture)

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:freizone/net/api_client.dart';
+import 'package:freizone/net/dto.dart';
 import 'package:freizone/util/errors.dart';
 import 'package:http/http.dart' as http;
 
@@ -79,6 +80,58 @@ void main() {
       );
       expect(
         isServerUnreachable(NotFreizoneServerException(404, 'google.com')),
+        isFalse,
+      );
+    });
+  });
+
+  group('batch delivery capability', () {
+    test('a server that does not advertise it is treated as not having it', () {
+      // Discovered, never assumed: a group spans servers of different vintages,
+      // and the fan-out posts individually to one that cannot batch.
+      final old = ServerStatus.fromJson({
+        'claimed': true,
+        'registration_policy': 'open',
+      });
+      expect(old.batchMessages, isFalse);
+      expect(old.maxBatchMessages, 0);
+
+      final current = ServerStatus.fromJson({
+        'claimed': true,
+        'registration_policy': 'open',
+        'batch_messages': true,
+        'max_batch_messages': 100,
+      });
+      expect(current.batchMessages, isTrue);
+      expect(current.maxBatchMessages, 100);
+    });
+
+    test('a duplicate counts as delivered, an unknown status does not', () {
+      // Same reasoning as the 409 on the single-message route: that id is
+      // already queued, so a retry has nothing left to do.
+      expect(
+        BatchSendResult.fromJson({'message_id': 'a', 'status': 'queued'})
+            .isDelivered,
+        isTrue,
+      );
+      expect(
+        BatchSendResult.fromJson({'message_id': 'a', 'status': 'duplicate'})
+            .isDelivered,
+        isTrue,
+      );
+      for (final status in ['queue_full', 'unknown_recipient', 'invalid']) {
+        expect(
+          BatchSendResult.fromJson({
+            'message_id': 'a',
+            'status': status,
+          }).isDelivered,
+          isFalse,
+          reason: status,
+        );
+      }
+      // A malformed item is a failure, not a silent success.
+      expect(
+        BatchSendResult.fromJson(const {}).isDelivered,
         isFalse,
       );
     });
