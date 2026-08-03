@@ -49,6 +49,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   @override
   void dispose() {
+    // Releases the "currently open chat" slot this screen claimed, so a group
+    // message arriving after it closes is marked unread again (and not silently
+    // confirmed read) -- the same pairing ChatScreen has with enterConversation.
+    widget.session.exitGroup(widget.groupId);
     _composer.dispose();
     _scroll.dispose();
     super.dispose();
@@ -251,7 +255,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             !message.mine &&
             message.senderAccountId != null &&
             previous?.senderAccountId != message.senderAccountId;
-        return _GroupBubble(message: message, showAuthor: showAuthor);
+        return _GroupBubble(
+          message: message,
+          showAuthor: showAuthor,
+          chat: chat,
+        );
       },
     );
   }
@@ -352,10 +360,18 @@ class _Notice extends StatelessWidget {
 }
 
 class _GroupBubble extends StatelessWidget {
-  const _GroupBubble({required this.message, required this.showAuthor});
+  const _GroupBubble({
+    required this.message,
+    required this.showAuthor,
+    required this.chat,
+  });
 
   final StoredMessage message;
   final bool showAuthor;
+
+  /// The transcript this bubble belongs to -- needed for the per-member receipt
+  /// watermarks a group's send indicator counts over (see _statusFor).
+  final GroupConversation chat;
 
   @override
   Widget build(BuildContext context) {
@@ -428,12 +444,34 @@ class _GroupBubble extends StatelessWidget {
   /// "Delivered to k of N" as one glyph. A running counter in every bubble
   /// would be a number nobody cares about five minutes later.
   Widget _statusFor(BuildContext context, StoredMessage message, Color color) {
+    // Confirmed by the recipients themselves, not merely handed to their
+    // servers: each member's own receipt, filed per member (see
+    // GroupConversation.readCountFor). Only the counts are shown, never who --
+    // a per-member list belongs in the delivery sheet, on demand.
+    final owed = message.deliveries.length;
+    final read = chat.readCountFor(message);
+    final arrived = chat.deliveredCountFor(message);
+
     final (icon, label) = switch (message.aggregateSendState) {
       MessageSendState.pending => (Icons.schedule, 'Sending'),
       MessageSendState.failed => (
         Icons.error_outline,
         'Delivered to ${message.deliveredCount} of '
             '${message.deliveries.length}',
+      ),
+      // Sent to everyone owed a copy, and then the recipients' own word for it.
+      // Read wins over received: it implies it.
+      MessageSendState.sent when owed > 0 && read >= owed => (
+        Icons.done_all,
+        'Read by all',
+      ),
+      MessageSendState.sent when read > 0 => (
+        Icons.done_all,
+        'Read by $read of $owed',
+      ),
+      MessageSendState.sent when arrived > 0 => (
+        Icons.done_all,
+        'Received by $arrived of $owed',
       ),
       // Two checks mean "delivered to everyone owed a copy" -- which is
       // vacuously true when nobody was owed one. A group whose only other

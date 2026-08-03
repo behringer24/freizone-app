@@ -43,5 +43,28 @@ void main() {
       );
       expect(ReceiptSignal.tryDecode(bytes), isNull);
     });
+
+    test('a group receipt names its group, a one-to-one one does not', () {
+      // The group id is what tells the author which of their transcripts the
+      // watermark belongs to -- without it a group receipt would move the
+      // one-to-one conversation's.
+      final group = ReceiptSignal(
+        status: ReceiptStatus.read,
+        upToSentAt: DateTime.utc(2026, 8, 3, 9),
+        groupId: 'p2xjx0000000000000000',
+      );
+      final decoded = ReceiptSignal.tryDecode(group.encode())!;
+      expect(decoded.groupId, 'p2xjx0000000000000000');
+      expect(decoded.status, ReceiptStatus.read);
+
+      final direct = ReceiptSignal(
+        status: ReceiptStatus.delivered,
+        upToSentAt: DateTime.utc(2026, 8, 3, 9),
+      );
+      expect(ReceiptSignal.tryDecode(direct.encode())!.groupId, isNull);
+      // And stays off the wire entirely, so a receipt to an older build is
+      // byte-identical to what it always was.
+      expect(utf8.decode(direct.encode()).contains('group_id'), isFalse);
+    });
   });
 }

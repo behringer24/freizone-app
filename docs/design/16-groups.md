@@ -340,6 +340,27 @@ pending / failed recipients, and a retry there re-sends **only the failed
 recipients**, never the whole fan-out. A permanent "7/20" counter in every
 bubble was rejected: it is a number nobody cares about five minutes later.
 
+**Receipts, and who is entitled to them** (built 2026-08-03). What the bubble
+counts is the recipients' own confirmations, not what their servers accepted —
+and a confirmation is sent **only to the author of the message it is about**.
+Reading is between the reader and the person who wrote it; a group-wide fan-out
+of receipts would hand every member a running attendance list of everyone else,
+at N times the traffic, and nothing in the protocol makes the other members
+parties to it. So `ReceiptSignal` carries an optional `group_id` — the envelope
+already says *who* is confirming, but only that says which of the author's
+transcripts the watermark belongs to.
+
+Extending `v: 2` rather than minting a version is deliberate: a build that
+predates the field reads a group receipt as a one-to-one one and moves that
+conversation's watermark slightly early — a tick sooner than it should be, where
+a new `v` would land in `MessageContent.decode`'s "newer app feature" path and
+leave a visible placeholder message in their transcript instead.
+
+Counted over the message's **own delivery list**, not the current membership:
+"3 of 5" means the five that copy was owed to, and somebody who joined afterwards
+was never owed one. One watermark per member answers for every message they have
+caught up with, so nothing is stored per message.
+
 ### First cut, shipped 2026-08-03
 
 The chat list, a group transcript, creating a group, inviting, and accepting.

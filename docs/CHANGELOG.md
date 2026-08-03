@@ -17,6 +17,22 @@ each of which links the full design document.
 ## [Unreleased]
 
 ### Added
+- **Group messages show who received and read them.** The checkmarks under your
+  own group message now say "Received by 3 of 5" and "Read by all", from the
+  recipients' own confirmations rather than from what your server accepted. A
+  confirmation goes **only to the person who wrote the message** — who has read
+  what stays between the reader and the author, and nobody else in the group is
+  told. Needs both sides on this version. (APP-16)
+- **Filter chips on the chat list**: All, Unread and Groups, with counts. They
+  only appear when there is something to filter. (APP-16)
+- **Inviting into a group of 50 or more warns first.** There is no group key and
+  no server-side fan-out: every message is encrypted and sent once per member, so
+  each additional member costs everyone. Said once, out loud, instead of being
+  discovered as slowness. (APP-16)
+- **A group send now goes out in one request per server** where the server
+  supports it, instead of one per member — a large group on few servers is
+  markedly less work for everyone. Discovered per server, so a group spanning an
+  older server keeps working, and a failure is still per recipient. (APP-16)
 - **A re-established encrypted session now says that it is one.** When Freizone
   has to rebuild the encryption with a contact — after a reset, or automatic
   recovery — the message that carries it states so outright instead of leaving
@@ -33,7 +49,9 @@ each of which links the full design document.
 - **A warning banner on the chat list when something failed to go out.** Until
   now a delivery that quietly failed — a membership change that never reached a
   member, a message that gave up — left no trace anywhere you could see it. The
-  banner stays until you dismiss it.
+  banner stays until you dismiss it. A server that is merely unreachable right
+  now does *not* raise it: that retries itself and is already shown by the
+  account going grey with an offline badge.
 - **The join dialog says what you will and won't see.** Joining a group shows
   messages from that point on; anything written before stays with the people who
   were there. That is deliberate and permanent — a group message exists only as
@@ -74,6 +92,13 @@ each of which links the full design document.
   writes — leaving is a separate, deliberate step. (APP-16)
 - **A group you are no longer in says so** instead of offering a composer whose
   send then fails. (APP-16)
+- **A member who may be missing group facts gets them with the next message.**
+  Previously they were only sent after somebody noticed a mismatch, which needed
+  that member to speak first — and a member who is missing facts leaves people out
+  of their own sends. (APP-16)
+- **A group whose details are missing can now ask a federated member for them.**
+  It could only ask a member on your own server or one you had messaged
+  one-to-one; the address now comes from the message itself. (APP-16)
 - **Groups catch up on their own now.** If a membership change couldn't be
   delivered to someone — their server briefly away, yours without a network —
   it was simply lost: nothing retried it, and nobody could notice, because a

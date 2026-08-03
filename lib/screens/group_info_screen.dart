@@ -271,7 +271,7 @@ class GroupInfoScreen extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.person_add_alt),
             title: const Text('Invite someone'),
-            onTap: () => _invite(context),
+            onTap: () => _invite(context, resolved),
           ),
         // The founder cannot leave -- "founder" is key possession, not an
         // assignment, so leaving would leave an authority outside the member
@@ -325,7 +325,29 @@ class GroupInfoScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _invite(BuildContext context) async {
+  /// Where a group stops being cheap. There is no group key and no server-side
+  /// fan-out: every message is encrypted and delivered once per member, and every
+  /// membership change is its own envelope to each of them. So the cost of one
+  /// more member is linear in a way a group chat's UI does not hint at, and past
+  /// roughly this many it is worth saying out loud once rather than letting
+  /// somebody discover it as slowness.
+  static const _largeGroupThreshold = 50;
+
+  Future<void> _invite(BuildContext context, GroupResolved resolved) async {
+    if (resolved.members.length >= _largeGroupThreshold) {
+      final proceed = await _confirm(
+        context,
+        title: 'This group is getting large',
+        body:
+            'It already has ${resolved.members.length} members. Every message is '
+            'encrypted and sent separately to each of them, so each additional '
+            'member makes sending slower and uses more data for everyone. Invite '
+            'anyway?',
+        action: 'Invite anyway',
+      );
+      if (proceed != true || !context.mounted) return;
+    }
+
     final controller = TextEditingController();
     final entered = await showDialog<String>(
       context: context,

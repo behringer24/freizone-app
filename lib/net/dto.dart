@@ -16,6 +16,8 @@ class ServerStatus {
     this.federationEnabled = true,
     this.blobsEnabled = false,
     this.maxBlobBytes = 0,
+    this.batchMessages = false,
+    this.maxBatchMessages = 0,
   });
 
   factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
@@ -28,6 +30,13 @@ class ServerStatus {
     // predates them and has no blob endpoints to talk to.
     blobsEnabled: j['blobs_enabled'] as bool? ?? false,
     maxBlobBytes: (j['max_blob_bytes'] as num?)?.toInt() ?? 0,
+    // Absent means off, same reasoning as blobs: batch delivery arrived with
+    // SRV-01, so a server that doesn't advertise it has no batch endpoint and
+    // the fan-out posts one request per recipient instead. Discovered per
+    // server, never once -- a group legitimately batches to one member's server
+    // and not to another's (docs/PROTOCOL.md §4).
+    batchMessages: j['batch_messages'] as bool? ?? false,
+    maxBatchMessages: (j['max_batch_messages'] as num?)?.toInt() ?? 0,
   );
 
   final bool claimed;
@@ -39,6 +48,37 @@ class ServerStatus {
 
   /// Largest single blob this server accepts, or 0 if it didn't say.
   final int maxBlobBytes;
+
+  /// Whether this server accepts several envelopes in one request, which is what
+  /// collapses a group fan-out to one request per distinct recipient server
+  /// (SRV-01).
+  final bool batchMessages;
+
+  /// How many items it accepts in one batch, or 0 if it didn't say -- a sender
+  /// must split above this rather than have the whole batch refused.
+  final int maxBatchMessages;
+}
+
+/// What one item of a batch send came back as (docs/PROTOCOL.md §7).
+///
+/// Deliberately not thrown: a failure is *per item*, so one recipient at their
+/// queue cap must not cost the other members their copy. The caller maps each
+/// result onto that recipient's own delivery state.
+class BatchSendResult {
+  BatchSendResult({required this.messageId, required this.status});
+
+  factory BatchSendResult.fromJson(Map<String, dynamic> j) => BatchSendResult(
+    messageId: j['message_id'] as String? ?? '',
+    status: j['status'] as String? ?? 'internal_error',
+  );
+
+  final String messageId;
+  final String status;
+
+  /// `duplicate` counts as delivered for the same reason a `409` does on the
+  /// single-message route: that id is already queued, so a retry has nothing
+  /// left to do.
+  bool get isDelivered => status == 'queued' || status == 'duplicate';
 }
 
 class AccountResponse {
