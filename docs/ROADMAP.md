@@ -396,5 +396,6 @@ over APP-08's outbox, and the group UI.
     author lines and a k-of-N send indicator, creating a group, and joining or
     declining one behind a notice that says the group will see your address.
     The group info screen (member list, role actions, invite, leave/dissolve)
-    followed on the same day. Still to come: filter chips, the delivery sheet,
-    and system lines for state events
+    and the state-change system lines followed on the same day. Still to come:
+    filter chips, the delivery sheet (tapping the k-of-N indicator for the
+    per-member picture), and the warning above ~50 members
