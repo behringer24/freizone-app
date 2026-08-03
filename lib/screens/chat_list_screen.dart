@@ -14,6 +14,7 @@ import '../state/conversation.dart';
 import '../state/group_conversation.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
+import '../util/group_actions.dart';
 import '../util/unread_dot.dart';
 import '../widgets/new_chat_sheet.dart';
 import '../widgets/peer_avatar.dart';
@@ -176,6 +177,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ),
         ),
       ),
+      // The same gesture a one-to-one row answers. It is the only route to
+      // removing a group whose fact set failed to load, since the group screen
+      // and its info screen both need that fact set to render anything.
+      onLongPress: () => showRemoveGroupDialog(context, session, group),
     );
   }
 
@@ -497,11 +502,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
         final nudge = session.state.recoveryBackupDone
             ? null
             : _buildBackupNudge(context, session);
+        // Above the backup nudge: a delivery that failed is about right now,
+        // while backing up the phrase can wait for the next screen.
+        final error = _buildErrorBanner(context, session);
 
         final conversations = session.chats;
         if (conversations.isEmpty) {
-          return _withNudge(
-            nudge,
+          return _withBanners(
+            [error, nudge],
             Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -549,8 +557,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
           context,
         ).colorScheme.surfaceContainerHigh;
 
-        return _withNudge(
-          nudge,
+        return _withBanners(
+          [error, nudge],
           CustomScrollView(
           slivers: [
             if (pending.isNotEmpty)
@@ -600,13 +608,56 @@ class _ChatListScreenState extends State<ChatListScreen> {
     );
   }
 
-  /// Stacks [nudge] (if any) above [body], so the recovery-phrase backup
-  /// prompt appears over both the conversation list and the empty state.
-  Widget _withNudge(Widget? nudge, Widget body) {
-    if (nudge == null) {
-      return body;
-    }
-    return Column(children: [nudge, Expanded(child: body)]);
+  /// Stacks whichever of [banners] are present above [body], so a prompt or a
+  /// warning appears over both the conversation list and the empty state.
+  Widget _withBanners(List<Widget?> banners, Widget body) {
+    final present = banners.whereType<Widget>().toList();
+    if (present.isEmpty) return body;
+    return Column(children: [...present, Expanded(child: body)]);
+  }
+
+  /// The last thing that went wrong in an account, kept until the user
+  /// acknowledges it -- keyed by account id, since the [PageView] builds one
+  /// body per account.
+  ///
+  /// AppSession.lastError is transient: the next envelope that decrypts cleanly
+  /// sets it back to null. Reading it straight into the banner would therefore
+  /// flash a failure for a moment and then lose it, which is the opposite of
+  /// what a failure needs -- a group fact that never went out is worth knowing
+  /// about ten minutes later.
+  final Map<String, String> _stickyErrors = {};
+
+  Widget? _buildErrorBanner(BuildContext context, AppSession session) {
+    // Captured during build on purpose: this builder runs *because* the session
+    // notified, so the value is picked up and rendered in the same frame.
+    final live = session.lastError;
+    if (live != null) _stickyErrors[session.state.accountId] = live;
+    final message = _stickyErrors[session.state.accountId];
+    if (message == null) return null;
+
+    final theme = Theme.of(context);
+    return MaterialBanner(
+      backgroundColor: theme.colorScheme.errorContainer,
+      leading: Icon(
+        Icons.warning_amber,
+        color: theme.colorScheme.onErrorContainer,
+      ),
+      content: Text(
+        message,
+        style: TextStyle(color: theme.colorScheme.onErrorContainer),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => setState(() {
+            _stickyErrors.remove(session.state.accountId);
+            // Cleared on the session too, or the next rebuild would simply
+            // re-capture the same line.
+            session.lastError = null;
+          }),
+          child: const Text('Dismiss'),
+        ),
+      ],
+    );
   }
 
   Widget _buildBackupNudge(BuildContext context, AppSession session) {

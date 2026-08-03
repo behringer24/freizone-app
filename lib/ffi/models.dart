@@ -311,6 +311,7 @@ class ParsedEnvelope {
     required this.header,
     required this.ciphertext,
     this.initial,
+    this.rekey,
   });
 
   factory ParsedEnvelope.fromJson(Map<String, dynamic> j) => ParsedEnvelope(
@@ -319,11 +320,23 @@ class ParsedEnvelope {
     initial: j['initial'] == null
         ? null
         : InitialMessage.fromJson(j['initial'] as Map<String, dynamic>),
+    rekey: j['rekey'] as bool?,
   );
 
   final RatchetHeader header;
   final Uint8List ciphertext;
   final InitialMessage? initial;
+
+  /// What the sender said about the prekey block on this envelope (SRV-17):
+  /// true for a session they deliberately discarded and re-established, false
+  /// for an ordinary establishment, and **null for a sender that said nothing**
+  /// -- an older build, whose intent has to be inferred from the decrypted
+  /// content instead. Always null when there is no prekey block.
+  ///
+  /// The three states are genuinely three: reading null as false would treat
+  /// every older peer's re-key as a race and drop it on the tie-break, which is
+  /// the bug this field exists to make impossible for peers that do state it.
+  final bool? rekey;
 }
 
 /// The four per-request signature headers (Signature-Key-Id,

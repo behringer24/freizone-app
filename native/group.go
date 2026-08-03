@@ -62,12 +62,33 @@ func groupEventTime(t time.Time) time.Time {
 	return t.UTC().Truncate(time.Second)
 }
 
-// loadGroupState reads a state blob back. An absent or empty blob is a group
-// this device has not heard of yet -- the ordinary case for the first
-// snapshot an invitee receives -- and starts empty rather than failing.
+// loadGroupState reads a state blob back. A blob carrying no facts is a group
+// this device has not heard of yet -- the ordinary case for the first snapshot
+// an invitee receives -- and starts empty rather than failing.
+//
+// "No facts" is recognized however the caller spelled it: absent, JSON `null`,
+// or an empty object. That last one is not hypothetical -- it is what Dart's
+// `const <String, dynamic>{}` encodes to, which is exactly what
+// group_receive.dart and AppSession.applyGroupEvents pass for a group they have
+// never heard of. Handing that to group.State.UnmarshalJSON instead failed the
+// whole call ("stored state has no genesis event", a check that is right for a
+// blob genuinely read back from disk), so an invitee's very first snapshot threw
+// on arrival: no group, no notification, and -- since the ratchet had already
+// advanced past the envelope and the id was already marked processed -- no
+// second chance at those facts either. Somebody had to invite them again.
 func loadGroupState(raw json.RawMessage) (*group.State, error) {
 	state := group.NewState()
 	if len(raw) == 0 || string(raw) == "null" {
+		return state, nil
+	}
+	// Probed rather than pattern-matched on the bytes, so `{}`,
+	// `{"events":[]}`, `{"events":null}` and any future field-only blob are all
+	// the same "nothing yet". Malformed JSON falls through to the real load
+	// below, which reports it properly.
+	var probe struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(raw, &probe); err == nil && len(probe.Events) == 0 {
 		return state, nil
 	}
 	if err := json.Unmarshal(raw, state); err != nil {

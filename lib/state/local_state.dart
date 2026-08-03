@@ -101,6 +101,7 @@ class AppState {
     Map<String, Conversation>? conversations,
     Map<String, GroupConversation>? groups,
     Map<String, List<Map<String, dynamic>>>? pendingGroupEvents,
+    Map<String, Set<String>>? groupSnapshotDebts,
     Set<String>? knownPeerIds,
     Map<String, BlockedPeer>? blockedPeers,
     Set<String>? processedMessageIds,
@@ -115,6 +116,7 @@ class AppState {
        conversations = conversations ?? {},
        groups = groups ?? {},
        pendingGroupEvents = pendingGroupEvents ?? {},
+       groupSnapshotDebts = groupSnapshotDebts ?? {},
        knownPeerIds = knownPeerIds ?? {},
        blockedPeers = blockedPeers ?? {},
        processedMessageIds = processedMessageIds ?? {},
@@ -169,6 +171,10 @@ class AppState {
             k,
             (v as List<dynamic>).cast<Map<String, dynamic>>(),
           ),
+        ),
+    groupSnapshotDebts: (j['group_snapshot_debts'] as Map<String, dynamic>?)
+        ?.map(
+          (k, v) => MapEntry(k, (v as List<dynamic>).cast<String>().toSet()),
         ),
     knownPeerIds: (j['known_peer_ids'] as List<dynamic>?)
         ?.cast<String>()
@@ -245,6 +251,26 @@ class AppState {
   /// and the ratchet has already advanced past the envelope they came in --
   /// dropping them would be final.
   Map<String, List<Map<String, dynamic>>> pendingGroupEvents;
+
+  /// Members who may be missing group facts *we* hold, keyed by group id: a
+  /// control envelope to them failed to go out, and nothing in the protocol
+  /// tells them what they never received (APP-16).
+  ///
+  /// A group's fact set is grow-only and its state hash says only "we differ",
+  /// never who is behind -- so a fact lost in transit is not noticed by anyone
+  /// until somebody next sends into the group, and then costs two further
+  /// control envelopes to reconcile. That is what made a third member take
+  /// several messages to appear for everyone. Recorded here instead, and paid
+  /// off as a whole snapshot (idempotent: the fold dedupes by event id) the next
+  /// time this account has a working connection -- see
+  /// AppSession.flushOutbox.
+  ///
+  /// Persisted, because the failure that created the debt is usually the app
+  /// losing its network, and it must survive being closed in that state.
+  /// Deliberately holds account ids only, not the events themselves: what we owe
+  /// is "everything we know about this group", which is always readable from the
+  /// group's own file.
+  Map<String, Set<String>> groupSnapshotDebts;
 
   /// Group transcripts, keyed by group id (APP-16).
   ///
@@ -426,6 +452,10 @@ class AppState {
       'groups': groups.map((k, v) => MapEntry(k, v.toJson())),
     if (pendingGroupEvents.isNotEmpty)
       'pending_group_events': pendingGroupEvents,
+    if (groupSnapshotDebts.isNotEmpty)
+      'group_snapshot_debts': groupSnapshotDebts.map(
+        (k, v) => MapEntry(k, v.toList()),
+      ),
     if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
     if (blockedPeers.isNotEmpty)
       'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),

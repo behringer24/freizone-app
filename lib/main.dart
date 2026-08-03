@@ -6,6 +6,7 @@ import 'push/notification_navigation.dart';
 import 'push/push_manager.dart';
 import 'screens/account_shell_screen.dart';
 import 'screens/chat_screen.dart';
+import 'screens/group_chat_screen.dart';
 import 'screens/setup_screen.dart';
 import 'screens/share_target_screen.dart';
 import 'state/account_manager.dart';
@@ -193,9 +194,14 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   /// Switches to the tapped notification's account and, if it named a
-  /// specific peer (see push_manager.dart's showMessageNotification),
-  /// pushes straight into that conversation -- otherwise just leaves the
+  /// specific chat (see push_manager.dart's showMessageNotification),
+  /// pushes straight into it -- a group transcript when [isGroup], a
+  /// one-to-one conversation otherwise. With no chat named, just leaves the
   /// account switched, landing on its chat list.
+  ///
+  /// A chat that no longer exists on this device (the group was declined or
+  /// deleted between the notification and the tap) also lands on the chat
+  /// list, rather than pushing a screen with nothing to render.
   ///
   /// Always unwinds back to the chat list first (popUntil isFirst) before
   /// pushing -- a plain push would stack the tapped chat on top of
@@ -205,24 +211,31 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   /// previously open (any chat, Settings, ...) is simply gone rather than
   /// still reachable further back -- the deliberate trade-off for "back
   /// always goes to the chat list" from a notification tap.
-  void _openChatFor(String accountId, String? peerAccountId) {
+  void _openChatFor(String accountId, String? chatId, {bool isGroup = false}) {
     final manager = _manager;
     if (manager == null || !mounted) return;
     final session = manager.sessionFor(accountId);
     if (session == null) return; // account no longer exists on this device
 
     manager.setActive(accountId);
-    if (peerAccountId == null) return;
+    if (chatId == null) return;
+    if (isGroup && session.group(chatId) == null) return;
 
     final navigator = Navigator.of(context);
     navigator.popUntil((route) => route.isFirst);
     navigator.push(
       MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          session: session,
-          peerAccountId: peerAccountId,
-          settings: widget.settings,
-        ),
+        builder: (_) => isGroup
+            ? GroupChatScreen(
+                session: session,
+                groupId: chatId,
+                settings: widget.settings,
+              )
+            : ChatScreen(
+                session: session,
+                peerAccountId: chatId,
+                settings: widget.settings,
+              ),
       ),
     );
   }

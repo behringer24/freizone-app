@@ -203,15 +203,23 @@ class FreizoneCore {
   /// Builds a message's opaque wire payload (the value to send as
   /// `payload` in `POST /v1/messages`). Pass [initial] only for a
   /// session's first message.
+  /// [rekey] qualifies the prekey block when [initial] is given (SRV-17): true
+  /// if this session was deliberately discarded and re-established, false for an
+  /// ordinary establishment. Always pass one of the two -- leaving it null puts
+  /// the receiver back to guessing from the decrypted content, which is only
+  /// meant for senders that predate the field. Ignored without an [initial],
+  /// since there is no prekey block to qualify.
   Map<String, dynamic> buildEnvelope({
     InitialMessage? initial,
     required RatchetHeader header,
     required Uint8List ciphertext,
+    bool? rekey,
   }) {
     final data = _call(_bindings.buildEnvelope, {
       if (initial != null) 'initial': initial.toJson(),
       'header': header.toJson(),
       'ciphertext': encodeB64(ciphertext),
+      if (initial != null && rekey != null) 'rekey': rekey,
     });
     return data['payload'] as Map<String, dynamic>;
   }

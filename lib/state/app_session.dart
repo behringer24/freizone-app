@@ -33,6 +33,7 @@ import 'group_control.dart';
 import 'group_conversation.dart';
 import 'group_receive.dart';
 import 'group_store.dart';
+import 'group_system_lines.dart';
 import 'media_store.dart';
 import 'message_content.dart';
 import 'outgoing_attachment.dart';
@@ -78,10 +79,16 @@ class IncomingMessageResult {
     this.groupId,
     this.peerGroupStateHash,
     this.groupSnapshotRequested = false,
+    this.groupInvite = false,
   });
 
   final String peerAccountId;
   final bool shouldNotify;
+
+  /// This envelope was an invitation into a group new to this account (see
+  /// group_receive.dart's GroupControlOutcome.invited) -- notify-worthy, but not
+  /// a message, so the notification says so and doesn't deep-link anywhere.
+  final bool groupInvite;
 
   /// The group this envelope belonged to, if any (APP-16) -- so a caller that
   /// caches folded group state knows which one to refresh.
@@ -97,10 +104,17 @@ class IncomingMessageResult {
   final bool groupSnapshotRequested;
 
   /// The receipt anchor of a genuinely new, stored (not blocked, not a
-  /// receipt) message -- the sender's own send-time stamp when the
-  /// message carried one, local arrival time otherwise (see
-  /// StoredMessage.receiptAnchor); null for a receipt, a dropped/blocked
-  /// message, or anything else that isn't itself a delivered chat message.
+  /// receipt) message in a *one-to-one* conversation -- the sender's own
+  /// send-time stamp when the message carried one, local arrival time
+  /// otherwise (see StoredMessage.receiptAnchor); null for a receipt, a
+  /// dropped/blocked message, or anything else that isn't itself a
+  /// delivered chat message.
+  ///
+  /// Also null for a group message, and not merely because group receipts are
+  /// unbuilt: a receipt is sent over a *conversation*, so an anchor taken from a
+  /// group message would confirm that member's unrelated direct messages
+  /// instead. When group receipts arrive they need their own field, per group
+  /// and per member -- not this one.
   /// Lets a caller that CAN send (AppSession, which has sending
   /// capability; a bare background sync currently doesn't -- see
   /// push_manager.dart's _syncProfile) decide whether to send a
@@ -190,8 +204,9 @@ Future<IncomingMessageResult?> processIncomingMessage(
     // or they simply established one at the same moment we did -- rare between
     // two people chatting, routine in a group, where a joining member reaches
     // for everyone at once and everyone reaches back. The two need opposite
-    // handling, and the wire cannot tell them apart, so the decrypted content
-    // decides (docs/PROTOCOL.md §5).
+    // handling, so the sender now says which it is in the prekey block
+    // (SRV-17); only a sender predating that field leaves it to be inferred
+    // from the decrypted content (docs/PROTOCOL.md §5).
     //
     // Either way, adopt nothing that does not actually decrypt: the core's
     // session calls are pure, so a failed attempt leaves the live session
@@ -210,9 +225,16 @@ Future<IncomingMessageResult?> processIncomingMessage(
       );
       usedResponder = true;
 
-      // A v: 3 envelope means the peer threw their session away, so theirs is
-      // the only one they can read: adopt it whatever the ids say.
-      final deliberateRekey = RekeySignal.tryDecode(dec.plaintext) != null;
+      // What the peer said, if anything (SRV-17). `false` is an answer too and
+      // is trusted as one: it means "not a re-key", so the tie-break below
+      // decides and the content is never sniffed. Only a null -- a peer that
+      // predates the field -- falls back to the old inference, where a v: 3
+      // envelope stands for "I threw my session away".
+      //
+      // A peer that threw their session away can read nothing but their own, so
+      // theirs is adopted whatever the ids say.
+      final deliberateRekey =
+          parsed.rekey ?? (RekeySignal.tryDecode(dec.plaintext) != null);
       // Otherwise it is a race, and the tie-break is the ordering rule
       // re-keying already uses: the lower account id's session wins.
       final peerWins =
@@ -347,14 +369,18 @@ Future<IncomingMessageResult?> processIncomingMessage(
   // push isolate, which is why this lives in group_receive.dart as a plain
   // function rather than an AppSession method.
   //
-  // Never stored, never notified: membership is not a message. The caller
-  // still acks it out of the queue like any other processed envelope.
+  // Never stored: membership is not a message. The one exception to "never
+  // notified" is an invitation addressed to us -- a decision waiting on the
+  // user, and their only sign of it, since nothing is sent into a group until
+  // they accept (see applyGroupControl). The caller still acks it out of the
+  // queue like any other processed envelope.
   final control = GroupControl.tryDecode(dec.plaintext);
   if (control != null) {
     final outcome = await applyGroupControl(state, core, control);
     return IncomingMessageResult(
       peerAccountId: msg.senderAccountId,
-      shouldNotify: false,
+      shouldNotify: outcome.invited && openConversationPeerId != outcome.groupId,
+      groupInvite: outcome.invited,
       groupId: outcome.groupId,
       peerGroupStateHash: outcome.peerStateHash,
       groupSnapshotRequested: outcome.wantsSnapshot,
@@ -410,7 +436,7 @@ Future<IncomingMessageResult?> processIncomingMessage(
         groupId: content.groupId,
       );
     }
-    final stored = storeGroupMessage(
+    storeGroupMessage(
       state,
       content,
       msg.senderAccountId,
@@ -420,7 +446,13 @@ Future<IncomingMessageResult?> processIncomingMessage(
     return IncomingMessageResult(
       peerAccountId: msg.senderAccountId,
       shouldNotify: openConversationPeerId != content.groupId,
-      deliveredUpTo: stored.receiptAnchor,
+      // Deliberately no deliveredUpTo: group receipts don't exist yet, and a
+      // watermark measured in a group must never be reported over the *one-to-
+      // one* conversation with whoever sent it. It used to be, and the anchor
+      // then confirmed that peer's older direct messages as delivered -- or, if
+      // their chat happened to be the readable one, as read -- on the strength
+      // of a group message the user may never have opened. The watermark is
+      // monotonic, so nothing walked it back.
       groupId: content.groupId,
       peerGroupStateHash: content.stateHash,
     );
@@ -688,7 +720,26 @@ class AppSession extends ChangeNotifier {
   }
 
   bool prekeysReady = false;
-  String? lastError;
+
+  /// The last thing that went wrong in this account, as one human-readable
+  /// line, or null once something has gone right again.
+  ///
+  /// Shown by the chat list (see chat_list_screen's error banner). Until it was
+  /// shown anywhere, this was written from a dozen places and read by none --
+  /// so a swallowed delivery failure, a group fact that never went out, or a
+  /// decrypt that gave up left no trace the user could see, and "it took a while
+  /// until everyone saw each other" had no visible cause.
+  ///
+  /// Notifies on change, since a failure deep in an async path is exactly the
+  /// kind that has no other reason to rebuild anything.
+  String? get lastError => _lastError;
+  set lastError(String? value) {
+    if (_lastError == value) return;
+    _lastError = value;
+    notifyListeners();
+  }
+
+  String? _lastError;
 
   /// Live reachability of this session's home server, kept current by the
   /// SSE reconnect loop (see [_startStream]). The UI treats [unreachable]
@@ -1013,6 +1064,12 @@ class AppSession extends ChangeNotifier {
     // up promptly -- the lock UI and outbound guard depend on this flag, and
     // there is no push for a settings change.
     unawaited(refreshRegistrationPolicy());
+    // Resuming is a second chance at whatever failed while we were away, and
+    // the only one that doesn't need our own connection to have dropped: a
+    // member whose server was briefly down leaves a debt behind while ours was
+    // reachable throughout, so no reconnect fires for it (see flushOutbox's
+    // other two call sites).
+    unawaited(flushOutbox());
     if (_openConversationPeerId != null) {
       unawaited(enterConversation(_openConversationPeerId!));
     }
@@ -1386,7 +1443,12 @@ class AppSession extends ChangeNotifier {
         unawaited(
           showMessageNotification(
             state.accountId,
-            peerAccountId: result.peerAccountId,
+            // A group envelope points at the group, not at a one-to-one chat
+            // with whoever happened to send it (main.dart's _openChatFor opens
+            // exactly that for a peer id).
+            peerAccountId: groupId == null ? result.peerAccountId : null,
+            groupId: groupId,
+            invitation: result.groupInvite,
           ),
         );
       }
@@ -1892,6 +1954,8 @@ class AppSession extends ChangeNotifier {
     String groupId,
     List<Map<String, dynamic>> events,
   ) async {
+    // Free here, unlike on the receive path: the folded view is already cached.
+    final before = _groupStates[groupId]?.resolved;
     final result = core.groupApplyEvents(
       state: _groupStates[groupId]?.state ?? const <String, dynamic>{},
       events: events,
@@ -1901,7 +1965,23 @@ class AppSession extends ChangeNotifier {
     // the sender claimed.
     final id = result.groupId.isEmpty ? groupId : result.groupId;
 
-    state.groups.putIfAbsent(id, () => GroupConversation(groupId: id));
+    final chat = state.groups.putIfAbsent(
+      id,
+      () => GroupConversation(groupId: id),
+    );
+    // Our own acts get the same lines a peer's do -- an inviter should see "q2xjx
+    // was invited" in the transcript exactly as everyone else does, or the two
+    // sides of the same group read as different histories.
+    appendGroupSystemLines(
+      chat,
+      groupStateChangeLines(
+        before: before,
+        after: result.resolved,
+        myAccountId: state.accountId,
+        events: events,
+      ),
+      at: DateTime.now().toUtc(),
+    );
     await _storeGroupState(result, groupId: id);
     await LocalStateStore.saveProfile(state);
     notifyListeners();
@@ -1945,12 +2025,88 @@ class AppSession extends ChangeNotifier {
     return endpoint;
   }
 
-  /// Call when a group's screen opens: clears its unread flag.
+  /// When each group was last asked to send its fact set, so opening a group
+  /// repeatedly doesn't ask repeatedly. In memory only: a cold start is exactly
+  /// when asking is most likely to be worth it.
+  final Map<String, DateTime> _lastGroupSyncRequest = {};
+  static const _groupSyncRequestCooldown = Duration(minutes: 5);
+
+  /// Asks one member to send us their whole fact set.
+  ///
+  /// The other half of reconciliation, and until now the missing one: a state
+  /// hash says "we differ", never who is behind, so a member who missed a fact
+  /// finds out only when somebody next sends into the group -- and if that
+  /// somebody is *us*, and we are the one behind, nothing at all happens. This
+  /// asks outright.
+  ///
+  /// Sent to one member rather than all of them: any member holds the whole
+  /// grow-only fact set, so one answer is as good as ten, and ten would put a
+  /// snapshot-sized envelope in every member's queue every time somebody opens
+  /// a group screen. Preferring a joined member because a pending invitee may
+  /// hold nothing yet, and the founder first because they cannot have left.
+  ///
+  /// Best-effort by design: no debt is recorded and no error surfaces. Nothing
+  /// is lost if it fails, since this asks for something we don't have rather
+  /// than sending something somebody else needs.
+  Future<void> _requestGroupSync(String groupId) async {
+    final current = _groupStates[groupId];
+    if (current == null || current.resolved.dissolved) return;
+
+    final now = DateTime.now().toUtc();
+    final last = _lastGroupSyncRequest[groupId];
+    if (last != null && now.difference(last) < _groupSyncRequestCooldown) {
+      return;
+    }
+
+    final candidates = current.resolved.members
+        .where((m) => m.joined && m.accountId != state.accountId)
+        .toList();
+    if (candidates.isEmpty) return;
+    final target = candidates.firstWhere(
+      (m) => m.isFounder,
+      orElse: () => candidates.first,
+    );
+
+    _lastGroupSyncRequest[groupId] = now;
+    try {
+      await _sendGroupControl(
+        groupId,
+        target.accountId,
+        target.server,
+        GroupControl(
+          kind: GroupControlKind.syncRequest,
+          groupId: groupId,
+          stateHash: current.stateHash,
+        ),
+      );
+    } catch (e) {
+      developer.log(
+        'group sync request to ${target.accountId} failed: ${describeError(e)}',
+        name: 'groups',
+      );
+    }
+  }
+
+  /// Call when a group's screen opens: clears its unread flag, and asks one
+  /// member for their facts in case this device is the one that is behind.
   Future<void> enterGroup(String groupId) async {
+    // Before the unread check, deliberately: whether the group has unread
+    // messages says nothing about whether its member list is current, and the
+    // membership divergence is exactly the thing nobody would otherwise notice.
+    // Both directions at once -- ask for what we may be missing, and hand over
+    // what somebody else never got.
+    unawaited(_requestGroupSync(groupId));
+    unawaited(_payGroupSnapshotDebts());
+
     final chat = state.groups[groupId];
     if (chat == null || !chat.hasUnread) return;
     chat.hasUnread = false;
     await LocalStateStore.saveProfile(state);
+    // Exactly as enterConversation does it: if that was the last unread chat in
+    // this account, the notification goes with it -- otherwise Android's
+    // launcher badge (derived from active notifications, not from anything drawn
+    // in-app) would linger after the group, or the invitation, has been read.
+    if (!hasAnyUnread) unawaited(clearMessageNotification(state.accountId));
     notifyListeners();
   }
 
@@ -1959,22 +2115,108 @@ class AppSession extends ChangeNotifier {
   /// The invitee gets the whole fact set -- they have nothing to merge it
   /// into -- while everyone else gets just the new one, with the chain that
   /// authorizes it riding along inside the event itself.
-  Future<void> inviteToGroup(
-    String groupId,
-    String accountId, {
-    String? server,
-  }) async {
-    final memberServer = server ?? state.server;
+  ///
+  /// [address] is a full Freizone address (`id*server`, `id*local`, or just a
+  /// bare id/prefix -- see lib/util/freizone_address.dart), exactly what
+  /// [startConversation] accepts: a dash-grouped id pasted from "copy my
+  /// address" and a short id-prefix both work.
+  ///
+  /// The address is resolved *before* anything is signed, and that ordering is
+  /// the point. A member_add records the invitee's canonical full id because
+  /// that string is what their whole key chain is signed over (see
+  /// [_getOrCreateCryptoSession]'s certificate checks) and what their pairwise
+  /// ratchet is keyed by -- so a member folded in under a cosmetic spelling of
+  /// it, or under a prefix, is a phantom: shown in the member list, invited as
+  /// far as the group is concerned, but impossible to establish a session with
+  /// ("invalid dh identity certificate" on the very first send). Resolving
+  /// first also means an address that resolves to nothing adds no member at
+  /// all, instead of one nobody can ever deliver to.
+  Future<void> inviteToGroup(String groupId, String address) async {
+    final parsed = parseFreizoneAddress(address);
+    if (parsed == null) throw StateError('Not a valid Freizone address');
+
+    // `*local`, no `*...` part, or an explicit spelling of our own server all
+    // mean the same thing -- and the member's recorded server is absolute, so
+    // it's this session's own normalized one, never the user's spelling of it.
+    final onOwnServer =
+        parsed.server == null || sameServer(parsed.server!, state.server);
+    final memberServer = onOwnServer ? state.server : parsed.server!;
+
+    // Same outbound federation guard as startConversation: a member this
+    // server can't federate with could never answer, and inviting them writes
+    // a permanent fact into the group's history.
+    if (!onOwnServer && !federationEnabled) {
+      throw StateError(
+        'Federation is turned off on your server, so you can\'t invite '
+        'contacts on other servers.',
+      );
+    }
+
+    final isSelf =
+        parsed.idOrPrefix == state.accountId ||
+        (onOwnServer &&
+            parsed.idOrPrefix.length == accountIdPrefixLength &&
+            state.accountId.startsWith(parsed.idOrPrefix));
+    if (isSelf) {
+      throw StateError("That's your own address -- you're already in here.");
+    }
+
+    final (resolvedId, verified) = await _resolvePeerDevice(
+      parsed.idOrPrefix,
+      _clientFor(onOwnServer ? null : memberServer),
+    );
+
+    // The lookup above already produced (and verified) the device every send
+    // below has to go to, so seed the endpoint cache rather than making
+    // _sendGroupControl repeat the same GET.
+    final peer = _endpointFor(resolvedId, memberServer);
+    peer.deviceId ??= verified.deviceId;
+    peer.devicePubKey ??= verified.devicePubKey;
+
+    final existing = _groupStates[groupId]?.resolved.memberById(resolvedId);
+    if (existing != null) {
+      if (existing.joined) throw StateError('They are already in this group.');
+      // Their invitation is still outstanding, so this is a re-send, not a
+      // second member_add: the whole fact set again, to the same member row.
+      // The repair path for an invitation whose delivery failed first time --
+      // until the snapshot arrives the invitee has nothing at all, and nobody
+      // else re-sends it for them (a snapshot is otherwise only offered in
+      // answer to a state_hash mismatch, which needs them to send first).
+      await _sendGroupSnapshotTo(groupId, resolvedId, memberServer);
+      return;
+    }
+
     final event = signGroupEvent(
       groupId: groupId,
       type: 'member_add',
-      subject: accountId,
+      subject: resolvedId,
       server: memberServer,
     );
     await applyGroupEvents(groupId, [event]);
 
-    await _sendGroupSnapshotTo(groupId, accountId, memberServer);
-    await _broadcastGroupEvents(groupId, [event], skip: {accountId});
+    // Signed and now part of this group's history: every other member has to
+    // learn it even if the invitee themselves turns out to be unreachable
+    // right now, or the group would disagree about its own membership. The
+    // invitee's own failure is still reported -- it's the one the user asked
+    // for -- just not at the cost of everyone else's copy.
+    Object? snapshotError;
+    try {
+      await _sendGroupSnapshotTo(groupId, resolvedId, memberServer);
+    } catch (e) {
+      // Retried on the next working connection, so an invitation is not lost to
+      // a moment without a network -- the invitee has nothing at all until the
+      // snapshot arrives, and nobody re-sends it for them.
+      _oweGroupSnapshot(groupId, resolvedId);
+      snapshotError = e;
+    }
+    await _broadcastGroupEvents(groupId, [event], skip: {resolvedId});
+    if (snapshotError != null) {
+      // Persisted before the throw, or the debt recorded above would be lost
+      // exactly when it matters: the invitation is signed and the group knows
+      // about it, only the invitee doesn't.
+      await LocalStateStore.saveProfile(state);
+      throw snapshotError;
+    }
   }
 
   /// Accepts an invitation addressed to this account.
@@ -1989,6 +2231,136 @@ class AppSession extends ChangeNotifier {
     );
     await applyGroupEvents(groupId, [event]);
     await _broadcastGroupEvents(groupId, [event]);
+  }
+
+  /// Declines an invitation addressed to this account, and forgets the group.
+  ///
+  /// A decline is a `leave`, not a new kind of fact: the fold deletes the member
+  /// row for either one, so "I was invited and said no" and "I was in and left"
+  /// are the same statement about the same person -- and the group needs exactly
+  /// that. Saying nothing would leave the invitation outstanding in every
+  /// member's list forever, which is the one outcome that serves nobody: the
+  /// moderator can't tell a refusal from an unread invitation.
+  ///
+  /// Told to the group *before* the local copy goes, since signing and
+  /// broadcasting both need the fact set. The local group is then forgotten
+  /// completely (transcript and pictures included, see [deleteGroup]) -- having
+  /// declined, there is nothing left to keep, and leaving it in the chat list
+  /// would be a second invitation nobody sent.
+  Future<void> declineGroupInvite(String groupId) async {
+    final me = _groupStates[groupId]?.resolved.memberById(state.accountId);
+    if (me == null) throw StateError('You are not in this group.');
+    if (me.joined) {
+      throw StateError('You have already joined this group -- leave it instead.');
+    }
+    await _groupAction(groupId, type: 'leave', subject: state.accountId);
+    await deleteGroup(groupId);
+  }
+
+  /// Grants or revokes a role. Which key signs it is the core's decision --
+  /// admin needs the group root key, moderator an ordinary device signature --
+  /// and an act the fold will not authorize simply has no effect anywhere.
+  Future<void> setGroupRole(
+    String groupId,
+    String accountId,
+    String role, {
+    required bool grant,
+  }) => _groupAction(
+    groupId,
+    type: grant ? 'role_grant' : 'role_revoke',
+    subject: accountId,
+    role: role,
+  );
+
+  /// Removes a member. They are told too: as far as their own copy of the
+  /// state is concerned they are still in the group until this reaches them.
+  Future<void> removeFromGroup(String groupId, String accountId) =>
+      _groupAction(groupId, type: 'member_remove', subject: accountId);
+
+  /// Sets the name and topic. One last-writer-wins record, so an unchanged
+  /// field is carried over rather than cleared.
+  Future<void> setGroupMeta(String groupId, {String? name, String? topic}) async {
+    final resolved = _groupStates[groupId]?.resolved;
+    if (resolved == null) return;
+    await _groupAction(
+      groupId,
+      type: 'meta',
+      name: name ?? resolved.name,
+      topic: topic ?? resolved.topic,
+    );
+  }
+
+  Future<void> leaveGroup(String groupId) =>
+      _groupAction(groupId, type: 'leave', subject: state.accountId);
+
+  /// Leaves a group and forgets it locally, as one action.
+  ///
+  /// The pair belongs together, because forgetting a group this account is still
+  /// a member of does not work on its own: the fact set goes, but the *others*
+  /// keep sending -- and an arriving message re-creates the transcript for a
+  /// group whose facts are gone, leaving a chat with no name, no member list, no
+  /// way to open its info screen, and a composer whose send fails with "no
+  /// group". Removing while still a member therefore means leaving first; this
+  /// is that, in one step, so it cannot be half-done.
+  ///
+  /// Same order as [declineGroupInvite], and for the same reason: signing and
+  /// broadcasting both need the fact set that the second half deletes.
+  Future<void> leaveAndDeleteGroup(String groupId) async {
+    await leaveGroup(groupId);
+    await deleteGroup(groupId);
+  }
+
+  /// Ends the group, for the founder. They cannot leave one -- that would
+  /// leave an authority behind that is not in the member list.
+  Future<void> dissolveGroup(String groupId) =>
+      _groupAction(groupId, type: 'dissolve');
+
+  /// The shape every moderation action shares: sign it, apply it here, tell
+  /// everyone.
+  Future<void> _groupAction(
+    String groupId, {
+    required String type,
+    String subject = '',
+    String role = '',
+    String name = '',
+    String topic = '',
+  }) async {
+    final event = signGroupEvent(
+      groupId: groupId,
+      type: type,
+      subject: subject,
+      role: role,
+      name: name,
+      topic: topic,
+    );
+    // Captured before applying: a removal takes its subject out of the member
+    // list, and they are the one person who most needs to hear about it.
+    final removed = type == 'member_remove'
+        ? _groupStates[groupId]?.resolved.memberById(subject)
+        : null;
+
+    await applyGroupEvents(groupId, [event]);
+    await _broadcastGroupEvents(groupId, [event]);
+
+    if (removed != null) {
+      try {
+        await _sendGroupControl(
+          groupId,
+          removed.accountId,
+          removed.server,
+          GroupControl(
+            kind: GroupControlKind.events,
+            groupId: groupId,
+            stateHash: _groupStates[groupId]?.stateHash ?? '',
+            events: [event],
+          ),
+        );
+      } catch (e) {
+        lastError =
+            'telling ${removed.accountId} they were removed: '
+            '${describeError(e)}';
+      }
+    }
   }
 
   /// Sends a few new facts to every member except this account and any in
@@ -2010,6 +2382,7 @@ class AppSession extends ChangeNotifier {
       events: events,
     );
 
+    var owedSomebody = false;
     for (final member in current.resolved.members) {
       if (member.accountId == state.accountId) continue;
       if (skip.contains(member.accountId)) continue;
@@ -2021,10 +2394,94 @@ class AppSession extends ChangeNotifier {
           control,
         );
       } catch (e) {
-        // One unreachable member must not stop the others hearing about it.
+        // One unreachable member must not stop the others hearing about it --
+        // but the fact must not be lost either, so they are owed a snapshot.
+        _oweGroupSnapshot(groupId, member.accountId);
+        owedSomebody = true;
         lastError = 'group update to ${member.accountId}: ${describeError(e)}';
       }
     }
+    // Only when something actually failed: this runs on every membership change,
+    // and the profile is rewritten in full each time it is saved.
+    if (owedSomebody) await LocalStateStore.saveProfile(state);
+  }
+
+  /// Notes that [accountId] may be missing facts we hold about [groupId],
+  /// because an envelope to them did not go out (see
+  /// AppState.groupSnapshotDebts). Paid off by [flushOutbox].
+  ///
+  /// Not persisted here: every caller is mid-operation and saves the profile
+  /// itself once it is done.
+  void _oweGroupSnapshot(String groupId, String accountId) {
+    (state.groupSnapshotDebts[groupId] ??= <String>{}).add(accountId);
+  }
+
+  void _clearGroupSnapshotDebt(String groupId, String accountId) {
+    final owed = state.groupSnapshotDebts[groupId];
+    if (owed == null) return;
+    owed.remove(accountId);
+    if (owed.isEmpty) state.groupSnapshotDebts.remove(groupId);
+  }
+
+  /// Re-sends the whole fact set to every member an envelope failed to reach.
+  ///
+  /// A snapshot rather than the individual events that were lost: the fact set
+  /// is grow-only and the fold dedupes by event id, so "everything I know"
+  /// is both the simplest thing to owe and always correct, and it needs no
+  /// bookkeeping of which event went missing.
+  ///
+  /// A debt against a group this account no longer has, or against somebody who
+  /// is no longer a member, is dropped rather than paid: sending group facts to
+  /// an outsider would disclose the membership -- and with it every member's
+  /// address -- to somebody now outside the group.
+  Future<void> _payGroupSnapshotDebts() async {
+    if (state.groupSnapshotDebts.isEmpty) return;
+    var changed = false;
+
+    for (final groupId in state.groupSnapshotDebts.keys.toList()) {
+      final owed = state.groupSnapshotDebts[groupId]?.toList() ?? const [];
+      final resolved = _groupStates[groupId]?.resolved;
+      if (resolved == null) {
+        state.groupSnapshotDebts.remove(groupId);
+        changed = true;
+        continue;
+      }
+      for (final accountId in owed) {
+        final member = resolved.memberById(accountId);
+        if (member == null) {
+          _clearGroupSnapshotDebt(groupId, accountId);
+          changed = true;
+          continue;
+        }
+        try {
+          await _sendGroupSnapshotTo(groupId, accountId, member.server);
+          _clearGroupSnapshotDebt(groupId, accountId);
+          changed = true;
+        } catch (e) {
+          // An account the server no longer knows is not "unreachable", it is
+          // gone -- an admin deleted it, say. No number of retries will find it,
+          // and the fold cannot be told: nothing in a group's facts can express
+          // "this account ceased to exist". So the debt is dropped and the member
+          // row stays until a moderator removes it, which is the only thing that
+          // can actually resolve it. Without this, every resume would retry
+          // forever and re-raise the same banner.
+          if (e is ApiException && e.statusCode == 404) {
+            _clearGroupSnapshotDebt(groupId, accountId);
+            changed = true;
+            lastError =
+                'group member $accountId no longer exists on their server';
+            continue;
+          }
+          // Still unreachable: the debt stays, to be tried again on the next
+          // reconnect. Not counted or capped, unlike a failed message
+          // (_outboxAttempts) -- a message the user can see and retry by hand,
+          // while an unsent fact leaves the group quietly disagreeing about who
+          // is in it.
+          lastError = 'group sync to $accountId: ${describeError(e)}';
+        }
+      }
+    }
+    if (changed) await LocalStateStore.saveProfile(state);
   }
 
   Future<void> _sendGroupSnapshotTo(
@@ -2060,8 +2517,17 @@ class AppSession extends ChangeNotifier {
   }) async {
     final chat = state.groups[groupId];
     final resolved = _groupStates[groupId]?.resolved;
-    if (chat == null || resolved == null) {
-      throw StateError('no group $groupId');
+    if (chat == null) throw StateError('no group $groupId');
+    if (resolved == null) {
+      // A transcript with no facts behind it: a message overtook the snapshot
+      // that introduces the group. The member list is what a fan-out sends to,
+      // so there is nothing to send to -- said in those terms rather than as
+      // "no group", which is untrue and unactionable (the group screen shows the
+      // same thing, see its composer branch).
+      throw StateError(
+        "This group's details haven't reached this device yet, so there is "
+        'nobody to send to. It should catch up on its own.',
+      );
     }
     if (resolved.dissolved) {
       throw StateError('This group has been dissolved.');
@@ -2207,6 +2673,39 @@ class AppSession extends ChangeNotifier {
     }
   }
 
+  /// Asks [peerAccountId] for a group's facts when this device has none.
+  ///
+  /// Separate from [_requestGroupSync], which needs a member list to choose a
+  /// member from -- exactly what is missing here. The sender of the envelope that
+  /// got us into this state is the only address we have, and their server is
+  /// taken from an existing conversation if there is one, falling back to our own
+  /// (right for the common case of a member on this server; a federated member we
+  /// have never spoken to one-to-one is simply out of reach until they send
+  /// again, and each of their messages retries this).
+  ///
+  /// Rate-limited with the same cooldown, so a burst of group messages that all
+  /// find no facts produces one request, not one each.
+  Future<void> _askForGroupFacts(String groupId, String peerAccountId) async {
+    final now = DateTime.now().toUtc();
+    final last = _lastGroupSyncRequest[groupId];
+    if (last != null && now.difference(last) < _groupSyncRequestCooldown) return;
+    _lastGroupSyncRequest[groupId] = now;
+
+    try {
+      await _sendGroupControl(
+        groupId,
+        peerAccountId,
+        state.conversations[peerAccountId]?.peerServer ?? state.server,
+        GroupControl(kind: GroupControlKind.syncRequest, groupId: groupId),
+      );
+    } catch (e) {
+      developer.log(
+        'asking $peerAccountId for group $groupId failed: ${describeError(e)}',
+        name: 'groups',
+      );
+    }
+  }
+
   /// Answers a peer whose view of a group differs from ours, or who asked
   /// outright.
   ///
@@ -2221,7 +2720,16 @@ class AppSession extends ChangeNotifier {
     bool snapshotRequested = false,
   }) async {
     final current = _groupStates[groupId];
-    if (current == null) return;
+    if (current == null) {
+      // We hold no facts about this group at all, so there is nothing to answer
+      // with -- and, more to the point, nothing tells the sender that: our own
+      // hash only travels on a message we cannot send without a member list.
+      // Without asking outright, this state ends only if some member happens to
+      // send a snapshot unprompted. So ask the one member we know exists,
+      // because they just wrote to us.
+      await _askForGroupFacts(groupId, peerAccountId);
+      return;
+    }
     if (!snapshotRequested) {
       if (peerStateHash == null || peerStateHash.isEmpty) return;
       if (peerStateHash == current.stateHash) return;
@@ -2248,6 +2756,9 @@ class AppSession extends ChangeNotifier {
         ),
       );
     } catch (e) {
+      // They asked, or their hash said they need it: owe it to them so the
+      // answer is not lost with this one attempt.
+      _oweGroupSnapshot(groupId, peerAccountId);
       lastError = 'sending group snapshot failed: ${describeError(e)}';
     }
   }
@@ -2530,7 +3041,14 @@ class AppSession extends ChangeNotifier {
   Future<void> _sendRekeySignal(Conversation convo, RekeyReason reason) async {
     try {
       await _ensurePeerDeviceResolved(convo.peer);
-      await _encryptAndSend(convo.peer, RekeySignal(reason: reason).encode());
+      await _encryptAndSend(
+        convo.peer,
+        RekeySignal(reason: reason).encode(),
+        // The whole point of this envelope: our session is gone, so theirs has
+        // to give way. Said in the prekey block (SRV-17) as well as by the `v: 3`
+        // payload -- the payload is what a peer predating the field reads.
+        afterOwnReset: true,
+      );
       await LocalStateStore.saveProfile(state);
     } catch (e) {
       developer.log(
@@ -2836,12 +3354,13 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Retries everything still unsent, oldest first, one conversation at a
-  /// time (APP-08 step 2).
+  /// Retries everything still unsent, oldest first, one chat at a time
+  /// (APP-08 step 2) -- one-to-one messages, group messages, and the group
+  /// facts somebody was never told (see [_payGroupSnapshotDebts]).
   ///
   /// Called after state is loaded and whenever the stream reconnects, which
   /// are exactly the two moments something that failed for want of a network
-  /// might now succeed. Per conversation the order is strictly oldest-first
+  /// might now succeed. Per chat the order is strictly oldest-first
   /// and sequential, so a flush cannot deliver a backlog out of order or
   /// enter the same ratchet twice -- [_encryptAndSend] serializes per peer,
   /// but only ordering the retries keeps them in the order they were typed.
@@ -2862,6 +3381,37 @@ class AppSession extends ChangeNotifier {
         }
       }
     }
+
+    // Group sends, on the same terms. A fan-out is if anything more likely to
+    // be interrupted part-way than a one-to-one send -- it has as many chances
+    // to fail as the group has members -- and until this it was the one send
+    // path with no automatic second attempt at all: only the k-of-N indicator
+    // and a manual retry in the group screen.
+    for (final chat in state.groups.values.toList()) {
+      final unsent = chat.messages
+          .where(
+            (m) =>
+                m.isGroupSend &&
+                m.aggregateSendState == MessageSendState.failed &&
+                m.kind == StoredMessageKind.normal,
+          )
+          .toList();
+      for (final message in unsent) {
+        final attempts = _outboxAttempts[message.id] ?? 0;
+        if (attempts >= _maxOutboxAttempts) continue;
+        _outboxAttempts[message.id] = attempts + 1;
+        try {
+          // Addresses only the copies that never arrived (see _fanOut), so a
+          // retry cannot deliver a second copy to a member who already has it.
+          await retryGroupSend(chat.groupId, message.id);
+        } catch (_) {
+          // Same reasoning as above: one unreachable member must not hold up
+          // the rest of the flush.
+        }
+      }
+    }
+
+    await _payGroupSnapshotDebts();
   }
 
   /// The network half of a send, shared by [sendMessage] and [retrySend]:
@@ -2992,10 +3542,18 @@ class AppSession extends ChangeNotifier {
   /// treats that as delivered (see ApiClient.sendMessage). A receipt has no
   /// stored identity and gets a fresh random one, which is fine -- a repeated
   /// receipt is a no-op for the peer.
+  /// [afterOwnReset] marks a send that follows this device deliberately
+  /// discarding its session with [peer] (SRV-03). It is what the prekey block's
+  /// `rekey` flag states (SRV-17), and it decides how the peer handles finding an
+  /// initial for a session they still hold: adopt ours unconditionally, rather
+  /// than treat it as a race and possibly keep their own. Only the caller that
+  /// reset the session knows this, which is why it is a parameter and not
+  /// something inferred here.
   Future<void> _encryptAndSend(
     PeerEndpoint peer,
     Uint8List plaintext, {
     String? messageId,
+    bool afterOwnReset = false,
   }) {
     // Outbound federation guard: a federated conversation whose home server
     // now has federation disabled is a dead end (replies blocked inbound), so
@@ -3028,6 +3586,11 @@ class AppSession extends ChangeNotifier {
         initial: initial,
         header: enc.header,
         ciphertext: enc.ciphertext,
+        // Stated on every establishment, never left for the peer to guess: false
+        // is as much an answer as true (SRV-17). Only meaningful when there is
+        // an initial to qualify, which is exactly when the peer faces the
+        // ambiguity.
+        rekey: initial == null ? null : afterOwnReset,
       );
       try {
         if (peer.server == null) {
