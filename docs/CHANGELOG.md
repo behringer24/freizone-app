@@ -16,6 +16,11 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-03 (versionCode 17)
+
+Groups, made usable: everything between inviting somebody and knowing they got
+it. Needs a rebuilt native core (`native/build_android.ps1`).
+
 ### Added
 - **Group messages show who received and read them.** The checkmarks under your
   own group message now say "Received by 3 of 5" and "Read by all", from the
