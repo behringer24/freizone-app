@@ -206,12 +206,25 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 controller: _composer,
                 minLines: 1,
                 maxLines: 5,
+                keyboardType: TextInputType.multiline,
                 textInputAction: TextInputAction.send,
+                textCapitalization: TextCapitalization.sentences,
                 onSubmitted: (_) => _send(),
-                decoration: const InputDecoration(
+                // Matched to ChatScreen's composer rather than left at the
+                // Material default: two chat screens that look different in
+                // the one place the user's hands live would read as a bug.
+                decoration: InputDecoration(
                   hintText: 'Message',
-                  border: OutlineInputBorder(),
-                  isDense: true,
+                  filled: true,
+                  fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
               ),
             ),
@@ -286,14 +299,16 @@ class _GroupBubble extends StatelessWidget {
             bottomRight: Radius.circular(mine ? 4 : 16),
           ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (showAuthor && author != null)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
+        // IntrinsicWidth so the bubble hugs its text instead of always filling
+        // the 75% cap: an Align child expands to the space it is given, which
+        // is what made every bubble the same width regardless of content.
+        child: IntrinsicWidth(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showAuthor && author != null)
+                Text(
                   _shortId(author),
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
@@ -304,13 +319,14 @@ class _GroupBubble extends StatelessWidget {
                     color: avatarColorFor(author),
                   ),
                 ),
-              ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(message.text, style: TextStyle(color: onBubble)),
-            ),
-            if (mine) _statusFor(context, message, onBubble),
-          ],
+              Text(message.text, style: TextStyle(color: onBubble)),
+              if (mine)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [_statusFor(context, message, onBubble)],
+                ),
+            ],
+          ),
         ),
       ),
     );
