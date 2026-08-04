@@ -16,6 +16,14 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Added
+
+* Long-press a message in a group chat to pin it or to delete it for yourself,
+  the way you already can in a one-to-one chat (`APP-21`). Pinned group messages
+  get the same bar above the transcript, and tapping it jumps to the message.
+  Deleting removes the message from this device only — everyone else keeps their
+  copy
+
 ### Fixed
 
 * A picture received in a group chat stayed a blank bubble until you left the

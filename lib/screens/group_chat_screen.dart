@@ -19,9 +19,11 @@ import '../state/group_conversation.dart';
 import '../state/outgoing_attachment.dart';
 import '../util/avatar_color.dart';
 import '../util/errors.dart';
+import '../util/message_actions.dart';
 import '../widgets/attachment_thumbnail.dart';
 import '../widgets/image_attachment.dart';
 import '../widgets/pattern_background.dart';
+import '../widgets/pinned_message_bar.dart';
 import 'group_info_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
@@ -49,6 +51,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   /// is typed alongside it. One at a time, exactly as in a one-to-one chat.
   OutgoingAttachment? _pendingAttachment;
   bool _preparing = false;
+
+  /// Stable per-message keys, reused across rebuilds, so the pinned bar can
+  /// scroll to a message that isn't near the bottom of the list. The same
+  /// mechanism ChatScreen uses.
+  final _messageKeys = <String, GlobalKey>{};
+
+  GlobalKey _keyFor(String messageId) =>
+      _messageKeys.putIfAbsent(messageId, () => GlobalKey());
 
   /// Whether a picture could reach *anybody* in this group. False only when
   /// every server holding a member has said it stores no attachments -- then
@@ -305,6 +315,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           ),
           body: Column(
             children: [
+              // Above the transcript rather than inside it, so it stays put
+              // while the list scrolls beneath -- ChatScreen's own bar, shared.
+              PinnedMessageBar(
+                chat: chat,
+                onJumpToMessage: _scrollToMessage,
+              ),
               Expanded(child: _buildTranscript(context, chat)),
               if (chat.invitePending && resolved != null)
                 _buildInviteBar(context, resolved)
@@ -362,6 +378,72 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     });
   }
 
+  /// Scrolls the transcript to one message, for the pinned bar's tap.
+  ///
+  /// A no-op when the id has no bubble on screen -- the message was deleted
+  /// from this device while pinned, which is exactly how ChatScreen behaves.
+  void _scrollToMessage(String messageId) {
+    final ctx = _messageKeys[messageId]?.currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+      alignment: 0.5,
+    );
+  }
+
+  /// Long-press menu for one group message: pin/unpin, or delete it from this
+  /// device (APP-21). Both are purely local -- no other member sees either.
+  /// Replying is APP-17 and needs a wire field, so it is not offered yet.
+  Future<void> _showMessageActions(
+    BuildContext context,
+    GroupConversation chat,
+    StoredMessage message,
+  ) async {
+    final isPinned = chat.pinnedMessageIds.contains(message.id);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: Icon(
+                isPinned ? Icons.push_pin_outlined : Icons.push_pin,
+              ),
+              title: Text(isPinned ? 'Unpin' : 'Pin'),
+              onTap: () =>
+                  Navigator.of(context).pop(isPinned ? 'unpin' : 'pin'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete for me'),
+              onTap: () => Navigator.of(context).pop('delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == null || !context.mounted) return;
+
+    switch (action) {
+      case 'pin':
+        await widget.session.pinMessage(widget.groupId, message.id);
+        break;
+      case 'unpin':
+        await widget.session.unpinMessage(widget.groupId, message.id);
+        break;
+      case 'delete':
+        await confirmAndDeleteMessage(
+          context,
+          widget.session,
+          chatId: widget.groupId,
+          messageId: message.id,
+        );
+        break;
+    }
+  }
+
   Widget _buildTranscript(BuildContext context, GroupConversation chat) {
     // The patterned backdrop the one-to-one chat has. Applied even when the
     // transcript is empty, or a new group would show a bare surface and then
@@ -373,28 +455,42 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
     _scrollToBottom();
     return PatternBackground(
-      child: ListView.builder(
+      // Every bubble is built up front, like ChatScreen's list, rather than
+      // lazily: the pinned bar has to be able to scroll to a message far above
+      // the fold, and Scrollable.ensureVisible can only reach a widget that
+      // exists. The transcript is fully in memory either way.
+      child: ListView(
         controller: _scroll,
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: chat.messages.length,
-        itemBuilder: (context, i) {
-          final message = chat.messages[i];
-          final previous = i == 0 ? null : chat.messages[i - 1];
-          // Only the first of a run from one author is labelled -- repeating it
-          // on every bubble is noise.
-          final showAuthor =
-              !message.mine &&
-              message.senderAccountId != null &&
-              previous?.senderAccountId != message.senderAccountId;
-          return _GroupBubble(
-            message: message,
-            showAuthor: showAuthor,
-            chat: chat,
-            session: widget.session,
-          );
-        },
+        children: _buildBubbles(context, chat),
       ),
     );
+  }
+
+  List<Widget> _buildBubbles(BuildContext context, GroupConversation chat) {
+    final bubbles = <Widget>[];
+    for (var i = 0; i < chat.messages.length; i++) {
+      final message = chat.messages[i];
+      final previous = i == 0 ? null : chat.messages[i - 1];
+      // Only the first of a run from one author is labelled -- repeating it
+      // on every bubble is noise.
+      final showAuthor =
+          !message.mine &&
+          message.senderAccountId != null &&
+          previous?.senderAccountId != message.senderAccountId;
+      bubbles.add(
+        _GroupBubble(
+          key: _keyFor(message.id),
+          message: message,
+          showAuthor: showAuthor,
+          chat: chat,
+          session: widget.session,
+          isPinned: chat.pinnedMessageIds.contains(message.id),
+          onLongPress: () => _showMessageActions(context, chat, message),
+        ),
+      );
+    }
+    return bubbles;
   }
 
   Widget _buildInviteBar(BuildContext context, GroupResolved resolved) {
@@ -566,14 +662,27 @@ class _Notice extends StatelessWidget {
 
 class _GroupBubble extends StatelessWidget {
   const _GroupBubble({
+    super.key,
     required this.message,
     required this.showAuthor,
     required this.chat,
     required this.session,
+    required this.isPinned,
+    required this.onLongPress,
   });
 
   final StoredMessage message;
   final bool showAuthor;
+
+  /// Draws the pin marker over the bubble's outer corner, as in a one-to-one
+  /// chat -- so a pinned message is recognizable in the transcript itself and
+  /// not only in the bar at the top.
+  final bool isPinned;
+
+  /// Opens the message's action menu. Never reached from a system line: those
+  /// return before the bubble is built, matching ChatScreen, where a local
+  /// info line is not pin- or delete-eligible either.
+  final VoidCallback onLongPress;
 
   /// The transcript this bubble belongs to -- needed for the per-member receipt
   /// watermarks a group's send indicator counts over (see _statusFor).
@@ -603,67 +712,91 @@ class _GroupBubble extends StatelessWidget {
 
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
-        margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: mine ? colorScheme.primary : colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(mine ? 16 : 4),
-            bottomRight: Radius.circular(mine ? 4 : 16),
-          ),
-        ),
-        // IntrinsicWidth so the bubble hugs its text instead of always filling
-        // the 75% cap: an Align child expands to the space it is given, which
-        // is what made every bubble the same width regardless of content.
-        child: IntrinsicWidth(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (showAuthor && author != null)
-                Text(
-                  _shortId(author),
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                    // The same function the avatar uses, so a name in the
-                    // transcript and a face in the member list are visibly the
-                    // same person rather than two unrelated colours.
-                    color: avatarColorFor(author),
-                  ),
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.75,
+              ),
+              margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: mine
+                    ? colorScheme.primary
+                    : colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(mine ? 16 : 4),
+                  bottomRight: Radius.circular(mine ? 4 : 16),
                 ),
-              if (message.hasAttachments) ...[
-                // The same widget the one-to-one bubble uses, keyed on the
-                // group id: it only ever names the directory the file lives
-                // in, so the download and cache paths need no group-specific
-                // branch at all.
-                ImageAttachment(
-                  session: session,
-                  chatId: chat.groupId,
-                  message: message,
+              ),
+              // IntrinsicWidth so the bubble hugs its text instead of always
+              // filling the 75% cap: an Align child expands to the space it is
+              // given, which is what made every bubble the same width
+              // regardless of content.
+              child: IntrinsicWidth(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (showAuthor && author != null)
+                      Text(
+                        _shortId(author),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          // The same function the avatar uses, so a name in the
+                          // transcript and a face in the member list are visibly
+                          // the same person rather than two unrelated colours.
+                          color: avatarColorFor(author),
+                        ),
+                      ),
+                    if (message.hasAttachments) ...[
+                      // The same widget the one-to-one bubble uses, keyed on the
+                      // group id: it only ever names the directory the file
+                      // lives in, so the download and cache paths need no
+                      // group-specific branch at all.
+                      ImageAttachment(
+                        session: session,
+                        chatId: chat.groupId,
+                        message: message,
+                      ),
+                      if (message.text.isNotEmpty) const SizedBox(height: 6),
+                    ],
+                    // Doubles as the caption when there is a picture, so a
+                    // picture with no text renders nothing extra -- rather than
+                    // the empty Text this used to draw unconditionally.
+                    if (message.text.isNotEmpty)
+                      Text(message.text, style: TextStyle(color: onBubble)),
+                    if (mine && _skippedAttachmentCount > 0)
+                      _buildAttachmentSkipped(context, onBubble),
+                    if (mine)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [_statusFor(context, message, onBubble)],
+                      ),
+                  ],
                 ),
-                if (message.text.isNotEmpty) const SizedBox(height: 6),
-              ],
-              // Doubles as the caption when there is a picture, so a picture
-              // with no text renders nothing extra -- rather than the empty
-              // Text this used to draw unconditionally.
-              if (message.text.isNotEmpty)
-                Text(message.text, style: TextStyle(color: onBubble)),
-              if (mine && _skippedAttachmentCount > 0)
-                _buildAttachmentSkipped(context, onBubble),
-              if (mine)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [_statusFor(context, message, onBubble)],
+              ),
+            ),
+            // On the bubble's inner corner, never the screen edge, so it cannot
+            // be clipped away -- the placement ChatScreen uses.
+            if (isPinned)
+              Positioned(
+                top: -4,
+                right: mine ? null : -4,
+                left: mine ? -4 : null,
+                child: Icon(
+                  Icons.push_pin,
+                  size: 21,
+                  color: colorScheme.primary,
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );

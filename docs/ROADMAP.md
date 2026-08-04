@@ -512,8 +512,8 @@ over APP-08's outbox, and the group UI.
 Status: `planned` · Part of: APP-16
 
 Long-press to reply, and a quote block that says **who** is being answered.
-Replying already works in a one-to-one chat; a group has neither the gesture nor
-the quote — `_GroupBubble` renders text and attachments only.
+Replying already works in a one-to-one chat; a group has the long-press menu
+since APP-21 but no reply entry in it, and `_GroupBubble` renders no quote.
 
 Most of the plumbing is already there: `sendGroupMessage` takes a `replyToId`,
 the fan-out puts it and a `ReplyPreview` into every copy's `v: 4` content, and
@@ -623,9 +623,8 @@ routes to add, plus an optional third:
   which is empty today and is where someone who is already looking at the picture
   will reach for it.
 - **From the long-press sheet** — one more entry in `_showMessageActions`, shown
-  only for a message that actually has a picture. A group bubble has no
-  long-press gesture at all yet; APP-17 brings it, so the group half either waits
-  for that or the gesture arrives here first.
+  only for a message that actually has a picture. Both chat kinds have that sheet
+  now (APP-21), so this is one entry per screen and no gesture work.
 - **Automatically on receipt** — a setting, so the pictures of a chosen
   conversation (or of all of them) land in the gallery without being asked for
   each time.
@@ -673,3 +672,23 @@ One detail that survives all of it: the on-disk file is already plaintext
 (`MediaStore.fileFor`, written after `core.decryptBlob`), so a save copies bytes
 and decrypts nothing — but a picture whose download has not finished has no file
 yet, and the action must be absent rather than fail.
+
+### APP-21 — Pin and delete a message in a group
+Status: `done` · Part of: APP-16 · Related: APP-17
+Design: [design/16-groups.md](design/16-groups.md) (section "Message actions in
+a group")
+
+A group bubble had no long-press gesture, so neither pinning a message nor
+deleting one from this device was reachable — both purely local, both long
+available in a one-to-one chat. Reply is the same menu's third entry and stays
+with APP-17, which needs a wire field first.
+
+- 2026-08-04 — **done.** Long-press menu on a group bubble (pin/unpin, "delete
+  for me"), the pin marker on the bubble, and the sticky pinned bar above the
+  transcript. `deleteMessageLocally` / `pinMessage` / `unpinMessage` now take a
+  chat id resolved through the new `AppSession.chatTarget`, instead of looking
+  only in `state.conversations` — a group id was a silent no-op before.
+  `PinnedMessageBar` and the delete confirmation became shared code (one bar,
+  one wording, `ChatTarget`-typed) rather than a second copy in the group
+  screen, and the group transcript builds eagerly now so the bar can actually
+  scroll to an older pin.

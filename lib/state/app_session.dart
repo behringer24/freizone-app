@@ -28,6 +28,7 @@ import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/server_url.dart';
 import 'app_settings.dart';
+import 'chat_target.dart';
 import 'conversation.dart';
 import 'group_control.dart';
 import 'group_conversation.dart';
@@ -495,6 +496,16 @@ Future<IncomingMessageResult?> processIncomingMessage(
       now,
       openChatId: openConversationPeerId,
     );
+    // Exactly as in a one-to-one chat below, and for the same reason -- the
+    // group path simply did not do it, so a group picture had nothing at all
+    // to show until its blob had downloaded. A received bubble and the
+    // placeholder behind a missing picture are both surfaceContainerHighest,
+    // so that read as an empty bubble rather than as a picture on its way.
+    // The chat id is the group id, as everywhere else media is keyed (see
+    // MediaStore.chatDir).
+    if (content.attachments.isNotEmpty) {
+      await _writeAttachmentThumbs(state, content.groupId!, content);
+    }
     recordGroupPeerStateHash(
       state,
       content.groupId!,
@@ -595,12 +606,15 @@ Future<IncomingMessageResult?> processIncomingMessage(
 /// Persists the inline preview thumbnails an incoming message carried, so a
 /// picture can be shown before its blob has been downloaded.
 ///
+/// [chatId] is where the picture belongs, which is a [MediaStore] chat id: the
+/// sender's account id for a one-to-one message, the group id for a group one.
+///
 /// Failures are swallowed on purpose: a missing thumbnail costs a preview,
 /// never the message itself, and this runs on the background push isolate
 /// too, where there is no one to report an error to.
 Future<void> _writeAttachmentThumbs(
   AppState state,
-  String peerAccountId,
+  String chatId,
   MessageContent content,
 ) async {
   try {
@@ -611,7 +625,7 @@ Future<void> _writeAttachmentThumbs(
       await media.writeFile(
         media.thumbFor(
           accountId: state.accountId,
-          chatId: peerAccountId,
+          chatId: chatId,
           messageId: content.id,
         ),
         thumb,
@@ -3548,8 +3562,20 @@ class AppSession extends ChangeNotifier {
     if (await target.exists()) return target;
     if (message.mine) return null;
 
-    if (media.stateFor(message.id) == MediaFetchState.downloading) return null;
-    media.markFetching(message.id);
+    // Keyed by the same three ids as the file itself, never by the message
+    // alone: with more than one account on this device in the same group, the
+    // message id is shared and the file is not (see MediaStore._fetching).
+    final inFlight = media.stateFor(
+      accountId: state.accountId,
+      chatId: chatId,
+      messageId: message.id,
+    );
+    if (inFlight == MediaFetchState.downloading) return null;
+    media.markFetching(
+      accountId: state.accountId,
+      chatId: chatId,
+      messageId: message.id,
+    );
     try {
       final ciphertext = await api.downloadBlob(
         attachment.blobId,
@@ -3560,7 +3586,11 @@ class AppSession extends ChangeNotifier {
         ciphertext: ciphertext,
       );
       await media.writeFile(target, plaintext);
-      media.clearFetchState(message.id);
+      media.clearFetchState(
+        accountId: state.accountId,
+        chatId: chatId,
+        messageId: message.id,
+      );
       // The file is safely on disk, so the server copy has served its
       // purpose: free the quota now rather than waiting for the retention
       // sweep. Best effort -- if it fails, the TTL cleanup gets it later.
@@ -3575,7 +3605,11 @@ class AppSession extends ChangeNotifier {
       // tap-to-retry placeholder, so a dead server or a deleted blob doesn't
       // turn into a silent retry loop.
       lastError = 'downloading attachment failed: $e';
-      media.markFailed(message.id);
+      media.markFailed(
+        accountId: state.accountId,
+        chatId: chatId,
+        messageId: message.id,
+      );
       return null;
     }
   }
@@ -4483,34 +4517,43 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Removes a single message from this device's own history only -- the
-  /// peer's copy and the (already-deleted-from-queue) server side are
+  /// The one-to-one conversation or the group with this id.
+  ///
+  /// The two live in separate maps, but everything below only needs what they
+  /// share as [ChatTarget] -- a message list and a set of pinned ids -- so one
+  /// lookup serves both. Ids cannot collide: one is an account id, the other a
+  /// group id, and both are generated, never chosen.
+  ChatTarget? chatTarget(String chatId) =>
+      state.conversations[chatId] ?? state.groups[chatId];
+
+  /// Removes a single message from this device's own history only -- every
+  /// other member's copy and the (already-deleted-from-queue) server side are
   /// unaffected. A no-op if the id isn't found (already removed).
-  Future<void> deleteMessageLocally(String peerAccountId, String messageId) async {
-    final convo = state.conversations[peerAccountId];
-    if (convo == null) return;
-    convo.messages.removeWhere((m) => m.id == messageId);
-    convo.pinnedMessageIds.remove(messageId);
+  Future<void> deleteMessageLocally(String chatId, String messageId) async {
+    final chat = chatTarget(chatId);
+    if (chat == null) return;
+    chat.messages.removeWhere((m) => m.id == messageId);
+    chat.pinnedMessageIds.remove(messageId);
     await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
 
   /// Pins a message locally -- purely a local display preference, never
-  /// sent to the peer or the server. Appending (rather than inserting at
-  /// the front) keeps "most recently pinned" as the natural last element,
-  /// which is what the sticky bar shows by default.
-  Future<void> pinMessage(String peerAccountId, String messageId) async {
-    final convo = state.conversations[peerAccountId];
-    if (convo == null || convo.pinnedMessageIds.contains(messageId)) return;
-    convo.pinnedMessageIds.add(messageId);
+  /// sent to the peer, the group or the server. Appending (rather than
+  /// inserting at the front) keeps "most recently pinned" as the natural last
+  /// element, which is what the sticky bar shows by default.
+  Future<void> pinMessage(String chatId, String messageId) async {
+    final chat = chatTarget(chatId);
+    if (chat == null || chat.pinnedMessageIds.contains(messageId)) return;
+    chat.pinnedMessageIds.add(messageId);
     await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
 
-  Future<void> unpinMessage(String peerAccountId, String messageId) async {
-    final convo = state.conversations[peerAccountId];
-    if (convo == null) return;
-    convo.pinnedMessageIds.remove(messageId);
+  Future<void> unpinMessage(String chatId, String messageId) async {
+    final chat = chatTarget(chatId);
+    if (chat == null) return;
+    chat.pinnedMessageIds.remove(messageId);
     await LocalStateStore.saveProfile(state);
     notifyListeners();
   }

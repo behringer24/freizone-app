@@ -571,6 +571,47 @@ the send indicator, the group info screen and everything on it (member list,
 role actions, invite by QR, leave/dissolve), and system lines in the transcript
 for state events. Inviting exists as a session call but has no UI yet.
 
+### Message actions in a group, shipped 2026-08-04 (APP-21)
+
+A group bubble had no long-press gesture at all, so pinning a message and
+deleting one from this device — both long available in a one-to-one chat, both
+purely local — were unreachable in a group. Reply is the third entry of that
+menu and stays with APP-17, which needs a wire field to say *whose* message is
+being quoted; pin and delete need nothing on the wire and did not have to wait
+for it.
+
+Nothing was missing from the model: `messages` and `pinnedMessageIds` sit on
+`ChatTarget`, and a group's are persisted and round-trip-tested already. What
+was keyed wrongly was the session API — `deleteMessageLocally`, `pinMessage` and
+`unpinMessage` looked their target up in `state.conversations` only, so a group
+id would have been a silent no-op. They take a `chatId` now and resolve it
+through `AppSession.chatTarget` (`conversations[id] ?? groups[id]`; the two
+kinds of id cannot collide, both being generated rather than chosen).
+
+Two pieces became shared code rather than a second copy, which is the drift
+warned about above being paid down instead of grown:
+
+- **`PinnedMessageBar`** (`lib/widgets/`), typed on `ChatTarget`, browse index
+  and all — a pin with no bar to show it would be a feature nobody can see.
+- **`confirmAndDeleteMessage`** (`lib/util/message_actions.dart`), following
+  `block_actions.dart`'s established shape, so the one sentence that has to be
+  exactly right — "delete" here never means "for everyone" — exists once. Its
+  wording moved from "it stays for the other person" to "everyone else keeps
+  their copy", true in both a chat and a group.
+
+One consequence worth recording: the group transcript now builds its bubbles
+eagerly (`ListView` with children, as `ChatScreen` does) instead of lazily
+(`ListView.builder`). `Scrollable.ensureVisible` can only reach a widget that
+exists, and the pinned bar's whole purpose is jumping to a message far above the
+fold — which a lazily built list cannot do for anything outside its cache
+extent. The messages are all in memory either way; if a very long transcript
+ever makes this cost real, it costs the same in `ChatScreen` and is fixed in one
+place for both.
+
+A deleted message's picture is *not* deleted with it, in a group no more than in
+a one-to-one chat: `sweepOrphanedMedia` already collects every file whose
+message is gone, groups included, on the next start.
+
 ### Group info screen
 
 Server administration lives behind the AppBar menu because it is server-wide and
