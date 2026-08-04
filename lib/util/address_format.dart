@@ -11,6 +11,17 @@
 /// full id. Matches formatAccountIdForDisplay's first group size.
 const accountIdPrefixLength = 5;
 
+/// The leading [accountIdPrefixLength] characters of an id, for labelling
+/// somebody where a full 21-character address would drown the text it sits
+/// in -- a group transcript's author lines and reply quotes today (APP-16,
+/// APP-17). Not an identifier: it is unique per server, not globally, so it
+/// is for reading and never for resolving.
+///
+/// Where this account has given the person a name, that name belongs here
+/// instead, with this in parentheses (APP-18).
+String shortAccountId(String id) =>
+    id.length > accountIdPrefixLength ? id.substring(0, accountIdPrefixLength) : id;
+
 /// Strips cosmetic separators/whitespace and lowercases an account id,
 /// so a dash-grouped, spaced, or phone-dictated id ("k5x9 p2qa n7f3...")
 /// resolves the same as the canonical 21-character form.

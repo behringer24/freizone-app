@@ -26,12 +26,13 @@ import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/link_detection.dart';
 import '../util/message_actions.dart';
-import '../util/message_preview.dart';
 import '../util/share_intake.dart';
 import '../widgets/pattern_background.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/pinned_message_bar.dart';
 import '../widgets/rename_dialog.dart';
+import '../widgets/reply_composer_bar.dart';
+import '../widgets/reply_quote.dart';
 import 'peer_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -898,65 +899,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// The "replying to ..." preview shown above the input while composing
-  /// a reply -- tapping the close icon cancels it without sending.
+  /// a reply -- the bar itself is shared with the group composer (APP-17);
+  /// only the heading is this screen's, since two people always have a name.
   Widget _buildReplyComposerBar(
     BuildContext context,
     Conversation convo,
     StoredMessage replyingTo,
   ) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest,
-        border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 3,
-            height: 32,
-            color: colorScheme.primary,
-            margin: const EdgeInsets.only(right: 8),
-          ),
-          if (replyingTo.hasAttachments) ...[
-            AttachmentThumbnail(
-              bytes: replyingTo.attachments.first.thumb,
-              size: 32,
-            ),
-            const SizedBox(width: 8),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  replyingTo.mine
-                      ? 'Replying to yourself'
-                      : 'Replying to ${convo.titleFor(widget.session.state.server)}',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                    color: colorScheme.primary,
-                  ),
-                ),
-                Text(
-                  messageReferenceLabel(replyingTo),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close, size: 18),
-            tooltip: 'Cancel reply',
-            onPressed: () => setState(() => _replyingTo = null),
-          ),
-        ],
-      ),
+    return ReplyComposerBar(
+      replyingTo: replyingTo,
+      label: replyingTo.mine
+          ? 'Replying to yourself'
+          : 'Replying to ${convo.titleFor(widget.session.state.server)}',
+      onCancel: () => setState(() => _replyingTo = null),
     );
   }
 
@@ -1179,67 +1134,16 @@ class _MessageBubble extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (message.isReply)
-                    GestureDetector(
+                    ReplyQuote(
+                      previewText: message.replyPreviewText ?? '',
+                      // Two people, so this is always answerable -- which is
+                      // exactly what stops being true in a group (APP-17).
+                      authorLabel: message.replyPreviewMine == true
+                          ? 'You'
+                          : peerTitle,
+                      onBubble: onBubble,
+                      quotedHasImage: quotedHasImage,
                       onTap: onTapQuote,
-                      child: Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 4),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: onBubble.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border(
-                            left: BorderSide(color: onBubble, width: 3),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              message.replyPreviewMine == true
-                                  ? 'You'
-                                  : peerTitle,
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                                color: onBubble,
-                              ),
-                            ),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (quotedHasImage) ...[
-                                  Icon(
-                                    Icons.photo_outlined,
-                                    size: 13,
-                                    color: onBubble.withValues(alpha: 0.8),
-                                  ),
-                                  const SizedBox(width: 4),
-                                ],
-                                // Flexible, not Expanded: with an empty
-                                // caption (a picture sent without one) the
-                                // row should shrink to just the icon rather
-                                // than stretch the quote to full width.
-                                Flexible(
-                                  child: Text(
-                                    message.replyPreviewText ?? '',
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: onBubble.withValues(alpha: 0.8),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
                     ),
                   if (message.hasAttachments) ...[
                     ImageAttachment(

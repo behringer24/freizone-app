@@ -84,6 +84,48 @@ void main() {
       expect(restored.sentReceiptUpTo['qclara00000000000000a'], DateTime.utc(2026, 8, 2, 9));
     });
 
+    test('a reply keeps the quoted author across a restart', () {
+      // The fan-out rebuilds each copy's wire quote from the stored fields, so
+      // a reply the outbox retries after a restart would otherwise arrive with
+      // its quote unattributed -- and a group quote cannot recover the author
+      // from `mine`, which is the whole reason the field exists (APP-17).
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      chat.messages.add(
+        StoredMessage(
+          text: 'passt',
+          mine: true,
+          timestamp: DateTime.utc(2026, 8, 2, 12),
+          sendState: MessageSendState.failed,
+          replyToId: 'm1',
+          // Empty is a real value -- a reply to a picture with no caption --
+          // and must not be confused with absent.
+          replyPreviewText: '',
+          replyPreviewMine: false,
+          replyPreviewAuthorId: 'qclara00000000000000a',
+        ),
+      );
+
+      final restored = GroupConversation.fromJson(chat.toJson()).messages.single;
+      expect(restored.isReply, isTrue);
+      expect(restored.replyPreviewText, '');
+      expect(restored.replyPreviewMine, isFalse);
+      expect(restored.replyPreviewAuthorId, 'qclara00000000000000a');
+    });
+
+    test('a one-to-one reply stores no quoted author', () {
+      // Two people, so `mine` names the author completely -- and existing
+      // history stays byte-identical for having gained nothing.
+      final json = StoredMessage(
+        text: 'agreed',
+        mine: true,
+        timestamp: DateTime.utc(2026, 8, 2, 12),
+        replyToId: 'm1',
+        replyPreviewText: 'Samstag?',
+        replyPreviewMine: false,
+      ).toJson();
+      expect(json.containsKey('reply_preview_author_id'), isFalse);
+    });
+
     test('an ordinary group costs no keys it does not need', () {
       final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
       final json = chat.toJson();
@@ -368,6 +410,113 @@ void main() {
       final restored = GroupConversation.fromJson(chat.toJson());
       expect(restored.memberDeliveredUpTo['ben'], DateTime.utc(2026, 8, 2, 12, 1));
       expect(restored.sentReceiptUpTo['clara'], DateTime.utc(2026, 8, 2, 12, 2));
+    });
+  });
+
+  // What the delivery sheet lists per member (APP-16). The counts above answer
+  // "how many"; this is the part that has to combine two independent sources --
+  // what a recipient's server did, and what the recipient confirmed.
+  //
+  // [delivered] is [mine] with every copy accepted by its server, which is
+  // where a receipt can start to mean something -- a fresh GroupDelivery is
+  // `pending`, and nothing a still-unsent copy hears is a confirmation.
+  StoredMessage delivered(int minute, List<String> recipients) {
+    final message = mine(minute, recipients);
+    for (final delivery in message.deliveries) {
+      delivery.state = MessageSendState.sent;
+    }
+    return message;
+  }
+
+  group('GroupConversation.stageFor', () {
+    test('the server\'s answer decides before any receipt can', () {
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      final message = mine(0, ['ben', 'clara', 'dora']);
+      message.deliveries[0].state = MessageSendState.failed;
+      message.deliveries[1].state = MessageSendState.pending;
+      message.deliveries[2].state = MessageSendState.sent;
+
+      expect(
+        chat.stageFor(message, message.deliveries[0]),
+        GroupDeliveryStage.failed,
+      );
+      expect(
+        chat.stageFor(message, message.deliveries[1]),
+        GroupDeliveryStage.sending,
+      );
+      // Accepted by their server and nothing heard from them yet: not the same
+      // as received, since the copy sits in their queue until they connect.
+      expect(
+        chat.stageFor(message, message.deliveries[2]),
+        GroupDeliveryStage.sent,
+      );
+    });
+
+    test('a failed copy stays failed even if a receipt turns up for it', () {
+      // Nothing should produce this -- but a stale watermark from an earlier
+      // message must not make an undelivered copy look confirmed.
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      final message = mine(0, ['ben']);
+      message.deliveries.single.state = MessageSendState.failed;
+      chat.recordMemberReceipt(
+        accountId: 'ben',
+        status: ReceiptStatus.read,
+        upTo: message.receiptAnchor,
+      );
+
+      expect(
+        chat.stageFor(message, message.deliveries.single),
+        GroupDeliveryStage.failed,
+      );
+    });
+
+    test('read wins over received, and outranks a missing delivered receipt', () {
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      final message = delivered(0, ['ben', 'clara']);
+
+      chat.recordMemberReceipt(
+        accountId: 'ben',
+        status: ReceiptStatus.delivered,
+        upTo: message.receiptAnchor,
+      );
+      // Only the read receipt: the delivered one was lost, which must not
+      // leave them looking less far along than they are.
+      chat.recordMemberReceipt(
+        accountId: 'clara',
+        status: ReceiptStatus.read,
+        upTo: message.receiptAnchor,
+      );
+
+      expect(
+        chat.stageFor(message, message.deliveries[0]),
+        GroupDeliveryStage.received,
+      );
+      expect(
+        chat.stageFor(message, message.deliveries[1]),
+        GroupDeliveryStage.read,
+      );
+    });
+
+    test('a receipt older than the message confirms nothing', () {
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      final message = delivered(10, ['ben']);
+      chat.recordMemberReceipt(
+        accountId: 'ben',
+        status: ReceiptStatus.read,
+        upTo: DateTime.utc(2026, 8, 2, 12, 5),
+      );
+
+      expect(
+        chat.stageFor(message, message.deliveries.single),
+        GroupDeliveryStage.sent,
+      );
+    });
+
+    test('the stages sort worst first, which is what the sheet relies on', () {
+      expect(GroupDeliveryStage.failed.index, lessThan(GroupDeliveryStage.sending.index));
+      expect(GroupDeliveryStage.sending.index, lessThan(GroupDeliveryStage.sent.index));
+      expect(GroupDeliveryStage.sent.index, lessThan(GroupDeliveryStage.received.index));
+      expect(GroupDeliveryStage.received.index, lessThan(GroupDeliveryStage.read.index));
     });
   });
 }

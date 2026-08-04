@@ -2863,6 +2863,13 @@ class AppSession extends ChangeNotifier {
       replyToId: quoted?.id,
       replyPreviewText: quoted?.text,
       replyPreviewMine: quoted?.mine,
+      // Resolved here, while the quoted message is still in hand, rather than
+      // at render time: this is the only moment the author is known for
+      // certain. senderAccountId is null on our own messages, which is not a
+      // missing author but the one author no message needs to carry.
+      replyPreviewAuthorId: quoted == null
+          ? null
+          : (quoted.mine ? state.accountId : quoted.senderAccountId),
       sendState: MessageSendState.pending,
       // Stands in until each recipient server's upload returns a blob id, so
       // the pending bubble already renders the picture from our own local copy.
@@ -3049,6 +3056,10 @@ class AppSession extends ChangeNotifier {
               : ReplyPreview(
                   text: message.replyPreviewText ?? '',
                   mine: !(message.replyPreviewMine ?? false),
+                  // Absolute, so it is NOT flipped the way `mine` is -- and
+                  // sent only here, in the group fan-out, because a
+                  // one-to-one recipient learns nothing from it (APP-17).
+                  author: message.replyPreviewAuthorId,
                 ),
           senderServer: peer.isFederated ? state.server : null,
           sentAt: message.timestamp,

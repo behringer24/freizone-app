@@ -530,6 +530,28 @@ pending / failed recipients, and a retry there re-sends **only the failed
 recipients**, never the whole fan-out. A permanent "7/20" counter in every
 bubble was rejected: it is a number nobody cares about five minutes later.
 
+**The sheet, shipped 2026-08-04.** One thing had been glossed over above: a
+recipient's row is not one state but the meeting of two independent ones.
+`GroupDelivery.state` is what that recipient's *server* did with our copy;
+the receipt watermarks are what the *recipient* confirmed. The server's answer
+is consulted first, and only its "accepted" leaves anything for a receipt to
+add — so a failed copy can never be talked into looking confirmed by a stale
+watermark from an earlier message, and `sent` exists as a stage distinct from
+`received`: a copy queued on somebody's server until their phone next connects
+is not a copy they have, and saying otherwise is the one lie a delivery list
+must not tell. That derivation is `GroupConversation.stageFor`, next to the
+counts it shares its comparison with, rather than a `switch` inside the widget.
+
+Rows sort worst first and then by account id — whoever it failed for is at the
+top, and the order cannot reshuffle under a tap (APP-10's rule for the admin
+list). Retry appears only when something actually failed, and is labelled for
+what it will *not* do: the copies that arrived are never re-sent, so no member
+receives the message twice. The sheet re-reads its message from the session on
+every rebuild rather than capturing it, because the fan-out mutates deliveries
+in place and a receipt arriving while it is open is exactly what it is open for.
+A message nobody was owed a copy of — a group whose other members are all
+pending invitees — leaves the indicator inert instead of opening an empty sheet.
+
 **Receipts, and who is entitled to them** (built 2026-08-03). What the bubble
 counts is the recipients' own confirmations, not what their servers accepted —
 and a confirmation is sent **only to the author of the message it is about**.
@@ -611,6 +633,44 @@ place for both.
 A deleted message's picture is *not* deleted with it, in a group no more than in
 a one-to-one chat: `sweepOrphanedMedia` already collects every file whose
 message is gone, groups included, on the next start.
+
+### Replying in a group, shipped 2026-08-04 (APP-17)
+
+The menu's third entry, and the wire field it was waiting for. `ReplyPreview`
+gained an optional `author` — the quoted message's account id — because `mine`
+is a *perspective* bit and among N members "not you" is not an author. It is
+absolute, so unlike `mine` it is never flipped for the receiver, and it is sent
+**only by the group fan-out**: a one-to-one recipient learns nothing from it, so
+that message stays byte-identical to what it was before this item, which is the
+same rule `v: 4` follows.
+
+Naming the author is a fallback chain, not a lookup, and its last branch is the
+one that mattered to get right:
+
+1. the `author` the sender stated;
+2. otherwise the quoted message in **local history** — which covers a reply from
+   a build predating the field. This branch has to read `mine` and not only
+   `senderAccountId`: that field is null on our own messages, the one author a
+   transcript never stores, and reading it as "unknown" would have dropped the
+   label from every reply to *my own* message;
+3. otherwise `mine` alone, which still separates "you wrote it" from "somebody
+   did";
+4. otherwise **no author line at all**. A quote that stays silent is the honest
+   rendering; a guess among N members would be a confidently wrong name against
+   a real person's words.
+
+It lives in `util/quoted_author.dart` as a pure function rather than a getter on
+the bubble, for the same reason `group_system_lines.dart` is pure: the failure
+mode is silent and misleading, so it is worth testing without a widget.
+
+Both halves of the reply UI became shared widgets — `ReplyQuote` and
+`ReplyComposerBar` — continuing what `PinnedMessageBar` started above rather
+than growing the drift a second time. One deliberate divergence from the plan:
+the author line uses `avatarColorFor` as intended, **except inside one's own
+bubble**, where the background is the theme's primary. The avatar palette is
+curated for contrast against white, not against an arbitrary accent, so a
+palette colour there has no readability guarantee — and one's own bubble is the
+one place the transcript around it already says who is speaking.
 
 ### Group info screen
 
