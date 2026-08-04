@@ -6,6 +6,7 @@
 // itself when the download lands, without the transcript ever jumping --
 // the sender's pixel dimensions let it reserve the right aspect ratio from
 // the very first frame.
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
 
@@ -48,12 +49,60 @@ class _ImageAttachmentState extends State<ImageAttachment> {
     _resolve();
   }
 
+  @override
+  void dispose() {
+    _media?.removeListener(_onFetchStateChanged);
+    super.dispose();
+  }
+
+  /// A download this widget did not start has finished, failed, or begun --
+  /// most often the prefetch AppSession fires when a picture arrives, which
+  /// means [AppSession.ensureAttachmentDownloaded] answers our own call with
+  /// null because an attempt is already in flight. Without listening, the
+  /// spinner would then spin until the bubble was rebuilt from scratch.
+  ///
+  /// Deliberately does not start a download of its own, so this can never
+  /// loop: [_resolve] marks the fetch and would notify us straight back.
+  void _onFetchStateChanged() {
+    final media = _media;
+    if (!mounted || media == null || _file != null) return;
+    if (media.stateFor(widget.message.id) == MediaFetchState.downloading) {
+      // Nothing to adopt yet; rebuild so the spinner replaces a retry overlay
+      // if that is what was showing.
+      setState(() {});
+      return;
+    }
+    unawaited(_adoptDownloadedFile());
+  }
+
+  /// Re-reads the disk after somebody else's download settled.
+  Future<void> _adoptDownloadedFile() async {
+    final media = _media;
+    if (media == null) return;
+    final full = media.fileFor(
+      accountId: widget.session.state.accountId,
+      chatId: widget.chatId,
+      messageId: widget.message.id,
+    );
+    final exists = await full.exists();
+    if (!mounted) return;
+    setState(() {
+      if (exists) _file = full;
+    });
+  }
+
   /// Looks for the already-downloaded file, falls back to the thumbnail, and
   /// starts a download if neither the full file nor an in-flight attempt
   /// exists yet.
   Future<void> _resolve({bool force = false}) async {
     final media = await MediaStore.instance();
     if (!mounted) return;
+    // Attached before anything is awaited below, so a download that finishes
+    // while we are still stat-ing files is not missed.
+    if (_media != media) {
+      _media?.removeListener(_onFetchStateChanged);
+      media.addListener(_onFetchStateChanged);
+    }
 
     final full = media.fileFor(
       accountId: widget.session.state.accountId,
@@ -156,12 +205,23 @@ class _ImageAttachmentState extends State<ImageAttachment> {
         else if (failed)
           _RetryOverlay(onTap: () => _resolve(force: true))
         else if (!_resolving)
-          const Center(
-            child: SizedBox(
-              width: 28,
-              height: 28,
-              child: CircularProgressIndicator(strokeWidth: 2.5),
-            ),
+          // Sized against the bubble rather than fixed: at 28px a short or
+          // narrow picture's placeholder was almost entirely spinner, which
+          // filled the rounded clip and read as a square.
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final shortest = constraints.biggest.shortestSide;
+              final diameter = (shortest * 0.35).clamp(14.0, 28.0);
+              return Center(
+                child: SizedBox(
+                  width: diameter,
+                  height: diameter,
+                  child: CircularProgressIndicator(
+                    strokeWidth: diameter / 11,
+                  ),
+                ),
+              );
+            },
           ),
       ],
     );

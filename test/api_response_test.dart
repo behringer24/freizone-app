@@ -136,4 +136,93 @@ void main() {
       );
     });
   });
+
+  group('blobRecipientQuery', () {
+    test('names one recipient exactly as it always did', () {
+      // A one-recipient upload has to stay byte-identical to what pre-SRV-18
+      // clients send, since the signature covers the raw query string.
+      expect(blobRecipientQuery(['abc123']), 'recipient_device_id=abc123');
+    });
+
+    test('repeats the parameter for a group send', () {
+      expect(
+        blobRecipientQuery(['a', 'b', 'c']),
+        'recipient_device_id=a&recipient_device_id=b&recipient_device_id=c',
+      );
+    });
+
+    test('escapes anything that would break the query string', () {
+      expect(
+        blobRecipientQuery(['a&b=c']),
+        'recipient_device_id=a%26b%3Dc',
+      );
+    });
+  });
+
+  group('blobIdFromUploadResponse', () {
+    test('takes the blob id when every recipient was stored', () {
+      expect(
+        blobIdFromUploadResponse({
+          'blob_id': 'deadbeef',
+          'size': 12,
+          'recipients': [
+            {'recipient_device_id': 'a', 'status': 'stored'},
+            {'recipient_device_id': 'b', 'status': 'stored'},
+          ],
+        }, 200),
+        'deadbeef',
+      );
+    });
+
+    test('accepts a pre-SRV-18 response with no recipients list', () {
+      // An older server answers 201 with the three original fields and nothing
+      // else. Reading that as "nobody was stored" would break every upload to
+      // a server that has not been updated.
+      expect(
+        blobIdFromUploadResponse({'blob_id': 'cafe', 'size': 3}, 201),
+        'cafe',
+      );
+    });
+
+    test('refuses a partial result rather than handing out the id', () {
+      // One member at their quota would otherwise be sent a reference to a
+      // picture they cannot fetch -- worse than being told it didn't arrive.
+      expect(
+        () => blobIdFromUploadResponse({
+          'blob_id': 'deadbeef',
+          'recipients': [
+            {'recipient_device_id': 'a', 'status': 'stored'},
+            {'recipient_device_id': 'b', 'status': 'quota_exceeded'},
+          ],
+        }, 200),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.message,
+            'message',
+            contains('quota_exceeded'),
+          ),
+        ),
+      );
+    });
+
+    test('refuses a response that stored nothing at all', () {
+      // What the server answers when no recipient could be served: a 200 with
+      // outcomes and no blob id.
+      expect(
+        () => blobIdFromUploadResponse({
+          'recipients': [
+            {'recipient_device_id': 'a', 'status': 'unknown_recipient'},
+          ],
+        }, 200),
+        throwsA(isA<ApiException>()),
+      );
+    });
+
+    test('refuses an empty blob id', () {
+      expect(
+        () => blobIdFromUploadResponse({'blob_id': ''}, 201),
+        throwsA(isA<ApiException>()),
+      );
+    });
+  });
 }

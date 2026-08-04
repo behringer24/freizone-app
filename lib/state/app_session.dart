@@ -82,10 +82,21 @@ class IncomingMessageResult {
     this.peerServer,
     this.groupSnapshotRequested = false,
     this.groupInvite = false,
+    this.attachmentMessageId,
   });
 
   final String peerAccountId;
   final bool shouldNotify;
+
+  /// The id of the message just stored, when it carried an attachment -- so a
+  /// caller that can reach the network starts fetching the picture on arrival
+  /// instead of leaving it until a bubble is first drawn.
+  ///
+  /// Only a hint: the download is still driven by [ensureAttachmentDownloaded],
+  /// which is idempotent, so the UI asking again costs nothing. This exists
+  /// because the alternative is a spinner that begins its work the moment the
+  /// user opens the chat -- exactly when they are waiting for it.
+  final String? attachmentMessageId;
 
   /// This envelope was an invitation into a group new to this account (see
   /// group_receive.dart's GroupControlOutcome.invited) -- notify-worthy, but not
@@ -497,6 +508,7 @@ Future<IncomingMessageResult?> processIncomingMessage(
       // *conversation*, so reporting a group anchor through the one-to-one field
       // confirmed that member's unrelated direct messages -- which it used to.
       groupDeliveredUpTo: stored.receiptAnchor,
+      attachmentMessageId: content.attachments.isEmpty ? null : stored.id,
       groupId: content.groupId,
       peerGroupStateHash: content.stateHash,
       peerServer: content.senderServer,
@@ -569,6 +581,9 @@ Future<IncomingMessageResult?> processIncomingMessage(
   return IncomingMessageResult(
     peerAccountId: msg.senderAccountId,
     shouldNotify: shouldNotify,
+    attachmentMessageId: convo.blocked || content.attachments.isEmpty
+        ? null
+        : content.id,
     // The sender's own send-time stamp when it carried one (see
     // StoredMessage.receiptAnchor for why receipts must be in the
     // sender's clock domain), local arrival time only as the legacy
@@ -949,18 +964,23 @@ class AppSession extends ChangeNotifier {
   /// that count. Returns null while unknown -- callers treat that as "don't
   /// know yet" rather than "unsupported", so a slow status call doesn't
   /// flicker the attachment button off.
-  Future<BlobCapability?> blobCapabilityFor(Conversation convo) async {
-    final peerServer = convo.peerServer;
-    if (peerServer == null) {
+  Future<BlobCapability?> blobCapabilityFor(Conversation convo) =>
+      blobCapabilityForServer(convo.peerServer);
+
+  /// Same, for a server named directly rather than via a conversation -- what
+  /// a group fan-out needs, since its recipients are spread over several
+  /// servers and it has no conversation for most of them (APP-16).
+  Future<BlobCapability?> blobCapabilityForServer(String? server) async {
+    if (server == null) {
       if (_ownBlobs == null) await refreshRegistrationPolicy();
       return _ownBlobs;
     }
-    final cached = _peerBlobs[peerServer];
+    final cached = _peerBlobs[server];
     if (cached != null) return cached;
     try {
-      final status = await _clientFor(peerServer).getServerStatus();
+      final status = await _clientFor(server).getServerStatus();
       final capability = BlobCapability.from(status);
-      _peerBlobs[peerServer] = capability;
+      _peerBlobs[server] = capability;
       return capability;
     } catch (e) {
       // Unreachable or erroring: unknown, not unsupported. Sending will
@@ -1544,6 +1564,25 @@ class AppSession extends ChangeNotifier {
           // about even when the only member who has written is federated and
           // has never messaged us one-to-one.
           peerServer: result.peerServer,
+        );
+      }
+
+      // A picture starts downloading the moment its message lands, not when a
+      // bubble is first drawn. The lazy fetch in ImageAttachment stays -- it is
+      // what covers history, a failed attempt and the background push isolate
+      // (which deliberately writes only the inline thumbnail, see
+      // processIncomingMessage) -- but relying on it alone meant the download
+      // began exactly when the user opened the chat and was waiting for it.
+      // Unawaited and best-effort: nothing here may delay a receipt or a
+      // notification, and ensureAttachmentDownloaded is idempotent, so the UI
+      // asking again a moment later simply finds the file or joins the attempt.
+      final attachmentMessageId = result.attachmentMessageId;
+      if (attachmentMessageId != null) {
+        unawaited(
+          _prefetchAttachment(
+            chatId: groupId ?? result.peerAccountId,
+            messageId: attachmentMessageId,
+          ),
         );
       }
 
@@ -2775,6 +2814,7 @@ class AppSession extends ChangeNotifier {
     String groupId,
     String text, {
     String? replyToId,
+    OutgoingAttachment? attachment,
   }) async {
     final chat = state.groups[groupId];
     final resolved = _groupStates[groupId]?.resolved;
@@ -2810,6 +2850,14 @@ class AppSession extends ChangeNotifier {
       replyPreviewText: quoted?.text,
       replyPreviewMine: quoted?.mine,
       sendState: MessageSendState.pending,
+      // Stands in until each recipient server's upload returns a blob id, so
+      // the pending bubble already renders the picture from our own local copy.
+      // A group cannot store one real reference here anyway: the blob id
+      // differs per recipient server, so the reference is built per copy in
+      // [_fanOut] and only the metadata is shared.
+      attachments: attachment == null
+          ? const []
+          : [_placeholderAttachment(attachment)],
       // Only members who have accepted. An invitation must not disclose the
       // invitee's address to the group before they agree to it, and until they
       // accept there is nothing to send them anyway.
@@ -2823,6 +2871,14 @@ class AppSession extends ChangeNotifier {
       ],
     );
 
+    if (attachment != null) {
+      // Held for a possible retry, and written to disk before the bubble is
+      // shown: ImageAttachment renders our own picture from this local file,
+      // so it has to exist by the time the transcript first paints it.
+      _outgoingAttachments[message.id] = attachment;
+      await _storeOwnAttachment(groupId, message.id, attachment);
+    }
+
     chat.messages.add(message);
     chat.lastActivityAt = now;
     notifyListeners();
@@ -2831,7 +2887,7 @@ class AppSession extends ChangeNotifier {
     // many more ways to be interrupted part-way.
     await LocalStateStore.saveProfile(state);
 
-    await _fanOut(chat, message);
+    await _fanOut(chat, message, attachment);
   }
 
   /// Delivers every outstanding copy of a group message.
@@ -2839,7 +2895,11 @@ class AppSession extends ChangeNotifier {
   /// One recipient's failure never stops the others: in a group, one member
   /// being unreachable is not everybody else's problem. Each copy carries its
   /// own stable wire id, so a retry is idempotent per recipient.
-  Future<void> _fanOut(GroupConversation chat, StoredMessage message) async {
+  Future<void> _fanOut(
+    GroupConversation chat,
+    StoredMessage message,
+    OutgoingAttachment? attachment,
+  ) async {
     final resolved = _groupStates[chat.groupId]?.resolved;
     if (resolved == null) return;
 
@@ -2855,11 +2915,11 @@ class AppSession extends ChangeNotifier {
       return;
     }
 
-    // Encrypt first, post afterwards -- one request per distinct recipient
-    // server instead of one per member (docs/PROTOCOL.md §7). Encryption cannot
-    // be batched: there is no group key, so every copy rides its own recipient's
-    // ratchet. Only the *transport* collapses.
-    final copies = <_GroupCopy>[];
+    // Who is still owed a copy, and where each of them reads it from. Resolved
+    // up front rather than inside the send loop because an attachment is
+    // uploaded once per recipient *server* (SRV-18), which cannot be worked out
+    // one member at a time.
+    final targets = <_GroupTarget>[];
     for (final delivery in message.deliveries) {
       if (delivery.isSent) continue;
       delivery.state = MessageSendState.pending;
@@ -2873,6 +2933,70 @@ class AppSession extends ChangeNotifier {
         }
         final peer = _endpointFor(member.accountId, member.server);
         await _ensurePeerDeviceResolved(peer);
+        targets.add(_GroupTarget(delivery: delivery, member: member, peer: peer));
+      } catch (e) {
+        delivery.state = MessageSendState.failed;
+        delivery.error = describeError(e);
+      }
+    }
+
+    // One upload per distinct recipient server, and the reference each member
+    // is then sent -- plus, separately, the members whose upload merely failed
+    // rather than being refused (see _uploadGroupAttachment).
+    final upload = attachment == null
+        ? _GroupAttachmentUpload()
+        : await _uploadGroupAttachment(targets, attachment);
+
+    // Encrypt first, post afterwards -- one request per distinct recipient
+    // server instead of one per member (docs/PROTOCOL.md §7). Encryption cannot
+    // be batched: there is no group key, so every copy rides its own recipient's
+    // ratchet. Only the *transport* collapses.
+    final copies = <_GroupCopy>[];
+    for (final target in targets) {
+      final (delivery, member, peer) = (
+        target.delivery,
+        target.member,
+        target.peer,
+      );
+      if (delivery.state == MessageSendState.failed) continue;
+      try {
+        // This member's own reference: the same picture, under the blob id of
+        // whichever server they fetch it from.
+        final reference = attachment == null
+            ? null
+            : upload.references[member.accountId];
+        if (attachment != null) {
+          // Recomputed rather than only ever set, so a retry that does get the
+          // picture through clears the note instead of leaving the previous
+          // attempt's verdict standing.
+          delivery.attachmentSkipped = reference == null;
+
+          final uploadError = upload.failed[member.accountId];
+          if (reference == null && uploadError != null) {
+            // The upload did not get a *no* from their server, it just didn't
+            // get through. Nothing is sent to them at all, so the whole copy is
+            // retried later and arrives complete -- rather than delivering a
+            // caption now and marking the picture permanently undeliverable,
+            // which no retry could ever undo (a delivered copy is never
+            // revisited).
+            delivery.state = MessageSendState.failed;
+            delivery.error = "Couldn't upload the picture: $uploadError";
+            delivery.attachmentSkipped = false;
+            continue;
+          }
+          if (reference == null && message.text.isEmpty) {
+            // A picture with no caption, to a server that has said it cannot
+            // hold it: there is nothing left to deliver, and sending the empty
+            // remainder would put a blank bubble in their transcript. Failed
+            // rather than skipped, so the k-of-N indicator says so and a
+            // retry addresses them again.
+            delivery.state = MessageSendState.failed;
+            delivery.error =
+                "Their server can't store the picture, and there is no "
+                'caption to send instead.';
+            continue;
+          }
+        }
 
         // Their state hash has never been seen to agree with ours, so they may
         // be missing facts -- and a fan-out is driven by state, so a member we
@@ -2901,6 +3025,7 @@ class AppSession extends ChangeNotifier {
           id: message.id,
           text: message.text,
           groupId: chat.groupId,
+          attachments: reference == null ? const [] : [reference],
           // Our own view, so a recipient notices a divergence without anyone
           // having to ask (see the receive path).
           stateHash: _groupStates[chat.groupId]?.stateHash,
@@ -2942,12 +3067,128 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Uploads an outgoing picture for a whole fan-out and returns the reference
+  /// each member should be sent, keyed by their account id.
+  ///
+  /// One upload per distinct recipient *server* is what SRV-18 bought: ten
+  /// members on one server share one upload and one stored copy instead of ten
+  /// of each. The reference is still per member, because it need not be the
+  /// same one — a server that advertises `max_blob_recipients: 1` (which is
+  /// also what a server predating SRV-18 means by saying nothing) stores a blob
+  /// per device, so its members get an upload and a blob id each.
+  ///
+  /// A member with no reference cannot be given the picture. Which of the two
+  /// reasons it was matters, so [_GroupAttachmentUpload] keeps them apart: a
+  /// server that *stated* it will not hold this picture is permanent, and a
+  /// server that merely failed is not and must be retried rather than recorded
+  /// as "they cannot receive pictures" forever.
+  Future<_GroupAttachmentUpload> _uploadGroupAttachment(
+    List<_GroupTarget> targets,
+    OutgoingAttachment attachment,
+  ) async {
+    final byServer = <String?, List<_GroupTarget>>{};
+    for (final target in targets) {
+      if (target.delivery.state == MessageSendState.failed) continue;
+      if (target.peer.deviceId == null) continue;
+      byServer.putIfAbsent(target.peer.server, () => []).add(target);
+    }
+
+    final result = _GroupAttachmentUpload();
+    for (final entry in byServer.entries) {
+      try {
+        await _uploadGroupAttachmentTo(
+          entry.key,
+          entry.value,
+          attachment,
+          result.references,
+        );
+      } catch (e) {
+        // Not rethrown either way: one member's server must not cost the rest
+        // of the group their copy.
+        final permanent = isPermanentBlobRefusal(e);
+        if (!permanent) {
+          for (final target in entry.value) {
+            result.failed[target.member.accountId] = describeError(e);
+          }
+        }
+        developer.log(
+          'group picture for ${entry.key ?? 'this server'} '
+          '${permanent ? 'refused' : 'failed, will retry'}: '
+          '${describeError(e)}',
+          name: 'groups',
+        );
+        _noteFailure('sending a group picture failed', e);
+      }
+    }
+    return result;
+  }
+
+
+  /// The per-server half of [_uploadGroupAttachment], filling [references] for
+  /// the members it manages to upload for.
+  Future<void> _uploadGroupAttachmentTo(
+    String? server,
+    List<_GroupTarget> targets,
+    OutgoingAttachment attachment,
+    Map<String, MessageAttachment> references,
+  ) async {
+    // Checked against the *recipient* server's own advertised limits, since
+    // that is where the blob lives (docs/PROTOCOL.md §10). Unknown (null) is
+    // not a refusal: the upload itself then reports the truth.
+    final capability = await blobCapabilityForServer(server);
+    if (capability != null) {
+      if (!capability.enabled) return;
+      // A server whose per-picture limit is below what we already downscaled
+      // to. The design asks for a smaller rendition for that server alone,
+      // which this build cannot produce (see docs/design/16-groups.md), so its
+      // members go without rather than everyone getting a smaller picture --
+      // which is the one option that decision ruled out.
+      if (!capability.fits(attachment.bytes.length)) return;
+    }
+
+    // Encrypted once per server, not once overall: a distinct key per stored
+    // object means the key that reached one server's members cannot decrypt
+    // another server's copy.
+    final encrypted = core.encryptBlob(attachment.bytes);
+    final perUpload = capability?.maxRecipients ?? 1;
+
+    for (var i = 0; i < targets.length; i += perUpload) {
+      final chunk = targets.sublist(
+        i,
+        i + perUpload > targets.length ? targets.length : i + perUpload,
+      );
+      final blobId = await _uploadBlob(
+        server: server,
+        recipientDeviceIds: [for (final t in chunk) t.peer.deviceId!],
+        encrypted: encrypted,
+      );
+      final reference = _referenceFor(
+        attachment,
+        blobId: blobId,
+        key: encrypted.key,
+      );
+      for (final target in chunk) {
+        references[target.member.accountId] = reference;
+      }
+    }
+  }
+
   /// Re-sends only the copies of a group message that never arrived.
   Future<void> retryGroupSend(String groupId, String messageId) async {
     final chat = state.groups[groupId];
     final message = chat?.messageById(messageId);
     if (chat == null || message == null || !message.isGroupSend) return;
-    await _fanOut(chat, message);
+
+    final attachment = await _recoverAttachment(chat.groupId, message);
+    if (message.hasAttachments && attachment == null) {
+      // Re-sending the caption alone would quietly deliver a different message
+      // than the one the user composed, so refuse -- the same rule retrySend
+      // follows for a one-to-one picture.
+      message.sendError = 'The picture is no longer available to resend.';
+      notifyListeners();
+      return;
+    }
+    await _fanOut(chat, message, attachment);
   }
 
   /// Re-reads one group's fact set after something else wrote it.
@@ -3149,50 +3390,74 @@ class AppSession extends ChangeNotifier {
     }
 
     final encrypted = core.encryptBlob(attachment.bytes);
-    final peerServer = convo.peerServer;
-    final recipientDeviceId = convo.peerDeviceId!;
+    final blobId = await _uploadBlob(
+      server: convo.peerServer,
+      recipientDeviceIds: [convo.peerDeviceId!],
+      encrypted: encrypted,
+    );
 
-    final String blobId;
-    if (peerServer == null) {
-      blobId = await api.uploadBlob(
+    return _referenceFor(attachment, blobId: blobId, key: encrypted.key);
+  }
+
+  /// Uploads one already-encrypted blob for every device in
+  /// [recipientDeviceIds], returning the blob id they all fetch it by.
+  ///
+  /// Several ids is the group case (SRV-18): the server stores the ciphertext
+  /// once and each named device may fetch it, which is what makes a group
+  /// picture cost one upload per recipient *server* instead of one per member.
+  /// [server] null means our own; anything else goes over the federated route,
+  /// where we have no device row and prove our identity inline.
+  Future<String> _uploadBlob({
+    required String? server,
+    required List<String> recipientDeviceIds,
+    required EncryptedBlob encrypted,
+  }) async {
+    if (server == null) {
+      return api.uploadBlob(
         ciphertext: encrypted.ciphertext,
         digest: encrypted.digest,
-        recipientDeviceId: recipientDeviceId,
+        recipientDeviceIds: recipientDeviceIds,
         creds: state.credentials,
       );
-    } else {
-      // Freshly signed rather than cached, exactly as the federated message
-      // path does: the peer's server has no row for this device to check
-      // against, so the certificate travels with the request.
-      final cert = core.signDeviceCertificate(
-        accountId: state.accountId,
-        deviceId: state.deviceId,
-        devicePub: state.devicePub,
-        issuedAt: DateTime.now().toUtc(),
-        rootPriv: state.rootPriv,
-      );
-      blobId = await _clientFor(peerServer).uploadFederatedBlob(
-        ciphertext: encrypted.ciphertext,
-        digest: encrypted.digest,
-        recipientDeviceId: recipientDeviceId,
-        devicePriv: state.devicePriv,
-        rootPub: state.rootPub,
-        senderAccountId: state.accountId,
-        cert: cert,
-      );
     }
-
-    return MessageAttachment(
-      kind: 'image',
-      blobId: blobId,
-      key: encrypted.key,
-      mimeType: attachment.mimeType,
-      byteSize: attachment.bytes.length,
-      width: attachment.width,
-      height: attachment.height,
-      thumb: attachment.thumb,
+    // Freshly signed rather than cached, exactly as the federated message
+    // path does: the peer's server has no row for this device to check
+    // against, so the certificate travels with the request.
+    final cert = core.signDeviceCertificate(
+      accountId: state.accountId,
+      deviceId: state.deviceId,
+      devicePub: state.devicePub,
+      issuedAt: DateTime.now().toUtc(),
+      rootPriv: state.rootPriv,
+    );
+    return _clientFor(server).uploadFederatedBlob(
+      ciphertext: encrypted.ciphertext,
+      digest: encrypted.digest,
+      recipientDeviceIds: recipientDeviceIds,
+      devicePriv: state.devicePriv,
+      rootPub: state.rootPub,
+      senderAccountId: state.accountId,
+      cert: cert,
     );
   }
+
+  /// The reference that goes inside the encrypted message: which blob, and the
+  /// key to decrypt it. Everything else is metadata the recipient needs to
+  /// render the picture before it has downloaded.
+  MessageAttachment _referenceFor(
+    OutgoingAttachment attachment, {
+    required String blobId,
+    required Uint8List key,
+  }) => MessageAttachment(
+    kind: 'image',
+    blobId: blobId,
+    key: key,
+    mimeType: attachment.mimeType,
+    byteSize: attachment.bytes.length,
+    width: attachment.width,
+    height: attachment.height,
+    thumb: attachment.thumb,
+  );
 
   /// Saves the sender's own copy of a picture they just sent, so it renders
   /// straight away instead of being downloaded back from the server.
@@ -3226,6 +3491,31 @@ class AppSession extends ChangeNotifier {
       // The message is already sent and stored; failing to keep our own
       // copy only means we'd re-download it, so it must not fail the send.
       lastError = 'storing sent attachment failed: $e';
+    }
+  }
+
+  /// Starts downloading a just-arrived picture, and tells the UI when it lands
+  /// so a bubble already on screen swaps its placeholder for the real file.
+  ///
+  /// Every failure is swallowed: this is an optimization over the lazy fetch,
+  /// and a picture that cannot be downloaded now still gets its tap-to-retry
+  /// placeholder from [ImageAttachment] exactly as before.
+  Future<void> _prefetchAttachment({
+    required String chatId,
+    required String messageId,
+  }) async {
+    final message =
+        state.groups[chatId]?.messageById(messageId) ??
+        state.conversations[chatId]?.messageById(messageId);
+    if (message == null) return;
+    try {
+      final file = await ensureAttachmentDownloaded(
+        chatId: chatId,
+        message: message,
+      );
+      if (file != null) notifyListeners();
+    } catch (_) {
+      // Left to the lazy path, which reports it in the bubble.
     }
   }
 
@@ -3603,7 +3893,7 @@ class AppSession extends ChangeNotifier {
     final message = convo.messageById(messageId);
     if (message == null || !message.hasFailed) return;
 
-    final attachment = await _recoverAttachment(convo, message);
+    final attachment = await _recoverAttachment(convo.id, message);
     if (message.hasAttachments && attachment == null) {
       // Re-sending the caption alone would quietly deliver a different
       // message than the one the user composed, so refuse instead.
@@ -3630,8 +3920,10 @@ class AppSession extends ChangeNotifier {
   /// (see [sendMessage]), so by the time anything can fail it is already
   /// there -- and its metadata rode along in the message's own placeholder
   /// attachment entry, which is now persisted with it.
+  /// [chatId] is the directory the sender's own copy lives in -- a peer account
+  /// id for a one-to-one conversation, a group id for a group.
   Future<OutgoingAttachment?> _recoverAttachment(
-    Conversation convo,
+    String chatId,
     StoredMessage message,
   ) async {
     if (!message.hasAttachments) return null;
@@ -3643,7 +3935,7 @@ class AppSession extends ChangeNotifier {
       final media = await MediaStore.instance();
       final file = media.fileFor(
         accountId: state.accountId,
-        chatId: convo.id,
+        chatId: chatId,
         messageId: message.id,
       );
       if (!await file.exists()) return null;
@@ -4260,6 +4552,41 @@ class AppSession extends ChangeNotifier {
 /// Carries both sessions so the advance can be undone if the copy never goes
 /// out: [previousSession] is what to restore, [committedSession] is how to tell
 /// whether it is still ours to restore.
+/// What one fan-out's attachment uploads produced.
+///
+/// Two outcomes rather than one, because "their server said no" and "the upload
+/// didn't get through" need opposite handling: the first is permanent and the
+/// member is told they missed the picture, the second is retried so they get the
+/// message complete a moment later. Conflating them recorded a dropped
+/// connection as "this member cannot receive pictures" — permanently, since a
+/// copy that counts as delivered is never revisited.
+class _GroupAttachmentUpload {
+  /// The reference to send each member, by their account id.
+  final Map<String, MessageAttachment> references = {};
+
+  /// Members whose upload failed for a retryable reason, and why.
+  final Map<String, String> failed = {};
+}
+
+/// One member still owed a copy of a group message, with everything the
+/// fan-out resolved about them up front.
+///
+/// Separate from [_GroupCopy], which is a copy already encrypted and waiting to
+/// be posted. The split exists because an attachment is uploaded once per
+/// recipient *server* (SRV-18): that cannot be worked out one member at a time,
+/// so who is being sent to has to be known before any copy is built.
+class _GroupTarget {
+  _GroupTarget({
+    required this.delivery,
+    required this.member,
+    required this.peer,
+  });
+
+  final GroupDelivery delivery;
+  final GroupMember member;
+  final PeerEndpoint peer;
+}
+
 class _GroupCopy {
   _GroupCopy({
     required this.peer,
