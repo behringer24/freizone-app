@@ -210,7 +210,7 @@ per-chat direct-share targets.
   the sender's `content://` stream — under our own control
 
 ### APP-16 — Groups (client side)
-Status: `in progress` · Depends on: SRV-01, APP-08 step 2 · Also affects: shared Go core
+Status: `done` · Depends on: SRV-01, APP-08 step 2 · Also affects: shared Go core
 Design: [design/16-groups.md](design/16-groups.md)
 
 The client half of SRV-01. Group logic (event signing, the fold, `state_hash`,
@@ -408,13 +408,18 @@ over APP-08's outbox, and the group UI.
     from an existing one-to-one conversation, so a group we hold no facts about
     can be asked about even when the only member who has written is federated and
     a stranger one-to-one
-- **Open** — only a **device run** of the two things that landed on 2026-08-04
-  without one: replying in a group (APP-17) and the delivery sheet. Everything
-  else below is either done or an accepted gap. Both previous device runs found
-  four real problems each, none of which the tests could have caught, so this
-  item stays `in progress` until they have been through one.
+- 2026-08-05 — **device run of the last two pieces came back clean**, replying
+  (APP-17) and the delivery sheet both, which closes this item. Worth noting
+  against the two runs before it, which found four real problems each: those
+  landed on the *receive* and *storage* paths, where several accounts on one
+  device and a background isolate make the state harder than it looks. These two
+  are a screen reading state that was already correct.
 
-  The rest, in the order they were done:
+  What remains are the two gaps recorded as **accepted** below, not open work:
+  blocking is one-directional inside a group, and a deleted account keeps its
+  member row. Neither is fixable without a fact that cannot exist.
+
+  The log of how it got here, in the order things were done:
   - ~~no history for a member who joins later~~ — **decided 2026-08-03: history
     is never forwarded.** A new member gets the fact set, never past messages.
     Pairwise fan-out leaves no group copy to forward: a backfill would be one
@@ -531,7 +536,7 @@ over APP-08's outbox, and the group UI.
     the delivery sheet closed it out on 2026-08-04
 
 ### APP-17 — Replying to a message in a group chat
-Status: `done` · Device verification outstanding · Part of: APP-16
+Status: `done` · Part of: APP-16
 
 Long-press to reply, and a quote block that says **who** is being answered.
 Replying already works in a one-to-one chat; a group has the long-press menu
@@ -582,6 +587,7 @@ What is missing is the UI, plus one wire field:
     quote there would have been a colour with no readability guarantee. Deemed
     the lesser loss: the colour identifies a person, and my own bubble is the
     one place the surrounding transcript already says who is speaking
+- 2026-08-05 — verified on device, no findings
 
 ### APP-18 — Names, not short ids, in a group transcript
 Status: `planned` · Part of: APP-16 · Related: APP-19
