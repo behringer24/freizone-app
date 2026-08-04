@@ -472,6 +472,30 @@ over APP-08's outbox, and the group UI.
     never have been replaced; and that spinner was a fixed 28px inside an
     aspect-ratio clip, so in a short bubble it filled the rounded corners and
     read as a square — it is sized from the box now
+  - **2026-08-04, second device run** — a picture received in a group stayed a
+    blank bubble until the chat was left and re-entered, then appeared at once.
+    Four causes, all fixed; regression tests in
+    [`test/media_store_test.dart`](../test/media_store_test.dart). **The one that
+    caused it:** `MediaStore`'s in-flight map was keyed by *message id*, while
+    the files are per `accountId/chatId/messageId`. A received message id exists
+    once per account that received it, so with several accounts on one device in
+    the same group the first account's download made the picture look already
+    claimed for all the others — they waited instead of fetching, and the file
+    they waited for went into somebody else's directory, so the completion
+    notification left them nothing to adopt and nothing more to wait for. Keyed
+    by the same three ids as the file now. On-device mtimes showed it plainly:
+    one picture, four accounts, full files landing at +0.8 s, +9 s and +71 s, the
+    last only after a restart cleared the claim. The other three: the store's
+    `instance()` cached the resolved store rather than the future resolving it,
+    so racing first callers each built their own notifier; `ImageAttachment`
+    dropped a notification arriving while it was still stat-ing files, and now
+    also re-checks the disk when the transcript rebuilds; and the group receive
+    path never wrote the inline preview thumbnail (only the one-to-one path
+    did), which is *why* it read as empty — the placeholder is
+    `surfaceContainerHighest` inside a bubble of the same colour. Note for the
+    record: fixing the store race made the keying bug deterministic instead of
+    intermittent, because split stores had been accidentally providing the
+    per-account isolation the key was missing
   - **the delivery sheet**: tapping the k-of-N indicator for the per-member
     picture. The data behind it now exists (per-member delivered/read
     watermarks); only the sheet is missing
@@ -488,8 +512,8 @@ over APP-08's outbox, and the group UI.
 Status: `planned` · Part of: APP-16
 
 Long-press to reply, and a quote block that says **who** is being answered.
-Replying already works in a one-to-one chat; a group has neither the gesture nor
-the quote — `_GroupBubble` renders text and attachments only.
+Replying already works in a one-to-one chat; a group has the long-press menu
+since APP-21 but no reply entry in it, and `_GroupBubble` renders no quote.
 
 Most of the plumbing is already there: `sendGroupMessage` takes a `replyToId`,
 the fan-out puts it and a `ReplyPreview` into every copy's `v: 4` content, and
@@ -599,9 +623,8 @@ routes to add, plus an optional third:
   which is empty today and is where someone who is already looking at the picture
   will reach for it.
 - **From the long-press sheet** — one more entry in `_showMessageActions`, shown
-  only for a message that actually has a picture. A group bubble has no
-  long-press gesture at all yet; APP-17 brings it, so the group half either waits
-  for that or the gesture arrives here first.
+  only for a message that actually has a picture. Both chat kinds have that sheet
+  now (APP-21), so this is one entry per screen and no gesture work.
 - **Automatically on receipt** — a setting, so the pictures of a chosen
   conversation (or of all of them) land in the gallery without being asked for
   each time.
@@ -649,3 +672,23 @@ One detail that survives all of it: the on-disk file is already plaintext
 (`MediaStore.fileFor`, written after `core.decryptBlob`), so a save copies bytes
 and decrypts nothing — but a picture whose download has not finished has no file
 yet, and the action must be absent rather than fail.
+
+### APP-21 — Pin and delete a message in a group
+Status: `done` · Part of: APP-16 · Related: APP-17
+Design: [design/16-groups.md](design/16-groups.md) (section "Message actions in
+a group")
+
+A group bubble had no long-press gesture, so neither pinning a message nor
+deleting one from this device was reachable — both purely local, both long
+available in a one-to-one chat. Reply is the same menu's third entry and stays
+with APP-17, which needs a wire field first.
+
+- 2026-08-04 — **done.** Long-press menu on a group bubble (pin/unpin, "delete
+  for me"), the pin marker on the bubble, and the sticky pinned bar above the
+  transcript. `deleteMessageLocally` / `pinMessage` / `unpinMessage` now take a
+  chat id resolved through the new `AppSession.chatTarget`, instead of looking
+  only in `state.conversations` — a group id was a silent no-op before.
+  `PinnedMessageBar` and the delete confirmation became shared code (one bar,
+  one wording, `ChatTarget`-typed) rather than a second copy in the group
+  screen, and the group transcript builds eagerly now so the bar can actually
+  scroll to an older pin.

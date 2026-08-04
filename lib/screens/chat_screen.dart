@@ -25,9 +25,12 @@ import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/link_detection.dart';
+import '../util/message_actions.dart';
+import '../util/message_preview.dart';
 import '../util/share_intake.dart';
 import '../widgets/pattern_background.dart';
 import '../widgets/peer_avatar.dart';
+import '../widgets/pinned_message_bar.dart';
 import '../widgets/rename_dialog.dart';
 import 'peer_profile_screen.dart';
 
@@ -83,12 +86,6 @@ class _ChatScreenState extends State<ChatScreen> {
   /// (see [_send]), but a picture that isn't measured yet genuinely cannot
   /// be handed over.
   bool _preparing = false;
-
-  /// Index into a conversation's pinned ids *reversed* (so 0 is always
-  /// the most recently pinned) -- clamped against the current list on
-  /// every build, so it never needs resetting when pins are added or
-  /// removed elsewhere.
-  int _pinnedIndex = 0;
 
   /// Stable per-message keys, reused across rebuilds, so a quote tap or
   /// the pinned bar can scroll to a message that isn't necessarily near
@@ -409,35 +406,12 @@ class _ChatScreenState extends State<ChatScreen> {
         await widget.session.unpinMessage(widget.peerAccountId, message.id);
         break;
       case 'delete':
-        final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Delete message?'),
-            content: const Text(
-              'This removes the message from this device only -- it stays '
-              'for the other person, and this cannot be undone.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.error,
-                ),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('Delete'),
-              ),
-            ],
-          ),
+        await confirmAndDeleteMessage(
+          context,
+          widget.session,
+          chatId: widget.peerAccountId,
+          messageId: message.id,
         );
-        if (confirmed == true) {
-          await widget.session.deleteMessageLocally(
-            widget.peerAccountId,
-            message.id,
-          );
-        }
         break;
     }
   }
@@ -651,8 +625,10 @@ class _ChatScreenState extends State<ChatScreen> {
               !federationLocked;
           return Column(
             children: [
-              if (convo.pinnedMessageIds.isNotEmpty)
-                _buildPinnedBar(context, convo),
+              PinnedMessageBar(
+                chat: convo,
+                onJumpToMessage: _scrollToMessage,
+              ),
               Expanded(
                 child: PatternBackground(
                   child: ListView(
@@ -921,71 +897,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// The sticky "pinned message(s)" bar -- not part of the scrollable
-  /// message list, so it stays put while the list scrolls beneath it.
-  /// Shows the most recently pinned message by default (index 0 of the
-  /// reversed list), with </> to browse the rest when there's more than
-  /// one.
-  Widget _buildPinnedBar(BuildContext context, Conversation convo) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final ids = convo.pinnedMessageIds.reversed.toList();
-    final idx = _pinnedIndex.clamp(0, ids.length - 1);
-    final pinned = convo.messageById(ids[idx]);
-
-    return Material(
-      color: colorScheme.surfaceContainerHigh,
-      child: InkWell(
-        onTap: pinned == null ? null : () => _scrollToMessage(pinned.id),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          child: Row(
-            children: [
-              Icon(Icons.push_pin, size: 16, color: colorScheme.primary),
-              const SizedBox(width: 8),
-              if (pinned != null && pinned.hasAttachments) ...[
-                AttachmentThumbnail(
-                  bytes: pinned.attachments.first.thumb,
-                  size: 26,
-                ),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Text(
-                  pinned == null
-                      ? 'Pinned message no longer available'
-                      : _referenceLabel(pinned),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-              if (ids.length > 1) ...[
-                IconButton(
-                  icon: const Icon(Icons.chevron_left, size: 20),
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () =>
-                      setState(() => _pinnedIndex = (idx - 1) % ids.length),
-                ),
-                Text(
-                  '${idx + 1}/${ids.length}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.chevron_right, size: 20),
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () =>
-                      setState(() => _pinnedIndex = (idx + 1) % ids.length),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   /// The "replying to ..." preview shown above the input while composing
   /// a reply -- tapping the close icon cancels it without sending.
   Widget _buildReplyComposerBar(
@@ -1031,7 +942,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 Text(
-                  _referenceLabel(replyingTo),
+                  messageReferenceLabel(replyingTo),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
@@ -1047,17 +958,6 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
-  }
-
-  /// One-line label for a message referenced somewhere compact (the pinned
-  /// bar, the reply preview). Same reasoning as
-  /// Conversation.lastMessagePreview: a picture with no caption would
-  /// otherwise render as a blank line. No emoji marker here, unlike the chat
-  /// list -- these bars show the actual thumbnail next to this text.
-  String _referenceLabel(StoredMessage message) {
-    if (message.text.isNotEmpty) return message.text;
-    if (!message.hasAttachments) return message.text;
-    return message.attachments.first.isImage ? 'Photo' : 'Attachment';
   }
 
   /// The picture staged for sending, previewed above the input the same way

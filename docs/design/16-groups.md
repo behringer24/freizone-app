@@ -293,6 +293,70 @@ scratch. `MediaStore` was already a `ChangeNotifier` and nothing listened to it;
 settles. It deliberately never starts a download from that listener, so the
 notify-on-`markFetching` cannot loop.
 
+**And the listener was necessary but not sufficient** — the next device run
+(2026-08-04) hit exactly the failure it was built to prevent: a group picture
+stayed a blank bubble, and leaving the chat and re-entering it showed the picture
+instantly. Making a download's completion the *only* way the bubble finds out
+turned every lost notification into a permanently stranded picture, and there
+were four ways to lose one.
+
+**The one that actually caused it: the in-flight map was keyed by message id
+alone.** A received message id exists once *per account that received it*, and
+each account has its own file — so on a device with several accounts in the same
+group (which is how this app gets tested, four accounts in one group) the first
+account's download made the picture look already claimed for every other
+account. They dutifully waited instead of fetching, and the file they were
+waiting for was written into somebody else's directory: when the notification
+came there was nothing to adopt, and nothing further would ever notify. The key
+is now the same three ids the file is derived from (`accountId/chatId/messageId`)
+— the claim and the thing claimed finally have the same identity.
+
+The device evidence is worth keeping, because the file mtimes told the whole
+story before any code was read. One picture, four accounts, all on one phone:
+the sender wrote its copy at 17:16:37, all three receivers got their inline
+thumbnail at 17:16:43, and their full files landed at 17:16:43, 17:16:52 and
+**17:17:54** — the last one only after the app was restarted, which is what
+cleared the in-memory claim. Serialised downloads with a minute-long tail, from
+a map that should have had four independent entries and had one.
+
+Sobering detail: fixing the store race below made this *worse*, not better. With
+the stores accidentally split, each account sometimes got its own in-flight map,
+which is exactly the isolation the key was missing — so the bug went from
+intermittent to reproducible on the first open. A fix that makes a latent bug
+deterministic is doing its job; it just has to be read that way.
+
+The other three:
+
+* `MediaStore.instance()` cached the store, not the future resolving it, so
+  concurrent first callers each built one. Finding the documents directory is a
+  platform-channel round trip, and a notification cold-starting the app makes
+  three calls into that window at once (the startup orphan sweep, the arriving
+  picture's prefetch, the bubble drawing it). The paths still agreed — every one
+  is derived from ids — so the file was written and would have been found; only
+  the in-flight map and its listeners were split, which is precisely the state
+  where nobody hears anything. The future is what's cached now, and a rejected
+  one is not kept, so a transient failure stays transient.
+* `ImageAttachment` attached its listener before stat-ing the files but recorded
+  the store only afterwards, in `setState`, and the callback needs the store to
+  know what to adopt — so a notification landing in between was dropped, and
+  nothing notifies twice. It also re-checks the disk in `didUpdateWidget` now:
+  the file is the truth, the session already notifies after a finished prefetch,
+  and that makes a lost notify recoverable rather than fatal.
+* The group receive path never wrote the inline preview thumbnail at all — only
+  the one-to-one path called `_writeAttachmentThumbs`. That is *why* the bubble
+  read as empty rather than as a picture arriving: with no thumbnail the
+  placeholder is `surfaceContainerHighest`, which is exactly the received
+  bubble's own colour. It writes them now, keyed by group id like every other
+  path that takes a `MediaStore` chat id.
+
+Two lessons, recorded because both will recur:
+
+* A derived cache (the files) may be authoritative, but only if something still
+  re-reads it. An event is an optimization on top of that, never the sole path.
+* **A claim must be keyed by what it claims.** A message id identifies a message,
+  not a *file*, and the moment several accounts share a device every id-keyed
+  side table has to be re-read with that in mind.
+
 **The spinner looked square.** It was a fixed 28px inside a clip whose size
 follows the picture's aspect ratio, so in a short or narrow bubble it filled the
 rounded corners. Sized from the box now (35% of the shorter side, 14–28px, stroke
@@ -506,6 +570,47 @@ Still missing from this section: the filter chips, the delivery sheet behind
 the send indicator, the group info screen and everything on it (member list,
 role actions, invite by QR, leave/dissolve), and system lines in the transcript
 for state events. Inviting exists as a session call but has no UI yet.
+
+### Message actions in a group, shipped 2026-08-04 (APP-21)
+
+A group bubble had no long-press gesture at all, so pinning a message and
+deleting one from this device — both long available in a one-to-one chat, both
+purely local — were unreachable in a group. Reply is the third entry of that
+menu and stays with APP-17, which needs a wire field to say *whose* message is
+being quoted; pin and delete need nothing on the wire and did not have to wait
+for it.
+
+Nothing was missing from the model: `messages` and `pinnedMessageIds` sit on
+`ChatTarget`, and a group's are persisted and round-trip-tested already. What
+was keyed wrongly was the session API — `deleteMessageLocally`, `pinMessage` and
+`unpinMessage` looked their target up in `state.conversations` only, so a group
+id would have been a silent no-op. They take a `chatId` now and resolve it
+through `AppSession.chatTarget` (`conversations[id] ?? groups[id]`; the two
+kinds of id cannot collide, both being generated rather than chosen).
+
+Two pieces became shared code rather than a second copy, which is the drift
+warned about above being paid down instead of grown:
+
+- **`PinnedMessageBar`** (`lib/widgets/`), typed on `ChatTarget`, browse index
+  and all — a pin with no bar to show it would be a feature nobody can see.
+- **`confirmAndDeleteMessage`** (`lib/util/message_actions.dart`), following
+  `block_actions.dart`'s established shape, so the one sentence that has to be
+  exactly right — "delete" here never means "for everyone" — exists once. Its
+  wording moved from "it stays for the other person" to "everyone else keeps
+  their copy", true in both a chat and a group.
+
+One consequence worth recording: the group transcript now builds its bubbles
+eagerly (`ListView` with children, as `ChatScreen` does) instead of lazily
+(`ListView.builder`). `Scrollable.ensureVisible` can only reach a widget that
+exists, and the pinned bar's whole purpose is jumping to a message far above the
+fold — which a lazily built list cannot do for anything outside its cache
+extent. The messages are all in memory either way; if a very long transcript
+ever makes this cost real, it costs the same in `ChatScreen` and is fixed in one
+place for both.
+
+A deleted message's picture is *not* deleted with it, in a group no more than in
+a one-to-one chat: `sweepOrphanedMedia` already collects every file whose
+message is gone, groups included, on the next start.
 
 ### Group info screen
 
