@@ -16,6 +16,15 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Fixed
+
+* A picture received in a group chat stayed a blank bubble until you left the
+  chat and opened it again (`APP-16`). It now appears as soon as it has
+  downloaded, and shows a blurred preview of itself while it downloads instead of
+  nothing at all. If you use several accounts in the same group on one device,
+  each of them now downloads its own copy right away instead of waiting for the
+  others
+
 ## [0.14.0] — 2026-08-04 (versionCode 18)
 
 Pictures in group chats.

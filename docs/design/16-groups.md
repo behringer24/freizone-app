@@ -293,6 +293,70 @@ scratch. `MediaStore` was already a `ChangeNotifier` and nothing listened to it;
 settles. It deliberately never starts a download from that listener, so the
 notify-on-`markFetching` cannot loop.
 
+**And the listener was necessary but not sufficient** — the next device run
+(2026-08-04) hit exactly the failure it was built to prevent: a group picture
+stayed a blank bubble, and leaving the chat and re-entering it showed the picture
+instantly. Making a download's completion the *only* way the bubble finds out
+turned every lost notification into a permanently stranded picture, and there
+were four ways to lose one.
+
+**The one that actually caused it: the in-flight map was keyed by message id
+alone.** A received message id exists once *per account that received it*, and
+each account has its own file — so on a device with several accounts in the same
+group (which is how this app gets tested, four accounts in one group) the first
+account's download made the picture look already claimed for every other
+account. They dutifully waited instead of fetching, and the file they were
+waiting for was written into somebody else's directory: when the notification
+came there was nothing to adopt, and nothing further would ever notify. The key
+is now the same three ids the file is derived from (`accountId/chatId/messageId`)
+— the claim and the thing claimed finally have the same identity.
+
+The device evidence is worth keeping, because the file mtimes told the whole
+story before any code was read. One picture, four accounts, all on one phone:
+the sender wrote its copy at 17:16:37, all three receivers got their inline
+thumbnail at 17:16:43, and their full files landed at 17:16:43, 17:16:52 and
+**17:17:54** — the last one only after the app was restarted, which is what
+cleared the in-memory claim. Serialised downloads with a minute-long tail, from
+a map that should have had four independent entries and had one.
+
+Sobering detail: fixing the store race below made this *worse*, not better. With
+the stores accidentally split, each account sometimes got its own in-flight map,
+which is exactly the isolation the key was missing — so the bug went from
+intermittent to reproducible on the first open. A fix that makes a latent bug
+deterministic is doing its job; it just has to be read that way.
+
+The other three:
+
+* `MediaStore.instance()` cached the store, not the future resolving it, so
+  concurrent first callers each built one. Finding the documents directory is a
+  platform-channel round trip, and a notification cold-starting the app makes
+  three calls into that window at once (the startup orphan sweep, the arriving
+  picture's prefetch, the bubble drawing it). The paths still agreed — every one
+  is derived from ids — so the file was written and would have been found; only
+  the in-flight map and its listeners were split, which is precisely the state
+  where nobody hears anything. The future is what's cached now, and a rejected
+  one is not kept, so a transient failure stays transient.
+* `ImageAttachment` attached its listener before stat-ing the files but recorded
+  the store only afterwards, in `setState`, and the callback needs the store to
+  know what to adopt — so a notification landing in between was dropped, and
+  nothing notifies twice. It also re-checks the disk in `didUpdateWidget` now:
+  the file is the truth, the session already notifies after a finished prefetch,
+  and that makes a lost notify recoverable rather than fatal.
+* The group receive path never wrote the inline preview thumbnail at all — only
+  the one-to-one path called `_writeAttachmentThumbs`. That is *why* the bubble
+  read as empty rather than as a picture arriving: with no thumbnail the
+  placeholder is `surfaceContainerHighest`, which is exactly the received
+  bubble's own colour. It writes them now, keyed by group id like every other
+  path that takes a `MediaStore` chat id.
+
+Two lessons, recorded because both will recur:
+
+* A derived cache (the files) may be authoritative, but only if something still
+  re-reads it. An event is an optimization on top of that, never the sole path.
+* **A claim must be keyed by what it claims.** A message id identifies a message,
+  not a *file*, and the moment several accounts share a device every id-keyed
+  side table has to be re-read with that in mind.
+
 **The spinner looked square.** It was a fixed 28px inside a clip whose size
 follows the picture's aspect ratio, so in a short or narrow bubble it filled the
 rounded corners. Sized from the box now (35% of the shorter side, 14–28px, stroke

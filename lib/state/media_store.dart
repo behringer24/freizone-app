@@ -26,37 +26,86 @@ enum MediaFetchState { idle, downloading, failed }
 class MediaStore extends ChangeNotifier {
   MediaStore._(this._root);
 
-  static MediaStore? _instance;
+  static Future<MediaStore>? _instance;
 
   /// The one store for this isolate. A single instance keeps the in-flight
   /// map meaningful across screens; the background push isolate gets its
   /// own, which is fine -- it only writes thumbnails, never downloads.
-  static Future<MediaStore> instance() async {
-    final existing = _instance;
-    if (existing != null) return existing;
-    final dir = await getApplicationDocumentsDirectory();
-    return _instance = MediaStore._(dir.path);
+  ///
+  /// What is cached is the *future*, not the resolved store: finding the
+  /// documents directory is a platform-channel round trip, and two callers
+  /// arriving while it is still in flight -- an arriving picture's prefetch
+  /// and the bubble that draws it, routinely at once when a notification
+  /// cold-starts the app -- each used to build a store of their own. They
+  /// agreed about the files, since every path is derived from ids, but not
+  /// about the in-flight map: whichever store lost the assignment had
+  /// listeners nobody would ever notify again, so a picture whose download
+  /// somebody else had already claimed spun until its bubble was rebuilt
+  /// from scratch.
+  static Future<MediaStore> instance() => _instance ??= _create();
+
+  static Future<MediaStore> _create() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      return MediaStore._(dir.path);
+    } catch (_) {
+      // Deliberately not left cached: a rejected future would turn one
+      // transient failure into a permanent one for the whole isolate.
+      _instance = null;
+      rethrow;
+    }
   }
 
   final String _root;
 
+  /// In-flight downloads, keyed exactly like the file each one is fetching.
+  ///
+  /// A message id alone is *not* that key, which is what this used to use. One
+  /// received message id exists once per account that received it, and every
+  /// account has its own file to fetch: with several accounts on one device --
+  /// all of them members of the same group, which is exactly how this app gets
+  /// tested -- the first account's download made every other account's look
+  /// already claimed. They waited for it instead of starting their own, and the
+  /// file they were waiting for was never theirs, so the notification when it
+  /// landed left them with nothing to adopt and nothing further to wait for:
+  /// a picture that spun until its bubble was rebuilt from scratch.
   final Map<String, MediaFetchState> _fetching = {};
 
-  MediaFetchState stateFor(String messageId) =>
-      _fetching[messageId] ?? MediaFetchState.idle;
+  static String _fetchKey(String accountId, String chatId, String messageId) =>
+      '$accountId/$chatId/$messageId';
 
-  void markFetching(String messageId) {
-    _fetching[messageId] = MediaFetchState.downloading;
+  MediaFetchState stateFor({
+    required String accountId,
+    required String chatId,
+    required String messageId,
+  }) =>
+      _fetching[_fetchKey(accountId, chatId, messageId)] ?? MediaFetchState.idle;
+
+  void markFetching({
+    required String accountId,
+    required String chatId,
+    required String messageId,
+  }) {
+    _fetching[_fetchKey(accountId, chatId, messageId)] =
+        MediaFetchState.downloading;
     notifyListeners();
   }
 
-  void markFailed(String messageId) {
-    _fetching[messageId] = MediaFetchState.failed;
+  void markFailed({
+    required String accountId,
+    required String chatId,
+    required String messageId,
+  }) {
+    _fetching[_fetchKey(accountId, chatId, messageId)] = MediaFetchState.failed;
     notifyListeners();
   }
 
-  void clearFetchState(String messageId) {
-    _fetching.remove(messageId);
+  void clearFetchState({
+    required String accountId,
+    required String chatId,
+    required String messageId,
+  }) {
+    _fetching.remove(_fetchKey(accountId, chatId, messageId));
     notifyListeners();
   }
 

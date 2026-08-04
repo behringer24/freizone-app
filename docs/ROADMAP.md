@@ -472,6 +472,30 @@ over APP-08's outbox, and the group UI.
     never have been replaced; and that spinner was a fixed 28px inside an
     aspect-ratio clip, so in a short bubble it filled the rounded corners and
     read as a square — it is sized from the box now
+  - **2026-08-04, second device run** — a picture received in a group stayed a
+    blank bubble until the chat was left and re-entered, then appeared at once.
+    Four causes, all fixed; regression tests in
+    [`test/media_store_test.dart`](../test/media_store_test.dart). **The one that
+    caused it:** `MediaStore`'s in-flight map was keyed by *message id*, while
+    the files are per `accountId/chatId/messageId`. A received message id exists
+    once per account that received it, so with several accounts on one device in
+    the same group the first account's download made the picture look already
+    claimed for all the others — they waited instead of fetching, and the file
+    they waited for went into somebody else's directory, so the completion
+    notification left them nothing to adopt and nothing more to wait for. Keyed
+    by the same three ids as the file now. On-device mtimes showed it plainly:
+    one picture, four accounts, full files landing at +0.8 s, +9 s and +71 s, the
+    last only after a restart cleared the claim. The other three: the store's
+    `instance()` cached the resolved store rather than the future resolving it,
+    so racing first callers each built their own notifier; `ImageAttachment`
+    dropped a notification arriving while it was still stat-ing files, and now
+    also re-checks the disk when the transcript rebuilds; and the group receive
+    path never wrote the inline preview thumbnail (only the one-to-one path
+    did), which is *why* it read as empty — the placeholder is
+    `surfaceContainerHighest` inside a bubble of the same colour. Note for the
+    record: fixing the store race made the keying bug deterministic instead of
+    intermittent, because split stores had been accidentally providing the
+    per-account isolation the key was missing
   - **the delivery sheet**: tapping the k-of-N indicator for the per-member
     picture. The data behind it now exists (per-member delivered/read
     watermarks); only the sheet is missing
