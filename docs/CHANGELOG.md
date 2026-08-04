@@ -16,6 +16,10 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-04 (versionCode 19)
+
+The rest of what a group chat needs: replying, and seeing who got what.
+
 ### Added
 
 * Tap the "received by 3 of 5" indicator under your own group message to see
