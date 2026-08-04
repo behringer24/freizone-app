@@ -16,6 +16,7 @@ class ServerStatus {
     this.federationEnabled = true,
     this.blobsEnabled = false,
     this.maxBlobBytes = 0,
+    this.maxBlobRecipients = 1,
     this.batchMessages = false,
     this.maxBatchMessages = 0,
   });
@@ -30,6 +31,15 @@ class ServerStatus {
     // predates them and has no blob endpoints to talk to.
     blobsEnabled: j['blobs_enabled'] as bool? ?? false,
     maxBlobBytes: (j['max_blob_bytes'] as num?)?.toInt() ?? 0,
+    // Absent means ONE, not unlimited (SRV-18). An older server reads only the
+    // first recipient_device_id, stores the blob for that one device and still
+    // answers 201 -- so assuming otherwise would silently deliver a group
+    // picture to a single member. One is also what a server that states 0
+    // means: it takes an upload, just not a shared one.
+    maxBlobRecipients: () {
+      final stated = (j['max_blob_recipients'] as num?)?.toInt() ?? 1;
+      return stated < 1 ? 1 : stated;
+    }(),
     // Absent means off, same reasoning as blobs: batch delivery arrived with
     // SRV-01, so a server that doesn't advertise it has no batch endpoint and
     // the fan-out posts one request per recipient instead. Discovered per
@@ -48,6 +58,11 @@ class ServerStatus {
 
   /// Largest single blob this server accepts, or 0 if it didn't say.
   final int maxBlobBytes;
+
+  /// How many recipient devices one upload may name (SRV-18), which is what
+  /// lets a group picture cost one upload per recipient *server* rather than
+  /// one per member. Never below 1: see the absence rule in [fromJson].
+  final int maxBlobRecipients;
 
   /// Whether this server accepts several envelopes in one request, which is what
   /// collapses a group fan-out to one request per distinct recipient server

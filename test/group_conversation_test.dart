@@ -176,6 +176,32 @@ void main() {
       expect(message.deliveredCount, 0);
     });
 
+    test('a member who got the caption but not the picture is remembered', () {
+      // Not a delivery failure -- the message itself arrived -- so it needs its
+      // own flag rather than riding on the send state. Persisted, because "they
+      // never got the picture" does not become untrue with time and no retry
+      // can mend it: that copy already counts as delivered.
+      final message = fanOut([MessageSendState.sent, MessageSendState.sent]);
+      message.deliveries.first.attachmentSkipped = true;
+
+      final restored = StoredMessage.fromJson(message.toJson());
+      expect(restored.deliveries.first.attachmentSkipped, isTrue);
+      expect(restored.deliveries.last.attachmentSkipped, isFalse);
+      // Still fully delivered: the bubble says the picture missed somebody
+      // separately, rather than the k-of-N indicator claiming a failure.
+      expect(restored.aggregateSendState, MessageSendState.sent);
+    });
+
+    test('nothing is written for the ordinary case', () {
+      // The flag costs a key only when it is true, so existing history and
+      // every normal send stay byte-identical.
+      final message = fanOut([MessageSendState.sent]);
+      expect(
+        message.deliveries.first.toJson().containsKey('attachment_skipped'),
+        isFalse,
+      );
+    });
+
     test('a one-to-one message has no deliveries and keeps its own state', () {
       final message = StoredMessage(
         text: 'hallo',

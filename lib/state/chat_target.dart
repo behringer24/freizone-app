@@ -75,6 +75,7 @@ class GroupDelivery {
     required this.wireMessageId,
     this.state = MessageSendState.pending,
     this.error,
+    this.attachmentSkipped = false,
   });
 
   factory GroupDelivery.fromJson(Map<String, dynamic> j) => GroupDelivery(
@@ -84,6 +85,7 @@ class GroupDelivery {
     // written while pending comes back as a failure to retry -- the same rule
     // the message as a whole follows.
     state: _sendStateFromJson(j['state'] as String?),
+    attachmentSkipped: j['attachment_skipped'] as bool? ?? false,
   );
 
   final String accountId;
@@ -102,12 +104,25 @@ class GroupDelivery {
   MessageSendState state;
   String? error;
 
+  /// This member got the caption but not the picture: their server does not
+  /// store attachments, or would not take this one (APP-16/SRV-18). Not a
+  /// delivery failure -- the message itself arrived -- so it needs its own
+  /// flag rather than riding on [state].
+  ///
+  /// Persisted, unlike [error]: "they never got the picture" does not become
+  /// untrue with time, and a retry cannot fix it either. A delivery that
+  /// already counts as sent is never revisited, so re-delivering the picture
+  /// would mean sending the whole message again, caption and all. The bubble
+  /// says so instead, and sending it again is the user's call.
+  bool attachmentSkipped;
+
   bool get isSent => state == MessageSendState.sent;
 
   Map<String, dynamic> toJson() => {
     'account_id': accountId,
     'wire_message_id': wireMessageId,
     if (state != MessageSendState.sent) 'state': state.name,
+    if (attachmentSkipped) 'attachment_skipped': true,
   };
 }
 

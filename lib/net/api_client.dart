@@ -74,6 +74,47 @@ Map<String, dynamic> parseJsonObject(http.Response resp) {
   return decoded;
 }
 
+/// The repeated `recipient_device_id` a blob upload names its recipients with
+/// (SRV-18). Built by hand rather than through Uri's query map so the order is
+/// ours and matches, byte for byte, what the request signature covers.
+///
+/// Top-level for the same reason [parseJsonObject] is: testable without the FFI
+/// core an [ApiClient] instance needs.
+String blobRecipientQuery(List<String> recipientDeviceIds) => recipientDeviceIds
+    .map((id) => 'recipient_device_id=${Uri.encodeQueryComponent(id)}')
+    .join('&');
+
+/// Reads the blob id out of an upload response, refusing one that did not store
+/// the blob for every recipient the caller named.
+///
+/// One recipient answers `201` exactly as it did before SRV-18; several answer
+/// `200` with an outcome per recipient, because nothing was created at a single
+/// location when the outcomes can differ (PROTOCOL §10).
+///
+/// A partial result is a failure here rather than something reported upwards:
+/// uploads are made per server, so "some of this server's members are at their
+/// quota" is not something the caller could act on differently -- and handing
+/// those members a reference to a picture they cannot fetch would be worse than
+/// failing this server's upload and telling them the picture didn't make it.
+String blobIdFromUploadResponse(Map<String, dynamic> data, int statusCode) {
+  final blobId = data['blob_id'] as String?;
+  final refused = (data['recipients'] as List<dynamic>? ?? const [])
+      .whereType<Map<String, dynamic>>()
+      .where((r) => r['status'] != 'stored')
+      .map((r) => '${r['recipient_device_id']}: ${r['status']}')
+      .toList();
+  if (blobId == null || blobId.isEmpty || refused.isNotEmpty) {
+    throw ApiException(
+      statusCode,
+      'blob_not_stored',
+      refused.isEmpty
+          ? 'the upload stored nothing'
+          : 'the upload was refused for ${refused.join(', ')}',
+    );
+  }
+  return blobId;
+}
+
 class ApiClient {
   ApiClient({
     required this.baseUrl,
@@ -580,13 +621,20 @@ class ApiClient {
 
   // --- Attachment blobs (SRV-07) --------------------------------------------
 
-  /// Uploads an attachment's ciphertext for [recipientDeviceID], returning
-  /// the blob id to put in the message. See docs/PROTOCOL.md §10.
+  /// Uploads an attachment's ciphertext for every device in
+  /// [recipientDeviceIds], returning the blob id to put in the message. See
+  /// docs/PROTOCOL.md §10.
   ///
   /// A blob always goes to the RECIPIENT's server -- point this client at
   /// that server (for a federated peer, the one from
   /// AppSession._clientFor). The recipient then fetches from its own server
   /// and never has to contact a stranger's.
+  ///
+  /// Several recipients is the group case (SRV-18): the parameter is simply
+  /// repeated, the server stores the ciphertext once, and every named device
+  /// may fetch it. Only send more than one to a server that advertised
+  /// `max_blob_recipients` above 1 -- an older one silently keeps just the
+  /// first and still answers 201.
   ///
   /// The body is raw ciphertext, and the signature covers [digest] rather
   /// than the bytes, so the server can authenticate the upload before
@@ -596,11 +644,11 @@ class ApiClient {
   Future<String> uploadBlob({
     required Uint8List ciphertext,
     required String digest,
-    required String recipientDeviceId,
+    required List<String> recipientDeviceIds,
     required DeviceCredentials creds,
   }) async {
     const path = '/v1/blobs';
-    final rawQuery = 'recipient_device_id=$recipientDeviceId';
+    final rawQuery = blobRecipientQuery(recipientDeviceIds);
     final headers = core.signHTTPRequest(
       method: 'POST',
       path: path,
@@ -617,8 +665,7 @@ class ApiClient {
     req.bodyBytes = ciphertext;
 
     final resp = await _send(req);
-    final data = _decodeObject(resp, {201});
-    return data['blob_id'] as String;
+    return blobIdFromUploadResponse(_decodeObject(resp, {200, 201}), resp.statusCode);
   }
 
   /// Uploads an attachment to a peer on a DIFFERENT server, where we have no
@@ -629,14 +676,14 @@ class ApiClient {
   Future<String> uploadFederatedBlob({
     required Uint8List ciphertext,
     required String digest,
-    required String recipientDeviceId,
+    required List<String> recipientDeviceIds,
     required Uint8List devicePriv,
     required Uint8List rootPub,
     required String senderAccountId,
     required DeviceCertificate cert,
   }) async {
     const path = '/v1/federation/blobs';
-    final rawQuery = 'recipient_device_id=$recipientDeviceId';
+    final rawQuery = blobRecipientQuery(recipientDeviceIds);
     final keyId = encodeB64(cert.devicePubKey);
     final headers = core.signHTTPRequest(
       method: 'POST',
@@ -660,8 +707,7 @@ class ApiClient {
     req.bodyBytes = ciphertext;
 
     final resp = await _send(req);
-    final data = _decodeObject(resp, {201});
-    return data['blob_id'] as String;
+    return blobIdFromUploadResponse(_decodeObject(resp, {200, 201}), resp.statusCode);
   }
 
   /// Downloads an attachment's ciphertext. Only the recipient device can

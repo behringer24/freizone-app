@@ -8,6 +8,7 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import '../net/api_client.dart';
 import '../net/dto.dart';
 import 'message_content.dart';
 
@@ -16,11 +17,16 @@ import 'message_content.dart';
 /// an older or differently-configured server produces a clear explanation
 /// instead of a raw upload failure.
 class BlobCapability {
-  const BlobCapability({required this.enabled, required this.maxBytes});
+  const BlobCapability({
+    required this.enabled,
+    required this.maxBytes,
+    this.maxRecipients = 1,
+  });
 
   factory BlobCapability.from(ServerStatus status) => BlobCapability(
     enabled: status.blobsEnabled,
     maxBytes: status.maxBlobBytes,
+    maxRecipients: status.maxBlobRecipients,
   );
 
   final bool enabled;
@@ -29,8 +35,32 @@ class BlobCapability {
   /// and an oversized upload still fails server-side, as before.
   final int maxBytes;
 
+  /// How many recipient devices one upload may name (SRV-18). 1 means this
+  /// server stores a blob per device, so a group send has to upload once per
+  /// member there instead of once for all of them -- which is also what an
+  /// older server that never heard of the field gets, by its absence rule.
+  final int maxRecipients;
+
   bool fits(int byteSize) => maxBytes <= 0 || byteSize <= maxBytes;
 }
+
+/// Whether a failed blob upload was a *stated* refusal rather than something a
+/// retry might get past.
+///
+/// The distinction decides how a group send records a member who did not get
+/// the picture (APP-16). A refusal is permanent, so they are told the picture
+/// could not reach them and the caption goes out on its own. Anything else is
+/// retried, with nothing sent to them in the meantime — because a copy that
+/// counts as delivered is never revisited, so recording a dropped connection as
+/// a refusal would strand that member's picture for good.
+///
+/// Only the server's own no counts: blobs switched off, an unknown or inactive
+/// recipient device (`404`), and a picture over its size cap (`413`). A timeout,
+/// a socket error, a `5xx`, or a `429` quota that will free itself when the
+/// recipient next empties their downloads are all worth another attempt.
+bool isPermanentBlobRefusal(Object error) =>
+    error is ApiException &&
+    (error.statusCode == 404 || error.statusCode == 413);
 
 /// Renders a byte count the way a size limit reads to a person ("8 MB").
 /// Powers of 1024, since that is what the server's limits are expressed in,

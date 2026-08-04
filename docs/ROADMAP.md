@@ -68,7 +68,8 @@ SRV-07.
 - Done — item 0 (APP-14), and phase 1: pick from gallery, encrypt, upload to the
   recipient's server, render in the bubble, view full-screen
 - **Open** — camera capture, then video, which is what SRV-11 (resumable uploads)
-  and APP-13 are waiting on
+  and APP-13 are waiting on. Getting a picture back *out* of a transcript — into
+  the device gallery — is APP-20
 
 ### APP-05 — Backup
 Status: `planned`
@@ -431,21 +432,46 @@ over APP-08's outbox, and the group UI.
     them; and a deleted account keeps its member row forever, since no fact can
     express "this account no longer exists" and no member could prove it. Only a
     moderator removing them resolves the second one
-  - **attachments in a group** — the remaining large piece, and the receive half
-    is already there: `storeGroupMessage` keeps `content.attachments` and
-    `ensureAttachmentDownloaded` is keyed on a chat-neutral id. What is missing is
-    the *rendering* (`_GroupBubble` draws `message.text` only, so a picture that
-    has arrived is invisible) and the send side, which needs one upload per
-    distinct recipient server -- a blob lives on the recipient's server.
-    2026-08-03: the send half turned out to be blocked in the core, and is
-    tracked there as **SRV-18** — a blob was bound to one *device*, so "one
-    upload per server" would in fact have been one upload per member. The core
-    side shipped the same day (repeated `recipient_device_id`, per-recipient
-    outcomes, `max_blob_recipients` on `/v1/server-status` whose **absence
-    means 1**), verified federated, so nothing blocks this any more. What is
-    left here: the rendering, and a send fan-out that groups the joined members
-    by server, reads each server's blob capabilities, uploads once per server,
-    and builds each member's reference from that server's `blob_id`
+  - ~~**attachments in a group**~~ — **done 2026-08-04.** The receive half was
+    already there (`storeGroupMessage` keeps `content.attachments`,
+    `ensureAttachmentDownloaded` is keyed on a chat-neutral id); the send half
+    turned out to be blocked in the core and is tracked there as **SRV-18** — a
+    blob was bound to one *device*, so "one upload per server" would in fact
+    have been one upload per member. With that shipped: the group bubble renders
+    a picture through the same `ImageAttachment` the one-to-one bubble uses, the
+    composer grew the picker and staged-picture bar from `ChatScreen`, and the
+    fan-out resolves its recipients *before* encrypting so it can upload once
+    per distinct recipient server. The reference is keyed **per member**, not
+    per server — a server advertising `max_blob_recipients: 1` (what silence
+    means too) stores a blob per device, and keying by server could not express
+    that. A server that cannot hold the picture costs only its own members the
+    picture, not the group the message: they get the caption and the bubble says
+    "N members could not receive the picture", or the delivery fails outright
+    when there is no caption to send instead. **One decided piece is missing:**
+    re-encoding a smaller rendition for a server with a smaller
+    `max_blob_bytes`. `dart:ui` encodes only PNG and `image_picker` downscales
+    at pick time, so that needs a Dart JPEG encoder — a dependency this repo
+    deliberately does without. Those members are treated like a server with
+    attachments off, and the picture is **not** shrunk for everybody, which is
+    what that decision ruled out. Reasoning in
+    [design/16-groups.md](design/16-groups.md)
+  - **2026-08-04, first device run** — four findings from Andreas' test on a
+    Pixel, all fixed. The significant one: a **transient** upload failure was
+    recorded as a permanent "this member cannot receive pictures", and since a
+    delivered copy is never revisited that verdict could not be undone — one
+    dropped connection stranded the picture for good ("1 member could not
+    receive the picture", twice, then unreproducible). Only a *stated* refusal
+    (`404` blobs off / unknown device, `413` too large) is permanent now;
+    anything else fails that member's delivery so the outbox retries the whole
+    copy and it arrives complete. The others: the group transcript had neither
+    the one-to-one chat's patterned backdrop nor its scroll-to-bottom (both
+    simply missing); a picture only began downloading when the chat was opened,
+    so the foreground session now starts it on arrival — which needed
+    `ImageAttachment` to listen to `MediaStore`, since `ensureAttachmentDownloaded`
+    answers null while an attempt is in flight and the spinner would otherwise
+    never have been replaced; and that spinner was a fixed 28px inside an
+    aspect-ratio clip, so in a short bubble it filled the rounded corners and
+    read as a square — it is sized from the box now
   - **the delivery sheet**: tapping the k-of-N indicator for the per-member
     picture. The data behind it now exists (per-member delivered/read
     watermarks); only the sheet is missing
@@ -457,3 +483,169 @@ over APP-08's outbox, and the group UI.
     the state-change system lines, the filter chips and the large-group warning
     followed on the same day. Still to come: the delivery sheet (tapping the
     k-of-N indicator for the per-member picture)
+
+### APP-17 — Replying to a message in a group chat
+Status: `planned` · Part of: APP-16
+
+Long-press to reply, and a quote block that says **who** is being answered.
+Replying already works in a one-to-one chat; a group has neither the gesture nor
+the quote — `_GroupBubble` renders text and attachments only.
+
+Most of the plumbing is already there: `sendGroupMessage` takes a `replyToId`,
+the fan-out puts it and a `ReplyPreview` into every copy's `v: 4` content, and
+the receive path stores `replyToId` / `replyPreviewText` / `replyPreviewMine`.
+What is missing is the UI, plus one wire field:
+
+- **The quoted author has nowhere to travel.** `ReplyPreview` carries `text` and
+  `mine` — a bare "were you the one being quoted", flipped to the receiver's
+  perspective by the sender. In a one-to-one chat that identifies the author
+  completely, because there are only two. In a group it does not: a third member
+  reading Ben's reply to Carla gets `mine: false`, which says only "not you".
+  So the preview needs the quoted message's **author account id**, as a new
+  optional field — additive, so an older build simply ignores it.
+- **Absence must still render sensibly**, since a reply from an older build
+  carries no author: fall back to resolving it from local history
+  (`messageById(replyToId)?.senderAccountId`), and if that misses too — a member
+  who joined after the quoted message, or whose history was cleared — show the
+  quote without an author line rather than guessing.
+- The quote block itself should be the one-to-one bubble's, including APP-13's
+  camera-icon stand-in for a quoted picture, and the author line should use
+  `avatarColorFor` so a name in a quote matches the same person's colour in the
+  transcript and the member list.
+
+### APP-18 — Names, not short ids, in a group transcript
+Status: `planned` · Part of: APP-16 · Related: APP-19
+
+A group labels each author with five characters of their account id, so reading
+one means holding a mental table of `qk43r` → Carla. Where this account has
+already assigned that person a name, show the **name with the short id in
+parentheses** instead — in the transcript, the member list and the reply quote
+(APP-17).
+
+The long-press menu on a group message grows two entries about its author:
+
+- **Message them directly** — open the existing one-to-one chat, or start one
+  (the invite-to-chat path) when there is none.
+- **Name this person / change name**, effective for every chat *this* account has
+  with them, not just the group it was set from.
+
+One constraint shapes this: `displayName` lives on `ChatTarget`, i.e. on a
+**conversation**, and so does `blocked`. A group member this account has no
+one-to-one chat with therefore has nowhere to store a name today. Creating an
+empty conversation to hold one would litter the chat list with chats nobody
+started — the very thing `PeerEndpoint` was split out of `Conversation` to avoid.
+So this needs a small per-person record keyed by account id, which is the first
+piece of APP-19 and the reason the two are related. Whether that record is
+per-account or app-wide is APP-19's open decision; APP-18 only needs it to exist
+per account, which both options provide.
+
+### APP-19 — An app-wide contacts area
+Status: `planned` (shape decided) · Related: APP-18
+Design: [design/19-contacts.md](design/19-contacts.md)
+
+One place to keep the people this device knows, with its own icon in the main bar
+rather than a slot in the overflow menu. Beyond naming, it is where the
+multi-account questions get answered: which of my own accounts to start a chat
+from, and — the one that matters most — **which of my accounts already talk to
+this person**, so I do not write to someone from an identity they cannot place.
+
+- 2026-08-04 — shape decided. The store is **central**, shared across this
+  device's accounts: one person with one device does not have to inherit their
+  accounts' split-brain. Every *action* on a contact stays account-specific
+  (block, chats), which is the complexity accepted in exchange. A contact **is
+  one address**, so one name — a person with a work and a private account is two
+  contacts, which they would have to be named apart as anyway; no per-account
+  name override. A contact exists only by a deliberate act (naming someone in a
+  chat or group, or creating one by hand), never from having seen an account. A
+  hand-typed address is **resolved at creation and stored canonical only**, on
+  the phantom-member precedent from APP-16 — a stored prefix is a contact that
+  fails the moment it is used; the public `GET /v1/accounts/{id}` directory makes
+  that possible without any account of ours. The detail screen lists existing
+  chats with the account each belongs to, and offers "start new chat" with an
+  account picker *only* when an account of mine is not already talking to them,
+  which keeps entering a chat distinct from starting one
+- 2026-08-04 — the contact store is also the **only** place a name lives: every
+  screen reads it from there, deleting a contact drops the name everywhere and
+  keeps every chat. `BlockedPeer.displayName` goes away;
+  `ChatTarget.displayName` stays only in its *other* meaning, a group's own name.
+  Needs a one-time import of the aliases already sitting in each profile, or
+  switching the source of truth would silently discard every name ever assigned.
+  Deleting became **three** actions, ordered by the rule that losing a message is
+  the worst outcome available: **remove a contact** takes away the name entry and
+  nothing else — no chat, history or crypto touched; **delete a chat** drops the
+  conversation, its media and the peer's `knownPeerIds` entry so a resumption
+  arrives as a request to accept or decline, but **keeps** the ratchet session,
+  because dropping it produces an SRV-03 desync in which the very message that
+  should have been that request is undecryptable and lost; **remove permanently**
+  is the durable one for an orphaned chat and takes the session too, gated on
+  evidence from the public `GET /v1/accounts/{id}` directory (`404`, or no active
+  device, means nothing can arrive from them again, so nothing can be lost).
+  "Unreachable" is explicitly not treated as gone. The account picker also
+  consults `federationLocked` per account, so it never offers to start a chat from
+  an account that cannot reach the contact — otherwise the option fails after
+  being chosen, which is the mistake this screen exists to prevent
+
+### APP-20 — Save a picture from a transcript to the device gallery
+Status: `planned` · Part of: APP-04
+
+A picture in a transcript can be looked at and nothing else. Full-screen view
+exists (`ImageViewScreen`, reached by tapping the bubble in a one-to-one chat and
+in a group alike, since both render through `ImageAttachment`), but its app bar
+holds only the back button, and the long-press sheet offers reply, pin and
+"delete for me" — so a picture somebody sent cannot leave the app at all. Two
+routes to add, plus an optional third:
+
+- **From the full-screen view** — a save action in `ImageViewScreen`'s app bar,
+  which is empty today and is where someone who is already looking at the picture
+  will reach for it.
+- **From the long-press sheet** — one more entry in `_showMessageActions`, shown
+  only for a message that actually has a picture. A group bubble has no
+  long-press gesture at all yet; APP-17 brings it, so the group half either waits
+  for that or the gesture arrives here first.
+- **Automatically on receipt** — a setting, so the pictures of a chosen
+  conversation (or of all of them) land in the gallery without being asked for
+  each time.
+
+Four things decided 2026-08-04, before any of it is built:
+
+- **A gallery copy leaves the app's protection**, and the automatic variant is
+  therefore **opt-in, off by default**. Everything the app stores today sits in
+  its own private directory; a picture in the gallery is readable by every app
+  holding media permission and, on most phones, uploaded to Google Photos within
+  minutes. That is the whole point of the feature and also the one property an
+  end-to-end-encrypted messenger must not hand over by accident, so the setting
+  has to state what it does rather than read as a tidy convenience toggle. The
+  manual save is an act each time and needs no such framing.
+- **Share as well as save**, not instead of it. `share_plus` is already a
+  dependency and hands the picture to whatever app the user picks; saving files
+  it in the gallery. Different destinations, both offered — in the full-screen
+  view's app bar and in the long-press sheet.
+- **Only received pictures.** One this account sent came out of this device's own
+  gallery in the first place (`image_picker`), so saving it would file a second
+  copy of something already there. Worth revisiting when APP-04's **camera
+  capture** lands: `image_picker`'s camera source writes to the app's cache
+  directory, not the gallery, so a self-taken picture would then be one that
+  exists nowhere else — at which point "only received" stops being the obvious
+  rule.
+- **The storage permission is requested, not designed around.** Saving means an
+  insert into Android's own `MediaStore` (`MediaStore.Images`, `RELATIVE_PATH` of
+  `Pictures/Freizone` so the copies are grouped) — not to be confused with this
+  app's `MediaStore` (`lib/state/media_store.dart`), the local media cache. On
+  API 29+ that insert needs no permission at all; `minSdk` is Flutter's default
+  **24**, so API 24–28 devices are in scope and there the write needs
+  `WRITE_EXTERNAL_STORAGE`. The manifest gets it with
+  `android:maxSdkVersion="28"` and the platform side asks for it at runtime
+  before the first save, rather than the cheaper alternative of hiding the action
+  below API 29. Following APP-15 and `secure_screen.dart` this belongs on our own
+  `MethodChannel` in `MainActivity` rather than a dependency — and it is the
+  first runtime permission the app asks for *itself* (`CAMERA` and
+  `POST_NOTIFICATIONS` are requested by `image_picker` and
+  `flutter_local_notifications`), so `MainActivity` needs
+  `requestPermissions` plus an `onRequestPermissionsResult` that resolves the
+  pending channel result. A refusal has to leave the picture where it is and say
+  so, and be re-askable later.
+
+One detail that survives all of it: the on-disk file is already plaintext
+(`MediaStore.fileFor`, written after `core.decryptBlob`), so a save copies bytes
+and decrypts nothing — but a picture whose download has not finished has no file
+yet, and the action must be absent rather than fail.

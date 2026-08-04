@@ -32,6 +32,10 @@ Worth stating first, because it decides how large this item actually is:
   an unaccepted group invitation — same idea, same place in the UI vocabulary.
 - **`MessageAttachment`** needs no change at all: one blob key per attachment,
   uploaded once per distinct recipient server, referenced per recipient.
+  *Correction, 2026-08-04:* true of the format, and the format is indeed
+  unchanged — but the *server* bound a blob to one device, so "once per
+  recipient server" needed SRV-18 before it could be built. See "Sending a
+  picture into a group".
 
 ## Group logic lives in the Go core
 
@@ -186,13 +190,135 @@ The rest follows:
   every server and is exactly what the fallback would do anyway. Batch is an
   optimization, and doing it needs `_encryptAndSend` split so the payload can
   be produced without posting it.
-- **Attachments in a group are not sent yet.** A picture has to be uploaded
-  once per distinct recipient *server*, against that server's own blob
-  capability, which is a second concern layered on the fan-out rather than
-  part of it. Text first.
+- **Attachments in a group. Done 2026-08-04**, once the core could store one
+  blob for several recipients (freizone-server's SRV-18 — until then "once per
+  recipient server" was not implementable at all, since a blob was bound to one
+  device). See "Sending a picture into a group" below.
 - **Receipts go to the author only**, keeping traffic linear.
 - **Above ~50 members the client warns.** This is not a protocol limit — see the
   server-side design for why — so it is purely a UI guard.
+
+## Sending a picture into a group
+
+Shipped 2026-08-04, on top of freizone-server's SRV-18.
+
+A blob lives on the **recipient's** server, so a group picture has as many
+destinations as the group has distinct servers. The fan-out therefore gained a
+phase: who is owed a copy is resolved *first* (member, endpoint, device id),
+because "one upload per recipient server" cannot be worked out one member at a
+time. Then one upload per server, then the copies are encrypted and posted as
+before.
+
+**The reference is per member, not per server.** Sharing one blob id across a
+server's members is the normal case and the whole point of SRV-18 — but a server
+that advertises `max_blob_recipients: 1`, which is also what a server predating
+SRV-18 means by saying nothing at all, stores a blob per device. Its members get
+an upload and a blob id each. Keying the result by member account id instead of
+by server is what lets both work without a special case; the first draft keyed
+it by server and simply could not express the second.
+
+**The key is per server, not per picture.** One `encryptBlob` per recipient
+server rather than one for the whole fan-out, so the key handed to one server's
+members cannot decrypt another server's stored copy. Costs one encryption per
+server, which is nothing next to the upload it saves.
+
+**A server that cannot hold the picture does not fail the send.** Partial
+delivery is the normal case in a group, so:
+
+- Attachments switched off there, or the picture over that server's
+  `max_blob_bytes` → its members get the **caption**, and their `GroupDelivery`
+  is marked `attachmentSkipped`. The bubble says "N members could not receive
+  the picture" — persisted, because it stays true and a retry cannot mend it:
+  those copies count as delivered, so re-delivering the picture would mean
+  re-sending the whole message. Sending it again is the user's call.
+- The same, but the message has **no caption** → that member's delivery is
+  marked *failed* instead. Sending them the empty remainder would put a blank
+  bubble in their transcript; failing it means the k-of-N indicator says so and
+  a retry addresses them again.
+
+**A partial upload is refused rather than half-used.** If the server stores the
+blob for some named recipients and not others (one at their quota), the client
+treats the whole upload as failed for that server. It uploads per server, so it
+could not act on the difference anyway — and handing the refused members a
+reference that will 404 is worse than telling them the picture didn't arrive.
+
+**A retry re-uploads, accepted.** The one-to-one path skips the upload when a
+previous attempt already got a blob id and only the POST failed, using the id
+stored on the message. A group has no single id to store — one per server, and
+the persisted `attachments` entry is a placeholder carrying only metadata — so a
+retry after a failed *post* uploads again and the first copy is left for the
+server's retention sweep. Persisting per-member blob ids to avoid it would put
+key material for N servers into local history to save a rare duplicate upload,
+which is the wrong trade.
+
+### What the first real test run on a device changed
+
+Four findings from Andreas' run on a Pixel, 2026-08-04. The third is the one
+that mattered.
+
+**A transient upload failure was recorded as a permanent refusal.** Symptom: "1
+member could not receive the picture" in a two-person group, twice, then not
+reproducible. The cause was not the network hiccup itself but what the code did
+with it: every upload failure — a refusal, a timeout, a `5xx`, anything — landed
+in the same `catch` and marked that member `attachmentSkipped`. Since a delivery
+that counts as sent is never revisited, that verdict could never be undone: one
+dropped connection and the picture was stranded for good.
+
+Now `isPermanentBlobRefusal` splits the two. Only the server's own no is
+permanent — `404` (blobs off, or an unknown/inactive recipient device) and `413`
+(over its size cap); those keep the caption-plus-note behaviour. Everything else
+fails that member's *delivery* instead, so **nothing** is sent to them yet and
+the outbox retries the whole copy, which then arrives complete. A short delay
+beats a permanently mutilated message, and it is the difference between a
+message that heals itself and one that needs the user to notice and re-send.
+
+**The transcript had no backdrop and did not start at the bottom.** Both were
+simply missing rather than decided: `PatternBackground` and ChatScreen's
+post-frame `jumpTo`. The backdrop is applied to the empty state too, or a new
+group would change appearance the moment its first message landed.
+
+**A picture began downloading when the chat was opened**, i.e. exactly when the
+user was waiting for it. The lazy fetch in `ImageAttachment` stays — it covers
+history, a failed attempt, and the background push isolate, which deliberately
+writes only the inline thumbnail — but the foreground session now also starts the
+download when the message *arrives* (`IncomingMessageResult.attachmentMessageId`
+→ `_prefetchAttachment`, unawaited so it cannot delay a receipt or a
+notification).
+
+That exposed a second-order problem worth recording: `ensureAttachmentDownloaded`
+returns null while an attempt is already in flight, so the widget's own call
+became a no-op and its spinner would have spun until the bubble was rebuilt from
+scratch. `MediaStore` was already a `ChangeNotifier` and nothing listened to it;
+`ImageAttachment` does now, and adopts the file when somebody else's download
+settles. It deliberately never starts a download from that listener, so the
+notify-on-`markFetching` cannot loop.
+
+**The spinner looked square.** It was a fixed 28px inside a clip whose size
+follows the picture's aspect ratio, so in a short or narrow bubble it filled the
+rounded corners. Sized from the box now (35% of the shorter side, 14–28px, stroke
+scaled with it).
+
+### The one thing that did not get built
+
+freizone-server's SRV-18 decided: encode once at the normal target size, and
+re-encode **only** for a server whose `max_blob_bytes` is smaller, rather than
+letting one frugal server set the quality for the whole group.
+
+The re-encode half is not in this build, and not for want of trying: `dart:ui`
+can only encode PNG (which for a photo is *larger*, not smaller), and
+`image_picker` does the downscale natively at pick time, when the group's
+servers are not yet known. Producing a smaller JPEG at send time needs a Dart
+JPEG encoder — a new dependency, which `pubspec.yaml` deliberately avoids for
+exactly this ("so attachment compression needs no second package").
+
+So a server whose limit is below our ~1600px/q80 rendition is treated exactly
+like one with attachments switched off: its members get the caption and are
+counted in the bubble's note. What was **not** done is shrink the picture for
+everybody, which is the one option that decision explicitly ruled out. In
+practice this needs an operator who set `FREIZONE_MAX_BLOB_BYTES` below roughly
+a megabyte (the default is 8 MiB), so it is rare rather than theoretical. If it
+ever bites, the fix is the `image` package plus a `compute` isolate for the
+re-encode, and the per-server structure to hang it on is already here.
 
 ## Receiving
 
