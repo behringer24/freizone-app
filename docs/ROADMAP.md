@@ -408,7 +408,13 @@ over APP-08's outbox, and the group UI.
     from an existing one-to-one conversation, so a group we hold no facts about
     can be asked about even when the only member who has written is federated and
     a stranger one-to-one
-- **Open**, in the order they are likely to be done:
+- **Open** — only a **device run** of the two things that landed on 2026-08-04
+  without one: replying in a group (APP-17) and the delivery sheet. Everything
+  else below is either done or an accepted gap. Both previous device runs found
+  four real problems each, none of which the tests could have caught, so this
+  item stays `in progress` until they have been through one.
+
+  The rest, in the order they were done:
   - ~~no history for a member who joins later~~ — **decided 2026-08-03: history
     is never forwarded.** A new member gets the fact set, never past messages.
     Pairwise fan-out leaves no group copy to forward: a backfill would be one
@@ -496,17 +502,33 @@ over APP-08's outbox, and the group UI.
     record: fixing the store race made the keying bug deterministic instead of
     intermittent, because split stores had been accidentally providing the
     per-account isolation the key was missing
-  - **the delivery sheet**: tapping the k-of-N indicator for the per-member
-    picture. The data behind it now exists (per-member delivered/read
-    watermarks); only the sheet is missing
+  - ~~**the delivery sheet**~~ — **done 2026-08-04.** Tapping the k-of-N
+    indicator lists the message's recipients, worst first and then by id, so
+    whoever it failed for is at the top and the order cannot reshuffle
+    underneath a tap (APP-10's rule). The row's state is a *combination* of two
+    independent facts, which is why it became `GroupConversation.stageFor` with
+    tests of its own rather than a `switch` in the widget: `GroupDelivery.state`
+    is what that recipient's **server** did with our copy, the watermarks are
+    what the **recipient** confirmed, and only "the server took it" leaves
+    anything for a receipt to add. Hence a stage named `sent` distinct from
+    `received` — a copy sitting in somebody's queue until their phone next
+    connects is not a copy they have. Retry is offered only when a copy actually
+    failed, labelled "Resend to those it failed for" because the guarantee worth
+    stating is the one about *not* re-sending: `retryGroupSend` never revisits a
+    delivered copy, so nobody gets it twice. Two details the wiring forced: the
+    indicator stays inert for a message nobody was owed a copy of (a group of
+    pending invitees) rather than opening an empty sheet, and the sheet re-reads
+    the message from the session on every rebuild instead of capturing it — the
+    fan-out mutates deliveries in place, and a receipt arriving while the sheet
+    is open is precisely what it was opened to watch
   - the UI — **first cut done 2026-08-03**: groups in the one chat list with
     their own glyph and author-prefixed preview, a `GroupChatScreen` with
     author lines and a k-of-N send indicator, creating a group, and joining or
     declining one behind a notice that says the group will see your address.
     The group info screen (member list, role actions, invite, leave/dissolve)
     the state-change system lines, the filter chips and the large-group warning
-    followed on the same day. Still to come: the delivery sheet (tapping the
-    k-of-N indicator for the per-member picture)
+    followed on the same day; message actions (APP-21), replying (APP-17) and
+    the delivery sheet closed it out on 2026-08-04
 
 ### APP-17 — Replying to a message in a group chat
 Status: `done` · Device verification outstanding · Part of: APP-16

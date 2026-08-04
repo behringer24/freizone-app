@@ -530,6 +530,28 @@ pending / failed recipients, and a retry there re-sends **only the failed
 recipients**, never the whole fan-out. A permanent "7/20" counter in every
 bubble was rejected: it is a number nobody cares about five minutes later.
 
+**The sheet, shipped 2026-08-04.** One thing had been glossed over above: a
+recipient's row is not one state but the meeting of two independent ones.
+`GroupDelivery.state` is what that recipient's *server* did with our copy;
+the receipt watermarks are what the *recipient* confirmed. The server's answer
+is consulted first, and only its "accepted" leaves anything for a receipt to
+add — so a failed copy can never be talked into looking confirmed by a stale
+watermark from an earlier message, and `sent` exists as a stage distinct from
+`received`: a copy queued on somebody's server until their phone next connects
+is not a copy they have, and saying otherwise is the one lie a delivery list
+must not tell. That derivation is `GroupConversation.stageFor`, next to the
+counts it shares its comparison with, rather than a `switch` inside the widget.
+
+Rows sort worst first and then by account id — whoever it failed for is at the
+top, and the order cannot reshuffle under a tap (APP-10's rule for the admin
+list). Retry appears only when something actually failed, and is labelled for
+what it will *not* do: the copies that arrived are never re-sent, so no member
+receives the message twice. The sheet re-reads its message from the session on
+every rebuild rather than capturing it, because the fan-out mutates deliveries
+in place and a receipt arriving while it is open is exactly what it is open for.
+A message nobody was owed a copy of — a group whose other members are all
+pending invitees — leaves the indicator inert instead of opening an empty sheet.
+
 **Receipts, and who is entitled to them** (built 2026-08-03). What the bubble
 counts is the recipients' own confirmations, not what their servers accepted —
 and a confirmation is sent **only to the author of the message it is about**.

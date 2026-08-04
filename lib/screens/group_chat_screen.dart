@@ -23,6 +23,7 @@ import '../util/errors.dart';
 import '../util/message_actions.dart';
 import '../util/quoted_author.dart';
 import '../widgets/attachment_thumbnail.dart';
+import '../widgets/group_delivery_sheet.dart';
 import '../widgets/image_attachment.dart';
 import '../widgets/pattern_background.dart';
 import '../widgets/pinned_message_bar.dart';
@@ -841,7 +842,23 @@ class _GroupBubble extends StatelessWidget {
                     if (mine)
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,
-                        children: [_statusFor(context, message, onBubble)],
+                        children: [
+                          // The counts are the summary; who is who is behind a
+                          // tap, on purpose (APP-16). A message nobody was owed
+                          // a copy of has nothing to list, so it stays inert
+                          // rather than opening an empty sheet.
+                          GestureDetector(
+                            onTap: message.deliveries.isEmpty
+                                ? null
+                                : () => showGroupDeliverySheet(
+                                    context,
+                                    session: session,
+                                    groupId: chat.groupId,
+                                    messageId: message.id,
+                                  ),
+                            child: _statusFor(context, message, onBubble),
+                          ),
+                        ],
                       ),
                   ],
                 ),

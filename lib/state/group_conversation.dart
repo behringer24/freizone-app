@@ -14,6 +14,29 @@ import '../ffi/models.dart';
 import 'chat_target.dart';
 import 'receipt_signal.dart';
 
+/// How far one member's copy of a group message has got, from the two things
+/// that can be known about it: whether their server took it, and whether they
+/// themselves confirmed it.
+///
+/// Declared **worst first**, and the order is used: the delivery sheet sorts by
+/// it, so the members something can still be done about are at the top.
+enum GroupDeliveryStage {
+  /// Their server refused the copy, or could not be reached. The only stage a
+  /// retry addresses.
+  failed,
+
+  /// Still in flight.
+  sending,
+
+  /// Their server took it, and they have not confirmed anything yet. Not the
+  /// same as "received": a queued copy sits on their server until their device
+  /// next connects.
+  sent,
+
+  received,
+  read,
+}
+
 /// One group conversation: the locally persisted transcript, plus the receipt
 /// bookkeeping that a group needs per member rather than per chat.
 class GroupConversation extends ChatTarget {
@@ -96,10 +119,49 @@ class GroupConversation extends ChatTarget {
     final anchor = message.receiptAnchor;
     var count = 0;
     for (final delivery in message.deliveries) {
-      final mark = watermarks[delivery.accountId];
-      if (mark != null && !mark.isBefore(anchor)) count++;
+      if (_reached(watermarks, delivery.accountId, anchor)) count++;
     }
     return count;
+  }
+
+  static bool _reached(
+    Map<String, DateTime> watermarks,
+    String accountId,
+    DateTime anchor,
+  ) {
+    final mark = watermarks[accountId];
+    return mark != null && !mark.isBefore(anchor);
+  }
+
+  /// How far one recipient's copy of [message] has actually got -- what the
+  /// delivery sheet lists per member, and the reason the counts above are not
+  /// the whole story.
+  ///
+  /// Two independent sources meet here: [GroupDelivery.state] is what that
+  /// recipient's *server* did with our copy, and the watermarks are what the
+  /// recipient themselves confirmed. A copy the server took can still be
+  /// unconfirmed, and a copy that failed can never be confirmed -- so the
+  /// server's answer is consulted first and only "sent" leaves anything for
+  /// the receipts to add.
+  GroupDeliveryStage stageFor(StoredMessage message, GroupDelivery delivery) {
+    switch (delivery.state) {
+      case MessageSendState.failed:
+        return GroupDeliveryStage.failed;
+      case MessageSendState.pending:
+        return GroupDeliveryStage.sending;
+      case MessageSendState.sent:
+        break;
+    }
+    final anchor = message.receiptAnchor;
+    // Read implies received, so it is tested first -- a member whose read
+    // receipt arrived while their delivered one was lost is read, not pending.
+    if (_reached(memberReadUpTo, delivery.accountId, anchor)) {
+      return GroupDeliveryStage.read;
+    }
+    if (_reached(memberDeliveredUpTo, delivery.accountId, anchor)) {
+      return GroupDeliveryStage.received;
+    }
+    return GroupDeliveryStage.sent;
   }
 
   /// Records a member's confirmation, monotonically: an out-of-order or
