@@ -436,7 +436,16 @@ over APP-08's outbox, and the group UI.
     `ensureAttachmentDownloaded` is keyed on a chat-neutral id. What is missing is
     the *rendering* (`_GroupBubble` draws `message.text` only, so a picture that
     has arrived is invisible) and the send side, which needs one upload per
-    distinct recipient server -- a blob lives on the recipient's server
+    distinct recipient server -- a blob lives on the recipient's server.
+    2026-08-03: the send half turned out to be blocked in the core, and is
+    tracked there as **SRV-18** — a blob was bound to one *device*, so "one
+    upload per server" would in fact have been one upload per member. The core
+    side shipped the same day (repeated `recipient_device_id`, per-recipient
+    outcomes, `max_blob_recipients` on `/v1/server-status` whose **absence
+    means 1**), verified federated, so nothing blocks this any more. What is
+    left here: the rendering, and a send fan-out that groups the joined members
+    by server, reads each server's blob capabilities, uploads once per server,
+    and builds each member's reference from that server's `blob_id`
   - **the delivery sheet**: tapping the k-of-N indicator for the per-member
     picture. The data behind it now exists (per-member delivered/read
     watermarks); only the sheet is missing
