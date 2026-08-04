@@ -43,15 +43,36 @@ String generateMessageId() {
 /// on the wire (see AppSession.sendMessage), so decoding it here never
 /// needs a second inversion.
 class ReplyPreview {
-  const ReplyPreview({required this.text, required this.mine});
+  const ReplyPreview({required this.text, required this.mine, this.author});
 
   final String text;
   final bool mine;
 
-  factory ReplyPreview.fromJson(Map<String, dynamic> j) =>
-      ReplyPreview(text: j['text'] as String? ?? '', mine: j['mine'] as bool? ?? false);
+  /// Who wrote the quoted message, as an account id (APP-17). Absolute, so
+  /// unlike [mine] it is never flipped for the receiver's perspective.
+  ///
+  /// Only needed in a group, and only sent there: [mine] identifies the
+  /// author completely in a one-to-one chat, where there are two people --
+  /// so a one-to-one reply stays byte-identical to what it was before this
+  /// field existed. Among N members `mine: false` says only "not you", which
+  /// is why the id has to travel.
+  ///
+  /// Optional in both directions: a reply from a build predating this field
+  /// carries none, and the renderer falls back to local history rather than
+  /// guessing (see GroupChatScreen's quoted-author resolution).
+  final String? author;
 
-  Map<String, dynamic> toJson() => {'text': text, 'mine': mine};
+  factory ReplyPreview.fromJson(Map<String, dynamic> j) => ReplyPreview(
+    text: j['text'] as String? ?? '',
+    mine: j['mine'] as bool? ?? false,
+    author: j['author'] as String?,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'text': text,
+    'mine': mine,
+    if (author != null) 'author': author,
+  };
 }
 
 /// The largest inline preview thumbnail an attachment may carry, in bytes.

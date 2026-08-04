@@ -17,13 +17,17 @@ import '../state/app_settings.dart';
 import '../state/chat_target.dart';
 import '../state/group_conversation.dart';
 import '../state/outgoing_attachment.dart';
+import '../util/address_format.dart';
 import '../util/avatar_color.dart';
 import '../util/errors.dart';
 import '../util/message_actions.dart';
+import '../util/quoted_author.dart';
 import '../widgets/attachment_thumbnail.dart';
 import '../widgets/image_attachment.dart';
 import '../widgets/pattern_background.dart';
 import '../widgets/pinned_message_bar.dart';
+import '../widgets/reply_composer_bar.dart';
+import '../widgets/reply_quote.dart';
 import 'group_info_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
@@ -51,6 +55,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   /// is typed alongside it. One at a time, exactly as in a one-to-one chat.
   OutgoingAttachment? _pendingAttachment;
   bool _preparing = false;
+
+  /// The message being answered, while a reply is being composed (APP-17).
+  /// Transient like [_pendingAttachment]: cleared on send, and never persisted
+  /// -- an unsent reply is not a message.
+  StoredMessage? _replyingTo;
 
   /// Stable per-message keys, reused across rebuilds, so the pinned bar can
   /// scroll to a message that isn't near the bottom of the list. The same
@@ -168,17 +177,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Future<void> _send() async {
     final text = _composer.text.trim();
     final attachment = _pendingAttachment;
+    final replyToId = _replyingTo?.id;
     if (_preparing || _sending) return;
     if (text.isEmpty && attachment == null) return;
     _composer.clear();
     setState(() {
       _sending = true;
       _pendingAttachment = null;
+      _replyingTo = null;
     });
     try {
       await widget.session.sendGroupMessage(
         widget.groupId,
         text,
+        replyToId: replyToId,
         attachment: attachment,
       );
     } catch (e) {
@@ -342,8 +354,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   'Waiting for this group\'s details from another member.',
                 )
               else ...[
-                // Directly above the input, matching where a one-to-one chat
-                // puts it: the picture is part of the message being composed.
+                if (_replyingTo != null)
+                  ReplyComposerBar(
+                    replyingTo: _replyingTo!,
+                    label: 'Replying to ${_composerAuthorLabel(_replyingTo!)}',
+                    onCancel: () => setState(() => _replyingTo = null),
+                  ),
+                // Directly above the input, below any reply bar, matching where
+                // a one-to-one chat puts them: the reply is context for the
+                // message, the picture is part of it.
                 if (_pendingAttachment != null)
                   _buildAttachmentComposerBar(context, _pendingAttachment!),
                 _buildComposer(context),
@@ -353,6 +372,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         );
       },
     );
+  }
+
+  /// Names the author of the message being answered, for the composer bar.
+  ///
+  /// Always answerable, unlike the quote inside a bubble: the message is in
+  /// this transcript right now, which is how it came to be long-pressed.
+  /// APP-18 will put a name here where this account has assigned one.
+  String _composerAuthorLabel(StoredMessage message) {
+    if (message.mine) return 'yourself';
+    final author = message.senderAccountId;
+    return author == null ? 'this message' : shortAccountId(author);
   }
 
   String _subtitleFor(GroupResolved resolved) {
@@ -393,9 +423,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
   }
 
-  /// Long-press menu for one group message: pin/unpin, or delete it from this
-  /// device (APP-21). Both are purely local -- no other member sees either.
-  /// Replying is APP-17 and needs a wire field, so it is not offered yet.
+  /// Long-press menu for one group message: reply (APP-17), pin/unpin, or
+  /// delete it from this device (APP-21). Only the reply leaves this device;
+  /// the other two are local, and no other member sees them.
   Future<void> _showMessageActions(
     BuildContext context,
     GroupConversation chat,
@@ -407,6 +437,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       builder: (context) => SafeArea(
         child: Wrap(
           children: [
+            // First, in ChatScreen's order -- the one action here that
+            // produces a message rather than rearranging this device's view.
+            ListTile(
+              leading: const Icon(Icons.reply),
+              title: const Text('Reply'),
+              onTap: () => Navigator.of(context).pop('reply'),
+            ),
             ListTile(
               leading: Icon(
                 isPinned ? Icons.push_pin_outlined : Icons.push_pin,
@@ -427,6 +464,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (action == null || !context.mounted) return;
 
     switch (action) {
+      case 'reply':
+        setState(() => _replyingTo = message);
+        break;
       case 'pin':
         await widget.session.pinMessage(widget.groupId, message.id);
         break;
@@ -478,6 +518,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           !message.mine &&
           message.senderAccountId != null &&
           previous?.senderAccountId != message.senderAccountId;
+      // Only the original knows whether it was a picture -- the reply carries
+      // a text snapshot only -- so this is best-effort from local history and
+      // simply stays false once the original is gone, exactly as in a
+      // one-to-one chat.
+      final quoted = message.replyToId == null
+          ? null
+          : chat.messageById(message.replyToId!);
       bubbles.add(
         _GroupBubble(
           key: _keyFor(message.id),
@@ -486,7 +533,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           chat: chat,
           session: widget.session,
           isPinned: chat.pinnedMessageIds.contains(message.id),
+          quotedHasImage:
+              quoted != null &&
+              quoted.hasAttachments &&
+              quoted.attachments.first.isImage,
           onLongPress: () => _showMessageActions(context, chat, message),
+          onTapQuote: message.replyToId == null
+              ? null
+              : () => _scrollToMessage(message.replyToId!),
         ),
       );
     }
@@ -669,10 +723,19 @@ class _GroupBubble extends StatelessWidget {
     required this.session,
     required this.isPinned,
     required this.onLongPress,
+    this.quotedHasImage = false,
+    this.onTapQuote,
   });
 
   final StoredMessage message;
   final bool showAuthor;
+
+  /// Whether the message this one quotes was a picture (APP-13's stand-in
+  /// icon). Best-effort, from local history -- see the caller.
+  final bool quotedHasImage;
+
+  /// Scrolls to the quoted original, when this message is a reply.
+  final VoidCallback? onTapQuote;
 
   /// Draws the pin marker over the bubble's outer corner, as in a one-to-one
   /// chat -- so a pinned message is recognizable in the transcript itself and
@@ -745,7 +808,7 @@ class _GroupBubble extends StatelessWidget {
                   children: [
                     if (showAuthor && author != null)
                       Text(
-                        _shortId(author),
+                        shortAccountId(author),
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
@@ -755,6 +818,7 @@ class _GroupBubble extends StatelessWidget {
                           color: avatarColorFor(author),
                         ),
                       ),
+                    if (message.isReply) _buildQuote(context, mine, onBubble),
                     if (message.hasAttachments) ...[
                       // The same widget the one-to-one bubble uses, keyed on the
                       // group id: it only ever names the directory the file
@@ -799,6 +863,31 @@ class _GroupBubble extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  /// The quote block above a reply's own text (APP-17) -- ChatScreen's widget,
+  /// differing only in that the author has to be worked out rather than being
+  /// one of two people.
+  Widget _buildQuote(BuildContext context, bool mine, Color onBubble) {
+    final author = resolveQuotedAuthor(
+      reply: message,
+      chat: chat,
+      myAccountId: session.state.accountId,
+    );
+    return ReplyQuote(
+      previewText: message.replyPreviewText ?? '',
+      authorLabel: author.label,
+      onBubble: onBubble,
+      // The author's own colour, so the same person reads the same in a quote,
+      // in an author line and in the member list. Not inside my own bubble:
+      // that background is the theme's primary, against which a palette colour
+      // has no contrast guarantee.
+      authorColor: mine || author.accountId == null
+          ? null
+          : avatarColorFor(author.accountId!),
+      quotedHasImage: quotedHasImage,
+      onTap: onTapQuote,
     );
   }
 
@@ -908,6 +997,4 @@ class _GroupBubble extends StatelessWidget {
     );
   }
 
-  static String _shortId(String accountId) =>
-      accountId.length > 5 ? accountId.substring(0, 5) : accountId;
 }

@@ -84,6 +84,48 @@ void main() {
       expect(restored.sentReceiptUpTo['qclara00000000000000a'], DateTime.utc(2026, 8, 2, 9));
     });
 
+    test('a reply keeps the quoted author across a restart', () {
+      // The fan-out rebuilds each copy's wire quote from the stored fields, so
+      // a reply the outbox retries after a restart would otherwise arrive with
+      // its quote unattributed -- and a group quote cannot recover the author
+      // from `mine`, which is the whole reason the field exists (APP-17).
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      chat.messages.add(
+        StoredMessage(
+          text: 'passt',
+          mine: true,
+          timestamp: DateTime.utc(2026, 8, 2, 12),
+          sendState: MessageSendState.failed,
+          replyToId: 'm1',
+          // Empty is a real value -- a reply to a picture with no caption --
+          // and must not be confused with absent.
+          replyPreviewText: '',
+          replyPreviewMine: false,
+          replyPreviewAuthorId: 'qclara00000000000000a',
+        ),
+      );
+
+      final restored = GroupConversation.fromJson(chat.toJson()).messages.single;
+      expect(restored.isReply, isTrue);
+      expect(restored.replyPreviewText, '');
+      expect(restored.replyPreviewMine, isFalse);
+      expect(restored.replyPreviewAuthorId, 'qclara00000000000000a');
+    });
+
+    test('a one-to-one reply stores no quoted author', () {
+      // Two people, so `mine` names the author completely -- and existing
+      // history stays byte-identical for having gained nothing.
+      final json = StoredMessage(
+        text: 'agreed',
+        mine: true,
+        timestamp: DateTime.utc(2026, 8, 2, 12),
+        replyToId: 'm1',
+        replyPreviewText: 'Samstag?',
+        replyPreviewMine: false,
+      ).toJson();
+      expect(json.containsKey('reply_preview_author_id'), isFalse);
+    });
+
     test('an ordinary group costs no keys it does not need', () {
       final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
       final json = chat.toJson();

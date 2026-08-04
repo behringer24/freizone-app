@@ -509,7 +509,7 @@ over APP-08's outbox, and the group UI.
     k-of-N indicator for the per-member picture)
 
 ### APP-17 — Replying to a message in a group chat
-Status: `planned` · Part of: APP-16
+Status: `done` · Device verification outstanding · Part of: APP-16
 
 Long-press to reply, and a quote block that says **who** is being answered.
 Replying already works in a one-to-one chat; a group has the long-press menu
@@ -536,6 +536,30 @@ What is missing is the UI, plus one wire field:
   camera-icon stand-in for a quoted picture, and the author line should use
   `avatarColorFor` so a name in a quote matches the same person's colour in the
   transcript and the member list.
+
+- 2026-08-04 — shipped as planned, with the wire field as `author` inside
+  `reply_preview` and sent **only** by the group fan-out: in a one-to-one chat
+  `mine` identifies the author completely, so that message stays byte-identical
+  to what it was before this item. Both halves of the reply UI became shared
+  widgets rather than a second copy — `ReplyQuote` (the block inside the bubble)
+  and `ReplyComposerBar` (the "replying to …" bar), the same move APP-21 made
+  with `PinnedMessageBar`. Three things worth recording:
+  - the four-branch author fallback is a **pure function**
+    (`util/quoted_author.dart`, `resolveQuotedAuthor`) rather than a getter on
+    the bubble, because the failure mode is a confidently wrong name and that
+    deserves tests of its own. Its last branch is the interesting one: with no
+    stated author, no local copy of the quoted message, and `mine: false`, the
+    quote renders **with no author line at all** — "not you" is not a name
+  - resolving from local history has to read `mine` and not just
+    `senderAccountId`: that field is null on our own messages, which is the one
+    author a transcript never stores, not a missing one. Without that branch a
+    reply to *my own* message from an older build would have lost its label
+  - the author line takes `avatarColorFor` as asked, **except inside my own
+    bubble**, whose background is the theme's primary — the avatar palette is
+    curated for contrast against white, not against an arbitrary accent, so a
+    quote there would have been a colour with no readability guarantee. Deemed
+    the lesser loss: the colour identifies a person, and my own bubble is the
+    one place the surrounding transcript already says who is speaking
 
 ### APP-18 — Names, not short ids, in a group transcript
 Status: `planned` · Part of: APP-16 · Related: APP-19

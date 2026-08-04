@@ -252,6 +252,9 @@ StoredMessage storeGroupMessage(
     replyToId: content.replyToId,
     replyPreviewText: content.replyPreview?.text,
     replyPreviewMine: content.replyPreview?.mine,
+    // Absent from a sender on an older build; the quote then resolves its
+    // author from local history instead (APP-17).
+    replyPreviewAuthorId: content.replyPreview?.author,
     attachments: content.attachments,
   );
 

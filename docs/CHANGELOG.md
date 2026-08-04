@@ -18,6 +18,12 @@ each of which links the full design document.
 
 ### Added
 
+* Reply to a message in a group chat, the way you already can in a one-to-one
+  chat (`APP-17`). The quote above your reply names the person you are
+  answering, in their own colour, and tapping it jumps to their message.
+  Replies from people on an older version still show their quote — without a
+  name where this phone has no way to know whose message it was, rather than
+  with a guessed one
 * Long-press a message in a group chat to pin it or to delete it for yourself,
   the way you already can in a one-to-one chat (`APP-21`). Pinned group messages
   get the same bar above the transcript, and tapping it jumps to the message.

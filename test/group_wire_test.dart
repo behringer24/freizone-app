@@ -53,7 +53,11 @@ void main() {
         groupId: 'p2xjx0000000000000000',
         stateHash: 'abc123',
         replyToId: 'm1',
-        replyPreview: const ReplyPreview(text: 'Samstag?', mine: false),
+        replyPreview: const ReplyPreview(
+          text: 'Samstag?',
+          mine: false,
+          author: 'qk43rj6cphungwkeznxza',
+        ),
         sentAt: DateTime.utc(2026, 8, 2, 12),
         attachments: [
           MessageAttachment(
@@ -75,8 +79,65 @@ void main() {
       expect(decoded.text, 'passt');
       expect(decoded.replyToId, 'm1');
       expect(decoded.replyPreview?.text, 'Samstag?');
+      expect(decoded.replyPreview?.author, 'qk43rj6cphungwkeznxza');
       expect(decoded.attachments.single.blobId, 'a' * 64);
       expect(decoded.sentAt, DateTime.utc(2026, 8, 2, 12));
+    });
+
+    test('a quote without an author decodes as null, not as an empty id', () {
+      // What a reply from a build predating APP-17 looks like. The renderer
+      // falls back to local history for it, so "absent" and "somebody whose
+      // id is the empty string" must not be the same value.
+      final encoded = asBytes({
+        'v': 4,
+        'group_id': 'p2xjx0000000000000000',
+        'id': 'm3',
+        'text': 'passt',
+        'attachments': <dynamic>[],
+        'reply_to': 'm1',
+        'reply_preview': {'text': 'Samstag?', 'mine': false},
+      });
+
+      final decoded = MessageContent.decode(encoded, fallbackId: 'fallback');
+      expect(decoded.replyPreview?.text, 'Samstag?');
+      expect(decoded.replyPreview?.author, isNull);
+    });
+
+    test('a group quote states its author, a one-to-one quote does not', () {
+      // The author id exists because `mine: false` says only "not you" among
+      // N members. In a one-to-one chat it identifies the author completely,
+      // so the field is left off -- keeping that message byte-identical to
+      // what it was before APP-17.
+      final group = asJson(
+        const MessageContent(
+          id: 'm2',
+          text: 'passt',
+          groupId: 'p2xjx0000000000000000',
+          replyToId: 'm1',
+          replyPreview: ReplyPreview(
+            text: 'Samstag?',
+            mine: false,
+            author: 'qk43rj6cphungwkeznxza',
+          ),
+        ).encode(),
+      );
+      expect(
+        (group['reply_preview'] as Map<String, dynamic>)['author'],
+        'qk43rj6cphungwkeznxza',
+      );
+
+      final oneToOne = asJson(
+        const MessageContent(
+          id: 'm2',
+          text: 'passt',
+          replyToId: 'm1',
+          replyPreview: ReplyPreview(text: 'Samstag?', mine: false),
+        ).encode(),
+      );
+      expect(
+        (oneToOne['reply_preview'] as Map<String, dynamic>).containsKey('author'),
+        isFalse,
+      );
     });
 
     test('a v: 1 message decodes as a one-to-one message, not a group one', () {

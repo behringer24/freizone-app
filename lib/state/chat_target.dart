@@ -144,6 +144,7 @@ class StoredMessage {
     this.replyToId,
     this.replyPreviewText,
     this.replyPreviewMine,
+    this.replyPreviewAuthorId,
     this.kind = StoredMessageKind.normal,
     this.attachments = const [],
     this.sendState = MessageSendState.sent,
@@ -174,6 +175,7 @@ class StoredMessage {
     replyToId: j['reply_to_id'] as String?,
     replyPreviewText: j['reply_preview_text'] as String?,
     replyPreviewMine: j['reply_preview_mine'] as bool?,
+    replyPreviewAuthorId: j['reply_preview_author_id'] as String?,
     kind: _storedMessageKindFromJson(j['kind'] as String?),
     attachments: _attachmentsFromJson(j['attachments']),
     sendState: _sendStateFromJson(j['send_state'] as String?),
@@ -192,6 +194,8 @@ class StoredMessage {
     if (replyToId != null) 'reply_to_id': replyToId,
     if (replyPreviewText != null) 'reply_preview_text': replyPreviewText,
     if (replyPreviewMine != null) 'reply_preview_mine': replyPreviewMine,
+    if (replyPreviewAuthorId != null)
+      'reply_preview_author_id': replyPreviewAuthorId,
     if (kind != StoredMessageKind.normal) 'kind': kind.name,
     if (attachments.isNotEmpty)
       'attachments': attachments.map((a) => a.toJson()).toList(),
@@ -296,6 +300,13 @@ class StoredMessage {
   final String? replyToId;
   final String? replyPreviewText;
   final bool? replyPreviewMine;
+
+  /// Who wrote the quoted message (APP-17), for a group quote that has to
+  /// name an author among N rather than two. Null for a one-to-one reply,
+  /// where [replyPreviewMine] already answers it, and null for a group reply
+  /// from a build predating the field -- the renderer falls back to local
+  /// history and then to no author line, never to a guess.
+  final String? replyPreviewAuthorId;
 
   bool get isReply => replyToId != null;
 }
