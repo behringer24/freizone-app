@@ -16,6 +16,37 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-04 (versionCode 18)
+
+Pictures in group chats.
+
+### Added
+
+* Send a picture into a group, with or without a caption, and see the ones other
+  members send (`APP-16`). One upload serves every member on the same server
+  instead of one upload each, so sending into a large group no longer costs a
+  copy of the picture per person on your connection (`SRV-18`)
+* If a member's server does not store attachments, or will not take a picture
+  that size, the message still reaches them as text and the bubble says how many
+  members could not receive the picture — instead of the send failing for
+  everybody or failing silently
+
+### Changed
+
+* A picture now starts downloading the moment its message arrives, rather than
+  when you open the chat, so it is usually already there by the time you look
+* Group chats got the same patterned background as one-to-one chats, and open
+  scrolled to the newest message instead of somewhere in the middle
+
+### Fixed
+
+* A picture that failed to upload because of a dropped connection was recorded as
+  "this member cannot receive pictures" permanently, with no further attempt. Only
+  a server that actually refuses is treated that way now; anything else is retried
+  and the message then arrives complete
+* The loading placeholder on a picture was slightly too large for small bubbles,
+  which made it look square
+
 ## [0.13.0] — 2026-08-03 (versionCode 17)
 
 Groups, made usable: everything between inviting somebody and knowing they got
