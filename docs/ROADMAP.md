@@ -926,3 +926,16 @@ with APP-17, which needs a wire field first.
   one wording, `ChatTarget`-typed) rather than a second copy in the group
   screen, and the group transcript builds eagerly now so the bar can actually
   scroll to an older pin.
+
+### APP-22 — Verified-operator badge
+Status: `planned` · Also affects: freizone-server (SRV-19)
+Design: [design/22-verified-badge.md](design/22-verified-badge.md)
+
+Show that a server is operated in agreement with the project. SRV-19 carries the
+attestation and the verification rule; what lands here is placement — the setup
+wizard, the account switcher's existing avatar slot, the server line of a peer's
+profile, and the admin area's own status with an expiry warning. And, the
+delicate half, the places it is kept out of: a tick beside a person's name says
+something this attestation does not.
+
+- 2026-08-05 — created alongside SRV-19
