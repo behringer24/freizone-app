@@ -13,6 +13,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../ffi/models.dart';
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../state/app_settings.dart';
 import '../state/chat_target.dart';
 import '../state/group_conversation.dart';
@@ -37,11 +38,15 @@ class GroupChatScreen extends StatefulWidget {
     required this.session,
     required this.groupId,
     required this.settings,
+    required this.contacts,
   });
 
   final AppSession session;
   final String groupId;
   final AppSettings settings;
+
+  /// The one place a peer's name lives (APP-19).
+  final ContactStore contacts;
 
   @override
   State<GroupChatScreen> createState() => _GroupChatScreenState();
@@ -316,7 +321,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(chat.titleFor(widget.session.state.server)),
+                  Text(chat.titleFor(widget.session.state.server, widget.contacts)),
                   if (resolved != null)
                     Text(
                       _subtitleFor(resolved),

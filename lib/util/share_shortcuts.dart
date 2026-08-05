@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 
 import '../state/account_manager.dart';
 import '../state/app_settings.dart';
+import '../state/contact_store.dart';
 import 'avatar_bitmap.dart';
 
 const _channel = MethodChannel('freizone/share_shortcuts');
@@ -114,6 +115,7 @@ Future<void> clearShareShortcuts() async {
 Future<void> syncShareShortcuts(
   AccountManager manager,
   AppSettings settings,
+  ContactStore contacts,
 ) async {
   if (!settings.directShareEnabled) {
     await clearShareShortcuts();
@@ -132,7 +134,7 @@ Future<void> syncShareShortcuts(
       candidates.add((
         accountId: session.state.accountId,
         peerAccountId: convo.peerAccountId,
-        label: convo.titleFor(session.state.server),
+        label: convo.titleFor(session.state.server, contacts),
         at: convo.lastActivityAt,
       ));
     }

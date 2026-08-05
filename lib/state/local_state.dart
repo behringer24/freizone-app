@@ -42,18 +42,16 @@ class OneTimePrekeyState {
 /// chat would silently un-block them the moment they wrote again, and
 /// there'd be no conversation left to unblock them *from* either.
 class BlockedPeer {
-  BlockedPeer({required this.peerAccountId, this.peerServer, this.displayName});
+  BlockedPeer({required this.peerAccountId, this.peerServer});
 
   factory BlockedPeer.fromJson(Map<String, dynamic> j) => BlockedPeer(
     peerAccountId: j['peer_account_id'] as String,
     peerServer: j['peer_server'] as String?,
-    displayName: j['display_name'] as String?,
   );
 
   Map<String, dynamic> toJson() => {
     'peer_account_id': peerAccountId,
     if (peerServer != null) 'peer_server': peerServer,
-    if (displayName != null) 'display_name': displayName,
   };
 
   final String peerAccountId;
@@ -61,8 +59,15 @@ class BlockedPeer {
   /// Snapshotted from the conversation at block time -- purely for
   /// display in the "Blocked contacts" list if the conversation itself
   /// is later deleted, never re-resolved.
+  ///
+  /// There is deliberately no name here any more (APP-19). It existed only so
+  /// the blocked list could show one with no conversation left, which is exactly
+  /// what the contact store now answers -- and keeping a second copy would mean
+  /// renaming a contact left a stale name on this screen. A blocked peer who was
+  /// never a contact shows their short address, which is honest rather than a
+  /// regression. Any name that was in here has already been lifted into the
+  /// store by importExistingAliases before this field went away.
   final String? peerServer;
-  final String? displayName;
 }
 
 /// How many processed message ids [AppState.processedMessageIds] keeps.
@@ -539,6 +544,34 @@ class LocalStateStore {
       profiles.add(
         AppState.fromJson(json.decode(data) as Map<String, dynamic>),
       );
+    }
+    return profiles;
+  }
+
+  /// Every locally stored profile as **raw decoded JSON**, unparsed.
+  ///
+  /// Exists for the one-time contact-name import (APP-19), and the rawness is
+  /// the point rather than an optimization: that import is the only reader of
+  /// fields the parsed model is about to stop having. Going through
+  /// [AppState.fromJson] would make a one-shot migration depend on what the
+  /// current model still happens to parse -- so removing a field and importing
+  /// it would have to happen in a particular release order, and a user skipping
+  /// a version would silently lose the data instead.
+  static Future<List<Map<String, dynamic>>> listProfileJson() async {
+    final dir = await _dir();
+    await _migrateLegacyIfNeeded(dir);
+
+    final profiles = <Map<String, dynamic>>[];
+    for (final entity in dir.listSync()) {
+      final name = entity.path.split(Platform.pathSeparator).last;
+      if (entity is! File ||
+          !name.startsWith('freizone_profile_') ||
+          !name.endsWith('.json')) {
+        continue;
+      }
+      final data = await entity.readAsString();
+      final decoded = json.decode(data);
+      if (decoded is Map<String, dynamic>) profiles.add(decoded);
     }
     return profiles;
   }

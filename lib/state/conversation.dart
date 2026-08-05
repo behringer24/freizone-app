@@ -13,6 +13,7 @@ import 'dart:typed_data';
 import '../ffi/models.dart';
 import '../util/freizone_address.dart';
 import 'chat_target.dart';
+import 'contact_store.dart';
 import 'peer_endpoint.dart';
 
 export 'chat_target.dart';
@@ -22,7 +23,6 @@ export 'chat_target.dart';
 class Conversation extends ChatTarget {
   Conversation({
     required String peerAccountId,
-    super.displayName,
     String? peerServer,
     String? peerDeviceId,
     Uint8List? peerDevicePubKey,
@@ -45,7 +45,6 @@ class Conversation extends ChatTarget {
 
   factory Conversation.fromJson(Map<String, dynamic> j) => Conversation(
     peerAccountId: j['peer_account_id'] as String,
-    displayName: j['display_name'] as String?,
     peerServer: j['peer_server'] as String?,
     peerDeviceId: j['peer_device_id'] as String?,
     peerDevicePubKey: j['peer_device_pub_key'] == null
@@ -139,15 +138,21 @@ class Conversation extends ChatTarget {
   DateTime? sentDeliveredReceiptUpTo;
   DateTime? sentReadReceiptUpTo;
 
-  /// The alias if one is set, otherwise the peer's compact
-  /// "shortid*domain" address -- which server they're actually on is
+  /// The contact's name if this device has named them, otherwise the peer's
+  /// compact "shortid*domain" address -- which server they're actually on is
   /// worth always keeping visible (especially once federation means
   /// that isn't always this session's own server), more so than the
   /// full checksummed id. [localServer] fills in for [peerServer] ==
   /// null (this peer is on the same server as us).
+  ///
+  /// The name comes from [contacts] rather than from a field here (APP-19): it
+  /// belongs to the person, not to this chat with them, and one of my accounts
+  /// naming somebody names them for all of them. Falling back to the address is
+  /// the same behaviour a never-named peer has always had, which is what makes
+  /// "remove a contact" cost nothing but the label.
   @override
-  String titleFor(String localServer) =>
-      displayName ??
+  String titleFor(String localServer, ContactStore contacts) =>
+      contacts.nameFor(peerAccountId) ??
       shortFreizoneAddress(id: peerAccountId, server: peerServer ?? localServer);
 
   Map<String, dynamic> toJson() {

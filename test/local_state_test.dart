@@ -40,24 +40,21 @@ void main() {
       state.blockedPeers['peer1'] = BlockedPeer(
         peerAccountId: 'peer1',
         peerServer: 'chat.other.org',
-        displayName: 'Spammer',
       );
       final restored = AppState.fromJson(state.toJson());
       expect(restored.blockedPeers.keys, ['peer1']);
       expect(restored.blockedPeers['peer1']!.peerServer, 'chat.other.org');
-      expect(restored.blockedPeers['peer1']!.displayName, 'Spammer');
+      // No name snapshot any more (APP-19): the blocked list reads the contact
+      // store, so a second copy here could only go stale on a rename.
+      expect(state.blockedPeers['peer1']!.toJson().containsKey('display_name'), isFalse);
     });
 
-    test(
-      'blockedPeers survives without peerServer/displayName snapshots',
-      () {
-        final state = _minimalState();
-        state.blockedPeers['peer1'] = BlockedPeer(peerAccountId: 'peer1');
-        final restored = AppState.fromJson(state.toJson());
-        expect(restored.blockedPeers['peer1']!.peerServer, isNull);
-        expect(restored.blockedPeers['peer1']!.displayName, isNull);
-      },
-    );
+    test('blockedPeers survives without a peerServer snapshot', () {
+      final state = _minimalState();
+      state.blockedPeers['peer1'] = BlockedPeer(peerAccountId: 'peer1');
+      final restored = AppState.fromJson(state.toJson());
+      expect(restored.blockedPeers['peer1']!.peerServer, isNull);
+    });
   });
 
   group('AppState.processedMessageIds', () {

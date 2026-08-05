@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../net/dto.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
+import '../state/contact_store.dart';
 import '../util/address_format.dart';
 import '../util/admin_format.dart';
 import '../util/admin_list_view.dart';
@@ -21,6 +22,7 @@ class AdminScreen extends StatefulWidget {
     super.key,
     required this.session,
     required this.settings,
+    required this.contacts,
   });
 
   final AppSession session;
@@ -28,6 +30,9 @@ class AdminScreen extends StatefulWidget {
   /// Only needed to hand on to ChatScreen, which the detail view can open
   /// (APP-11) -- nothing on this screen itself reads it.
   final AppSettings settings;
+
+  /// Passed through to the screens that show a peer name (APP-19).
+  final ContactStore contacts;
 
   @override
   State<AdminScreen> createState() => _AdminScreenState();
@@ -382,6 +387,7 @@ class _AdminScreenState extends State<AdminScreen> {
             session: widget.session,
             settings: widget.settings,
             accountId: account.id,
+            contacts: widget.contacts,
           ),
         ),
       ),

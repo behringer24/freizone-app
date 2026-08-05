@@ -11,6 +11,9 @@ import 'screens/setup_screen.dart';
 import 'screens/share_target_screen.dart';
 import 'state/account_manager.dart';
 import 'state/app_settings.dart';
+import 'state/contact_import.dart';
+import 'state/contact_store.dart';
+import 'state/local_state.dart';
 import 'util/share_intake.dart';
 import 'util/share_shortcuts.dart';
 
@@ -23,14 +26,25 @@ Future<void> main(List<String> args) async {
   await initPush();
   if (!args.contains('--unifiedpush-bg')) {
     final settings = await AppSettings.load();
-    runApp(FreizoneApp(settings: settings));
+    // Device-wide like the settings, and loaded here for the same reason: it is
+    // not scoped to an account, so it exists before any account does (APP-19).
+    final contacts = await ContactStore.load();
+    runApp(FreizoneApp(settings: settings, contacts: contacts));
   }
 }
 
 class FreizoneApp extends StatelessWidget {
-  const FreizoneApp({super.key, required this.settings});
+  const FreizoneApp({
+    super.key,
+    required this.settings,
+    required this.contacts,
+  });
 
   final AppSettings settings;
+
+  /// The one place a peer's assigned name lives (APP-19). Passed down rather
+  /// than reached for globally, so a widget test can hand in its own.
+  final ContactStore contacts;
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +70,7 @@ class FreizoneApp extends StatelessWidget {
             ),
           ),
           themeMode: settings.themeMode,
-          home: AppRoot(settings: settings),
+          home: AppRoot(settings: settings, contacts: contacts),
         );
       },
     );
@@ -67,9 +81,10 @@ class FreizoneApp extends StatelessWidget {
 /// and routes to SetupScreen (no account on this device yet) or the
 /// account switcher + chat list otherwise.
 class AppRoot extends StatefulWidget {
-  const AppRoot({super.key, required this.settings});
+  const AppRoot({super.key, required this.settings, required this.contacts});
 
   final AppSettings settings;
+  final ContactStore contacts;
 
   @override
   State<AppRoot> createState() => _AppRootState();
@@ -110,7 +125,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // cheap enough here, and it keeps the share sheet roughly current without
     // listeners on every session. See syncShareShortcuts.
     if (foreground) {
-      unawaited(syncShareShortcuts(manager, widget.settings));
+      unawaited(syncShareShortcuts(manager, widget.settings, widget.contacts));
     } else {
       // Works around a stale on-screen-keyboard inset on Android: leaving the
       // app with a text field focused and the keyboard open can come back to
@@ -123,6 +138,17 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   Future<void> _load() async {
+    // Lifts every alias assigned so far out of the profiles and into the central
+    // store (APP-19), before anything else touches them. Reads the profiles as
+    // raw JSON rather than through AccountManager's parsed sessions, so this
+    // migration does not depend on the model still carrying the field it is
+    // migrating -- see importExistingAliases. The store remembers that it has
+    // run, so every later start is a no-op.
+    await importExistingAliases(
+      widget.contacts,
+      await LocalStateStore.listProfileJson(),
+    );
+
     final manager = await AccountManager.load(widget.settings);
     if (!mounted) return;
     setState(() {
@@ -144,7 +170,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     onShareReceived(_collectPendingShare);
     await _collectPendingShare();
 
-    unawaited(syncShareShortcuts(manager, widget.settings));
+    unawaited(syncShareShortcuts(manager, widget.settings, widget.contacts));
   }
 
   /// Takes whatever share the platform is holding and routes it: straight into
@@ -172,6 +198,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             builder: (_) => ChatScreen(
               session: session,
               peerAccountId: target.peerAccountId,
+              contacts: widget.contacts,
               settings: widget.settings,
               sharedText: share.text,
               sharedImagePath: share.imagePath,
@@ -188,6 +215,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           manager: manager,
           settings: widget.settings,
           share: share,
+          contacts: widget.contacts,
         ),
       ),
     );
@@ -229,11 +257,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             ? GroupChatScreen(
                 session: session,
                 groupId: chatId,
+                contacts: widget.contacts,
                 settings: widget.settings,
               )
             : ChatScreen(
                 session: session,
                 peerAccountId: chatId,
+                contacts: widget.contacts,
                 settings: widget.settings,
               ),
       ),
@@ -254,6 +284,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         },
       );
     }
-    return AccountShellScreen(manager: manager, settings: widget.settings);
+    return AccountShellScreen(
+      manager: manager,
+      settings: widget.settings,
+      contacts: widget.contacts,
+    );
   }
 }

@@ -9,12 +9,14 @@ import 'package:flutter/material.dart';
 import '../state/account_manager.dart';
 import '../push/push_manager.dart';
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../state/group_conversation.dart';
 import '../util/block_actions.dart';
 import '../util/errors.dart';
 import '../util/group_actions.dart';
+import '../util/permanent_removal.dart';
 import '../util/unread_dot.dart';
 import '../widgets/new_chat_sheet.dart';
 import '../widgets/peer_avatar.dart';
@@ -22,6 +24,7 @@ import 'admin_screen.dart';
 import 'backup_screen.dart';
 import 'blocked_contacts_screen.dart';
 import 'chat_screen.dart';
+import 'contacts_screen.dart';
 import 'group_chat_screen.dart';
 import 'invite_screen.dart';
 import 'my_address_screen.dart';
@@ -32,12 +35,16 @@ class ChatListScreen extends StatefulWidget {
     super.key,
     required this.session,
     required this.settings,
+    required this.contacts,
     required this.manager,
     this.appBarBottom,
   });
 
   final AppSession session;
   final AppSettings settings;
+
+  /// The one place a peer's name lives (APP-19).
+  final ContactStore contacts;
 
   /// Needed only to forward into SettingsScreen, so changing the push
   /// delivery preference there can re-register push on every live
@@ -147,7 +154,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ),
           Expanded(
             child: Text(
-              group.titleFor(session.state.server),
+              group.titleFor(session.state.server, widget.contacts),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -173,6 +180,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           builder: (_) => GroupChatScreen(
             session: session,
             groupId: group.groupId,
+            contacts: widget.contacts,
             settings: widget.settings,
           ),
         ),
@@ -214,7 +222,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             ),
           Expanded(
             child: Text(
-              convo.titleFor(session.state.server),
+              convo.titleFor(session.state.server, widget.contacts),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -235,6 +243,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           builder: (_) => ChatScreen(
             session: session,
             peerAccountId: convo.peerAccountId,
+            contacts: widget.contacts,
             settings: widget.settings,
           ),
         ),
@@ -294,7 +303,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
       final action = await showDialog<String>(
         context: context,
         builder: (context) => SimpleDialog(
-          title: Text(convo.titleFor(session.state.server)),
+          title: Text(convo.titleFor(session.state.server, widget.contacts)),
           children: [
             SimpleDialogOption(
               onPressed: () => Navigator.of(context).pop('accept'),
@@ -311,7 +320,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
       if (action == 'accept') {
         await session.acceptConversation(convo.peerAccountId);
       } else if (action == 'block') {
-        await confirmAndBlock(context, session, convo);
+        await confirmAndBlock(context, session, widget.contacts, convo);
       }
       return;
     }
@@ -319,7 +328,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final action = await showDialog<String>(
       context: context,
       builder: (context) => SimpleDialog(
-        title: Text(convo.titleFor(session.state.server)),
+        title: Text(convo.titleFor(session.state.server, widget.contacts)),
         children: [
           SimpleDialogOption(
             onPressed: () => Navigator.of(context).pop('clear'),
@@ -328,6 +337,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
           SimpleDialogOption(
             onPressed: () => Navigator.of(context).pop('delete'),
             child: const Text('Delete chat'),
+          ),
+          // Below "Delete chat" rather than beside it: it does strictly more,
+          // and it is the only one of the two that can cost a message
+          // (APP-19). What it costs, and whether it can, is decided by the
+          // directory check inside confirmAndRemovePermanently.
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(context).pop('remove_permanently'),
+            child: const Text('Remove permanently'),
           ),
           SimpleDialogOption(
             onPressed: () => Navigator.of(context).pop('reset'),
@@ -344,7 +361,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         builder: (context) => AlertDialog(
           title: const Text('Clear chat?'),
           content: Text(
-            'This permanently deletes the message history with ${convo.titleFor(session.state.server)} on this device. '
+            'This permanently deletes the message history with ${convo.titleFor(session.state.server, widget.contacts)} on this device. '
             'The conversation itself stays -- this cannot be undone.',
           ),
           actions: [
@@ -367,9 +384,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
         builder: (context) => AlertDialog(
           title: const Text('Delete chat?'),
           content: Text(
-            'This permanently removes the conversation with ${convo.titleFor(session.state.server)} and its message history from '
-            'this device -- this cannot be undone. ${convo.titleFor(session.state.server)} still exists; you can start a new chat with '
-            'them again any time.',
+            'This permanently removes the conversation with ${convo.titleFor(session.state.server, widget.contacts)} and its message history from '
+            'this device -- this cannot be undone. They are not told, and they '
+            'still exist: if they write again it arrives as a new request you '
+            'can accept or decline, and you can start a new chat with them any '
+            'time.',
           ),
           actions: [
             TextButton(
@@ -385,8 +404,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
       );
       if (confirmed == true)
         await session.deleteConversation(convo.peerAccountId);
+    } else if (action == 'remove_permanently') {
+      await confirmAndRemovePermanently(
+        context,
+        session,
+        widget.contacts,
+        convo,
+      );
     } else if (action == 'reset') {
-      await confirmAndResetSession(context, session, convo);
+      await confirmAndResetSession(context, session, widget.contacts, convo);
     }
   }
 
@@ -426,6 +452,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           builder: (_) => GroupChatScreen(
             session: widget.session,
             groupId: group.groupId,
+            contacts: widget.contacts,
             settings: widget.settings,
           ),
         ),
@@ -442,7 +469,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final peerAccountId = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => NewChatSheet(session: widget.session),
+      builder: (context) =>
+          NewChatSheet(session: widget.session, contacts: widget.contacts),
     );
     if (peerAccountId == null || !context.mounted) return;
     Navigator.of(context).push(
@@ -450,6 +478,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         builder: (_) => ChatScreen(
           session: widget.session,
           peerAccountId: peerAccountId,
+          contacts: widget.contacts,
           settings: widget.settings,
         ),
       ),
@@ -462,7 +491,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
   /// rather than always the active one.
   Widget _buildBody(BuildContext context, AppSession session) {
     return ListenableBuilder(
-      listenable: session,
+      // Rows are titled from the contact store, so a rename made anywhere
+      // has to reach this list (APP-19).
+      listenable: Listenable.merge([session, widget.contacts]),
       builder: (context, _) {
         // One-time push hint -- but never while this account's server is
         // unreachable: that state is already shown by the offline marking,
@@ -775,6 +806,23 @@ class _ChatListScreenState extends State<ChatListScreen> {
             : Colors.grey.shade100,
         bottom: widget.appBarBottom,
         actions: [
+          // Its own icon rather than an overflow entry (APP-19): the contacts
+          // area is the one screen here that is *not* about the selected
+          // account, and burying it would make "which of my accounts talks to
+          // this person" something you have to already know to look for.
+          IconButton(
+            icon: const Icon(Icons.contacts_outlined),
+            tooltip: 'Contacts',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ContactsScreen(
+                  manager: widget.manager,
+                  settings: widget.settings,
+                  contacts: widget.contacts,
+                ),
+              ),
+            ),
+          ),
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'my_address') {
@@ -791,6 +839,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                         builder: (_) => AdminScreen(
                           session: session,
                           settings: widget.settings,
+                          contacts: widget.contacts,
                         ),
                       ),
                     )
@@ -806,7 +855,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
               if (value == 'blocked') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => BlockedContactsScreen(session: session),
+                    builder: (_) => BlockedContactsScreen(
+                      session: session,
+                      contacts: widget.contacts,
+                    ),
                   ),
                 );
               }
@@ -819,6 +871,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     builder: (_) => SettingsScreen(
                       settings: widget.settings,
                       manager: widget.manager,
+                      contacts: widget.contacts,
                     ),
                   ),
                 );

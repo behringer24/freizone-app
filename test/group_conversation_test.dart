@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:freizone/state/chat_target.dart';
+import 'package:freizone/state/contact_store.dart';
 import 'package:freizone/state/group_conversation.dart';
 import 'package:freizone/state/local_state.dart';
 import 'package:freizone/state/receipt_signal.dart';
@@ -34,10 +35,13 @@ void main() {
       final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
       // The five leading characters are the version marker plus four of real
       // entropy -- the same grouping an account id is displayed in.
-      expect(chat.titleFor('https://a.example.org'), 'Group p2xjx');
+      // A group ignores the contact store: it named itself, so its name is not
+      // somebody's label for a person (APP-19).
+      final contacts = ContactStore.inMemory();
+      expect(chat.titleFor('https://a.example.org', contacts), 'Group p2xjx');
 
       chat.displayName = 'Wandergruppe';
-      expect(chat.titleFor('https://a.example.org'), 'Wandergruppe');
+      expect(chat.titleFor('https://a.example.org', contacts), 'Wandergruppe');
     });
 
     test('the chat-list preview names the author of a message', () {

@@ -18,6 +18,7 @@ import 'package:flutter/services.dart';
 import '../net/dto.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
+import '../state/contact_store.dart';
 import '../util/address_format.dart';
 import '../util/admin_format.dart';
 import '../util/errors.dart';
@@ -31,11 +32,15 @@ class AdminAccountScreen extends StatefulWidget {
     super.key,
     required this.session,
     required this.settings,
+    required this.contacts,
     required this.accountId,
   });
 
   final AppSession session;
   final AppSettings settings;
+
+  /// Passed through to the screens that show a peer name (APP-19).
+  final ContactStore contacts;
 
   /// Looked up from [AppSession.adminAccounts] on every build rather than
   /// passed as a snapshot, so blocking or unblocking is reflected here the
@@ -113,6 +118,7 @@ class _AdminAccountScreenState extends State<AdminAccountScreen> {
           builder: (_) => ChatScreen(
             session: widget.session,
             peerAccountId: widget.accountId,
+            contacts: widget.contacts,
             settings: widget.settings,
           ),
         ),
@@ -456,6 +462,7 @@ class _AdminAccountScreenState extends State<AdminAccountScreen> {
             session: widget.session,
             settings: widget.settings,
             accountId: inviter,
+            contacts: widget.contacts,
           ),
         ),
       ),

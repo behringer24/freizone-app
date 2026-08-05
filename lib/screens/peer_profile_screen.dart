@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../state/conversation.dart';
 import '../util/address_format.dart';
 import '../util/block_actions.dart';
@@ -18,10 +19,14 @@ class PeerProfileScreen extends StatelessWidget {
   const PeerProfileScreen({
     super.key,
     required this.session,
+    required this.contacts,
     required this.peerAccountId,
   });
 
   final AppSession session;
+
+  /// The one place a peer's name lives (APP-19).
+  final ContactStore contacts;
   final String peerAccountId;
 
   Future<void> _copy(BuildContext context, String label, String value) async {
@@ -32,19 +37,32 @@ class PeerProfileScreen extends StatelessWidget {
     ).showSnackBar(SnackBar(content: Text('$label copied to clipboard')));
   }
 
-  /// Same dialog used from the chat screen's own "Edit name" icon --
-  /// kept in sync since both are just alternate entry points to the
-  /// same purely-local alias.
+  /// Same dialog used from the chat screen's own "Edit name" icon -- kept in
+  /// sync since both are just alternate entry points to the same name.
+  ///
+  /// Writes to the contact store, not to this conversation (APP-19): the name is
+  /// the person's, so it applies to every account of mine that talks to them,
+  /// and clearing it removes the contact rather than blanking a field. Neither
+  /// touches the chat.
   Future<void> _showRenameDialog(
     BuildContext context,
     Conversation convo,
   ) async {
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => RenameDialog(initialName: convo.displayName ?? ''),
+      builder: (context) =>
+          RenameDialog(initialName: contacts.nameFor(peerAccountId) ?? ''),
     );
     if (result == null) return; // cancelled
-    await session.setDisplayName(peerAccountId, result.isEmpty ? null : result);
+    if (result.isEmpty) {
+      await contacts.remove(peerAccountId);
+      return;
+    }
+    await contacts.setName(
+      peerAccountId,
+      name: result,
+      server: convo.peerServer,
+    );
   }
 
   Future<void> _toggleBlock(BuildContext context, Conversation convo) async {
@@ -52,13 +70,15 @@ class PeerProfileScreen extends StatelessWidget {
       await session.setBlocked(peerAccountId, false);
       return;
     }
-    await confirmAndBlock(context, session, convo);
+    await confirmAndBlock(context, session, contacts, convo);
   }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: session,
+      // The session owns the conversation, the store owns the name -- and this
+      // screen is where the name is edited, so it has to see its own change.
+      listenable: Listenable.merge([session, contacts]),
       builder: (context, _) {
         final convo = session.conversation(peerAccountId);
         if (convo == null) {
@@ -82,8 +102,9 @@ class PeerProfileScreen extends StatelessWidget {
           id: convo.peerAccountId,
           server: peerServer,
         );
-        final hasAlias = convo.displayName != null;
-        final primaryText = hasAlias ? convo.displayName! : shortId;
+        final assignedName = contacts.nameFor(peerAccountId);
+        final hasAlias = assignedName != null;
+        final primaryText = hasAlias ? assignedName : shortId;
 
         return Scaffold(
           appBar: AppBar(title: Text('Profile $shortId')),
@@ -141,8 +162,7 @@ class PeerProfileScreen extends StatelessWidget {
               ListTile(
                 title: const Text('Peer name'),
                 subtitle: Text(
-                  convo.displayName ??
-                      'No name set -- shows the address instead',
+                  assignedName ?? 'No name set -- shows the address instead',
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.edit_outlined),
@@ -219,7 +239,7 @@ class PeerProfileScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: OutlinedButton.icon(
                   onPressed: () =>
-                      confirmAndResetSession(context, session, convo),
+                      confirmAndResetSession(context, session, contacts, convo),
                   icon: const Icon(Icons.lock_reset),
                   label: const Text('Reset secure session'),
                 ),

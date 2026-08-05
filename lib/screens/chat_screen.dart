@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../state/outgoing_attachment.dart';
@@ -41,6 +42,7 @@ class ChatScreen extends StatefulWidget {
     required this.session,
     required this.peerAccountId,
     required this.settings,
+    required this.contacts,
     this.sharedText,
     this.sharedImagePath,
   });
@@ -48,6 +50,9 @@ class ChatScreen extends StatefulWidget {
   final AppSession session;
   final String peerAccountId;
   final AppSettings settings;
+
+  /// The one place a peer's name lives (APP-19).
+  final ContactStore contacts;
 
   /// Text handed over from another app's share (APP-15). Pre-fills the
   /// composer; deliberately not sent, so the user can still edit or abandon it.
@@ -233,6 +238,7 @@ class _ChatScreenState extends State<ChatScreen> {
             builder: (_) => ChatScreen(
               session: widget.session,
               peerAccountId: convo.peerAccountId,
+              contacts: widget.contacts,
               settings: widget.settings,
             ),
           ),
@@ -245,7 +251,11 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       isScrollControlled: true,
       builder: (_) =>
-          NewChatSheet(session: widget.session, initialId: span.target),
+          NewChatSheet(
+            session: widget.session,
+            contacts: widget.contacts,
+            initialId: span.target,
+          ),
     );
     if (peerAccountId == null || !mounted) return;
     Navigator.of(context).push(
@@ -253,6 +263,7 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (_) => ChatScreen(
           session: widget.session,
           peerAccountId: peerAccountId,
+          contacts: widget.contacts,
           settings: widget.settings,
         ),
       ),
@@ -475,7 +486,7 @@ class _ChatScreenState extends State<ChatScreen> {
           key: _keyFor(m.id),
           message: m,
           timeLabel: _timeLabel(m.timestamp),
-          peerTitle: convo.titleFor(widget.session.state.server),
+          peerTitle: convo.titleFor(widget.session.state.server, widget.contacts),
           isPinned: convo.pinnedMessageIds.contains(m.id),
           deliveryStatus: _deliveryStatusFor(convo, m),
           session: widget.session,
@@ -504,12 +515,23 @@ class _ChatScreenState extends State<ChatScreen> {
   ) async {
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => RenameDialog(initialName: convo.displayName ?? ''),
+      builder: (context) => RenameDialog(
+        initialName: widget.contacts.nameFor(widget.peerAccountId) ?? '',
+      ),
     );
     if (result == null) return; // cancelled
-    await widget.session.setDisplayName(
+    // Writes the contact, not this conversation (APP-19) -- the same act as
+    // renaming from the profile screen, and clearing the field removes the
+    // contact rather than blanking a per-chat field. No chat is touched either
+    // way.
+    if (result.isEmpty) {
+      await widget.contacts.remove(widget.peerAccountId);
+      return;
+    }
+    await widget.contacts.setName(
       widget.peerAccountId,
-      result.isEmpty ? null : result,
+      name: result,
+      server: convo.peerServer,
     );
   }
 
@@ -527,6 +549,7 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (_) => PeerProfileScreen(
           session: widget.session,
           peerAccountId: widget.peerAccountId,
+          contacts: widget.contacts,
         ),
       ),
     );
@@ -534,7 +557,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildTitle(BuildContext context, Conversation convo) {
     final colorScheme = Theme.of(context).colorScheme;
-    final title = convo.titleFor(widget.session.state.server);
+    final title = convo.titleFor(widget.session.state.server, widget.contacts);
     final shortAddress = shortFreizoneAddress(
       id: convo.peerAccountId,
       server: convo.peerServer ?? widget.session.state.server,
@@ -546,12 +569,15 @@ class _ChatScreenState extends State<ChatScreen> {
           PeerAvatar(accountId: convo.peerAccountId, radius: 18),
           const SizedBox(width: 12),
           Expanded(
-            child: convo.displayName != null
+            child: widget.contacts.nameFor(convo.peerAccountId) != null
                 ? Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(convo.displayName!, overflow: TextOverflow.ellipsis),
+                      Text(
+                        widget.contacts.nameFor(convo.peerAccountId)!,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       // Always shown alongside the alias, smaller and muted,
                       // so which server this peer is actually on is never
                       // hidden behind a name someone else could equally claim.
@@ -583,7 +609,10 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         title: ListenableBuilder(
-          listenable: widget.session,
+          // Both: the session owns the conversation, the contact store owns
+          // the name shown here -- and this screen can rename from its own
+          // edit icon, so it has to see its own change (APP-19).
+          listenable: Listenable.merge([widget.session, widget.contacts]),
           builder: (context, _) => _buildTitle(
             context,
             widget.session.conversation(widget.peerAccountId)!,
@@ -601,7 +630,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
       body: ListenableBuilder(
-        listenable: widget.session,
+        listenable: Listenable.merge([widget.session, widget.contacts]),
         builder: (context, _) {
           final convo = widget.session.conversation(widget.peerAccountId)!;
           final items = _buildItems(context, convo);
@@ -878,12 +907,12 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             Expanded(
               child: Text(
-                '${convo.titleFor(widget.session.state.server)} wants to chat with you',
+                '${convo.titleFor(widget.session.state.server, widget.contacts)} wants to chat with you',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
             ),
             TextButton(
-              onPressed: () => confirmAndBlock(context, widget.session, convo),
+              onPressed: () => confirmAndBlock(context, widget.session, widget.contacts, convo),
               style: TextButton.styleFrom(foregroundColor: colorScheme.error),
               child: const Text('Block'),
             ),
@@ -910,7 +939,7 @@ class _ChatScreenState extends State<ChatScreen> {
       replyingTo: replyingTo,
       label: replyingTo.mine
           ? 'Replying to yourself'
-          : 'Replying to ${convo.titleFor(widget.session.state.server)}',
+          : 'Replying to ${convo.titleFor(widget.session.state.server, widget.contacts)}',
       onCancel: () => setState(() => _replyingTo = null),
     );
   }
