@@ -193,6 +193,7 @@ conversation partner rather than an arbitrary account.
   personal block and a ratchet reset are not an operator's actions — but nothing
   about its *layout* had a reason to differ, and the divergence was not a
   decision anybody had made
+- 2026-08-05 — looked at on device together with APP-19, no findings
 
 ### APP-12 — Push reliability: FCM token refresh while the app is closed
 Status: `done` · Device verification outstanding
@@ -645,7 +646,7 @@ per-account or app-wide is APP-19's open decision; APP-18 only needs it to exist
 per account, which both options provide.
 
 ### APP-19 — An app-wide contacts area
-Status: `done` · Device verification outstanding · Related: APP-18
+Status: `done` · Related: APP-18
 Design: [design/19-contacts.md](design/19-contacts.md)
 
 One place to keep the people this device knows, with its own icon in the main bar
@@ -802,6 +803,12 @@ this person**, so I do not write to someone from an identity they cannot place.
   permanent removal should mark the peer so their *first* undecryptable envelope
   triggers an immediate re-key instead of waiting for SRV-03's evidence to
   accumulate. It only matters in the case just called unlikely.
+- 2026-08-05 — **verified on device, no findings**, across all four phases: the
+  name import on first start, the contacts list and detail screen, adding by
+  hand, and the three deletions. Notable only because the two device runs during
+  APP-16 found four real problems each — those were on the receive and storage
+  paths, where several accounts on one device and a background isolate make the
+  state genuinely hard; this is a store with one writer and screens that read it.
 
 ### APP-20 — Save a picture from a transcript to the device gallery
 Status: `planned` · Part of: APP-04
