@@ -1,7 +1,7 @@
 # Design: An app-wide contacts area
 
-Status: shape decided 2026-08-04 · **built 2026-08-05** in four phases; device
-verification outstanding · Roadmap: [APP-19](../ROADMAP.md)
+Status: shape decided 2026-08-04 · **built and verified 2026-08-05**, in four
+phases · Roadmap: [APP-19](../ROADMAP.md)
 
 ## How it is being built
 
