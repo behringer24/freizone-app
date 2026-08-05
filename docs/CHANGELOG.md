@@ -16,6 +16,19 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Changed
+
+* The Server Admin account view now looks like the profile screens it sits
+  next to (`APP-11`): a large avatar with the role badge, the role and block
+  state at a glance, and both addresses copyable with one tap instead of an id
+  you had to select by hand. Blocking and deleting are now spelled out and
+  behind buttons rather than tappable rows
+
+### Fixed
+
+* The search box in the Server Admin user list moved its text as soon as you
+  typed, and sat too high (`APP-10`)
+
 ## [0.15.0] — 2026-08-04 (versionCode 19)
 
 The rest of what a group chat needs: replying, and seeing who got what.

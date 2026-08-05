@@ -152,6 +152,19 @@ a sort-order menu, both client-side over the fetched list.
 - 2026-08-02 — shipped. Search matches the normalized id, so display hyphens
   never have to be typed; each ordering has one fixed direction and breaks ties
   by id so the list cannot reshuffle between rebuilds
+- 2026-08-05 — the search box's text sat too high, and the cause was worth
+  finding rather than nudging a padding: the field **grew from 40 to 48 pixels
+  the moment a query existed**, because the clear button appears then and an
+  `IconButton` carries a 48×48 minimum in its `ButtonStyle` that
+  `constraints` alone does not override. So the text moved as soon as you typed.
+  Fixed by sizing both icon boxes for the icons they hold and stating
+  `textAlignVertical: TextAlignVertical.center` — a dense field with no label
+  otherwise anchors its content to the top of whatever height the icons force.
+  The field is now `AdminSearchField` in `lib/widgets/`, purely so it can be
+  pumped alone: the regression test asserts that the text, the search icon and
+  the clear icon share a centre line to within a pixel, and that the height does
+  not change when the clear button appears. Vertical alignment is invisible to
+  every other kind of test
 
 ### APP-11 — Admin-side user detail view
 Status: `done` · Depends on: SRV-08 · Also benefits from: SRV-09, SRV-14
@@ -164,6 +177,22 @@ conversation partner rather than an arbitrary account.
 - 2026-08-02 — shipped, with two additions beyond the original plan: who invited
   this account (admins only, from SRV-14) and a button to start or open a chat
   with them
+- 2026-08-05 — the screen was rebuilt to the shape the two profile screens
+  already had, which is what it should have been from the start. Above the
+  figures: the large avatar with its role badge, the role and block state as
+  chips, the short id in headline size and the server beneath it, then both
+  addresses as **copyable** rows. The header was previously a 32-pixel icon
+  beside a `SelectableText` id — which read as a database row rather than a
+  person, and made an operator select an id by hand where every other screen
+  hands it over in one tap. At the bottom, block-for-all and delete became
+  coloured section headings with a sentence each and a button, following
+  `profile_screen.dart`'s "Danger zone" and `peer_profile_screen.dart`'s
+  "Protection": a `ListTile` invites the tap before the text has been read,
+  which is the wrong shape for two actions that reach every device an account
+  owns. The screen stays its own file for the reasons at the top of it — a
+  personal block and a ratchet reset are not an operator's actions — but nothing
+  about its *layout* had a reason to differ, and the divergence was not a
+  decision anybody had made
 
 ### APP-12 — Push reliability: FCM token refresh while the app is closed
 Status: `done` · Device verification outstanding
@@ -660,7 +689,6 @@ this person**, so I do not write to someone from an identity they cannot place.
   consults `federationLocked` per account, so it never offers to start a chat from
   an account that cannot reach the contact — otherwise the option fails after
   being chosen, which is the mistake this screen exists to prevent
-
 ### APP-20 — Save a picture from a transcript to the device gallery
 Status: `planned` · Part of: APP-04
 
