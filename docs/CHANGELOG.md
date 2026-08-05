@@ -16,6 +16,11 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-08-05 (versionCode 21)
+
+Groups say who is talking: the names you have given people, everywhere a group
+used to show a five-character address.
+
 ### Added
 
 * Names instead of five-character addresses throughout a group (`APP-18`).
