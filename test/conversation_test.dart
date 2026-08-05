@@ -95,7 +95,10 @@ void main() {
         timestamp: DateTime.utc(2026, 1, 1),
         attachments: [image()],
       ));
-      expect(convo.lastMessagePreview, '📷 Photo');
+      // A one-to-one preview names nobody -- the row's title already does -- so
+      // the store it now takes (APP-18) changes nothing here.
+      final contacts = ContactStore.inMemory();
+      expect(convo.previewFor(contacts), '📷 Photo');
 
       convo.messages.add(StoredMessage(
         text: 'with a caption',
@@ -103,8 +106,8 @@ void main() {
         timestamp: DateTime.utc(2026, 1, 2),
         attachments: [image()],
       ));
-      expect(convo.lastMessagePreview, contains('📷 Photo'));
-      expect(convo.lastMessagePreview, contains('with a caption'));
+      expect(convo.previewFor(contacts), contains('📷 Photo'));
+      expect(convo.previewFor(contacts), contains('with a caption'));
     });
   });
 

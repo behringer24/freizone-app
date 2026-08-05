@@ -17,8 +17,9 @@ const accountIdPrefixLength = 5;
 /// APP-17). Not an identifier: it is unique per server, not globally, so it
 /// is for reading and never for resolving.
 ///
-/// Where this account has given the person a name, that name belongs here
-/// instead, with this in parentheses (APP-18).
+/// Rarely called directly for a *person*: `personLabel` (util/person_label.dart)
+/// puts the assigned name in front of this and keeps this in parentheses
+/// (APP-18).
 String shortAccountId(String id) =>
     id.length > accountIdPrefixLength ? id.substring(0, accountIdPrefixLength) : id;
 

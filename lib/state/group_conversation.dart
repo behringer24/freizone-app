@@ -11,6 +11,7 @@
 // time the fact set changes, so a chat-list row can be drawn without opening
 // every group's file.
 import '../ffi/models.dart';
+import '../util/person_label.dart';
 import 'chat_target.dart';
 import 'contact_store.dart';
 import 'receipt_signal.dart';
@@ -211,15 +212,19 @@ class GroupConversation extends ChatTarget {
   /// not answered by the conversation itself the way it is in a one-to-one
   /// chat. Falls back to the plain preview for our own messages and for
   /// history written before authors were recorded.
+  ///
+  /// The name this device has given them where there is one (APP-18), and the
+  /// *compact* label: a row that already truncates cannot spend a third of its
+  /// width on the short id in parentheses.
   @override
-  String get lastMessagePreview {
-    final base = super.lastMessagePreview;
+  String previewFor(ContactStore contacts) {
+    final base = super.previewFor(contacts);
     if (messages.isEmpty || base.isEmpty) return base;
     final last = messages.last;
     if (last.mine || last.kind != StoredMessageKind.normal) return base;
     final author = last.senderAccountId;
     if (author == null) return base;
-    return '${author.substring(0, author.length > 5 ? 5 : author.length)}: $base';
+    return '${personLabelCompact(contacts, author)}: $base';
   }
 
   Map<String, dynamic> toJson() {

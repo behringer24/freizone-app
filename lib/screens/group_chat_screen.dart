@@ -18,18 +18,21 @@ import '../state/app_settings.dart';
 import '../state/chat_target.dart';
 import '../state/group_conversation.dart';
 import '../state/outgoing_attachment.dart';
-import '../util/address_format.dart';
 import '../util/avatar_color.dart';
 import '../util/errors.dart';
+import '../util/freizone_address.dart';
 import '../util/message_actions.dart';
+import '../util/person_label.dart';
 import '../util/quoted_author.dart';
 import '../widgets/attachment_thumbnail.dart';
 import '../widgets/group_delivery_sheet.dart';
 import '../widgets/image_attachment.dart';
 import '../widgets/pattern_background.dart';
 import '../widgets/pinned_message_bar.dart';
+import '../widgets/rename_dialog.dart';
 import '../widgets/reply_composer_bar.dart';
 import '../widgets/reply_quote.dart';
+import 'chat_screen.dart';
 import 'group_info_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
@@ -295,7 +298,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: widget.session,
+      // The contact store alongside the session: naming somebody from this
+      // transcript has to relabel every bubble they wrote, the quotes answering
+      // them and the member list behind the title -- immediately, not on the
+      // next visit (APP-18).
+      listenable: Listenable.merge([widget.session, widget.contacts]),
       builder: (context, _) {
         final chat = widget.session.group(widget.groupId);
         final resolved = widget.session.groupState(widget.groupId)?.resolved;
@@ -315,6 +322,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   builder: (_) => GroupInfoScreen(
                     session: widget.session,
                     groupId: widget.groupId,
+                    contacts: widget.contacts,
                   ),
                 ),
               ),
@@ -384,11 +392,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   ///
   /// Always answerable, unlike the quote inside a bubble: the message is in
   /// this transcript right now, which is how it came to be long-pressed.
-  /// APP-18 will put a name here where this account has assigned one.
   String _composerAuthorLabel(StoredMessage message) {
     if (message.mine) return 'yourself';
     final author = message.senderAccountId;
-    return author == null ? 'this message' : shortAccountId(author);
+    return author == null
+        ? 'this message'
+        : personLabel(widget.contacts, author);
   }
 
   String _subtitleFor(GroupResolved resolved) {
@@ -438,6 +447,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     StoredMessage message,
   ) async {
     final isPinned = chat.pinnedMessageIds.contains(message.id);
+    // Who wrote it, when that is somebody other than me and is knowable at all:
+    // my own messages store no author, and a message from a build predating
+    // APP-16's sender field has none to find. Both mean the two entries about
+    // the author are simply absent rather than inert (APP-18).
+    final author = message.mine ? null : message.senderAccountId;
+    final named = author != null && widget.contacts.nameFor(author) != null;
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
@@ -450,6 +465,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               title: const Text('Reply'),
               onTap: () => Navigator.of(context).pop('reply'),
             ),
+            // The two entries about the *author*, kept together and above the
+            // ones about this device's view of the message (APP-18).
+            if (author != null) ...[
+              ListTile(
+                leading: const Icon(Icons.person_outline),
+                title: Text(named ? 'Change their name' : 'Name this person'),
+                // Said here because the effect is wider than this group, and
+                // wider than this account -- the surprise is worth pre-empting.
+                subtitle: const Text('Shows in every chat on this device'),
+                onTap: () => Navigator.of(context).pop('name'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline),
+                title: const Text('Message them directly'),
+                onTap: () => Navigator.of(context).pop('message'),
+              ),
+            ],
             ListTile(
               leading: Icon(
                 isPinned ? Icons.push_pin_outlined : Icons.push_pin,
@@ -473,6 +505,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       case 'reply':
         setState(() => _replyingTo = message);
         break;
+      case 'name':
+        await _nameAuthor(context, author!);
+        break;
+      case 'message':
+        await _messageDirectly(context, author!);
+        break;
       case 'pin':
         await widget.session.pinMessage(widget.groupId, message.id);
         break;
@@ -488,6 +526,94 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         );
         break;
     }
+  }
+
+  /// Names the author of a group message, or renames them (APP-18).
+  ///
+  /// Writes the contact store, never this group: a name is about the person, so
+  /// it takes effect in every chat on this device (APP-19). Empty means remove,
+  /// exactly as the dialog does everywhere else -- and removing the name leaves
+  /// the group, its transcript and its membership untouched.
+  ///
+  /// The member's home server is recorded alongside the name where the group
+  /// knows one. Without it a contact made from a transcript would be an address
+  /// nobody can start a chat from later -- the failure the contacts screen calls
+  /// "unreachable" and cannot explain.
+  Future<void> _nameAuthor(BuildContext context, String accountId) async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) =>
+          RenameDialog(initialName: widget.contacts.nameFor(accountId) ?? ''),
+    );
+    if (result == null) return;
+    if (result.isEmpty) {
+      await widget.contacts.remove(accountId);
+      return;
+    }
+    await widget.contacts.setName(
+      accountId,
+      name: result,
+      server: _memberServer(accountId),
+    );
+  }
+
+  /// Opens the one-to-one chat with a group member, starting it if this account
+  /// has none yet (APP-18).
+  ///
+  /// Always from *this* account -- the one whose group this is -- so the
+  /// multi-account question the contacts screen exists to ask is already
+  /// answered here: they have seen this account's address in this group, and it
+  /// is the one identity of mine they can place. Writing from another would
+  /// disclose a second address of mine, which cannot be taken back.
+  Future<void> _messageDirectly(BuildContext context, String accountId) async {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    // Already talking to them: the same conversation, not a second one.
+    if (!widget.session.state.conversations.containsKey(accountId)) {
+      final server = _memberServer(accountId);
+      try {
+        // The full address where the group knows their server, so a federated
+        // member resolves against their own server rather than this one. A bare
+        // id is the same fallback a same-server chat has always used.
+        await widget.session.startConversation(
+          server == null
+              ? accountId
+              : buildFreizoneAddress(id: accountId, server: server),
+        );
+      } catch (e) {
+        // Federation off, or their server unreachable. Said rather than
+        // swallowed: the group stays readable, so silence would look like the
+        // action had worked.
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text("Couldn't start the chat: ${describeError(e)}"),
+          ),
+        );
+        return;
+      }
+      if (!mounted) return;
+    }
+
+    navigator.push(
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          session: widget.session,
+          peerAccountId: accountId,
+          settings: widget.settings,
+          contacts: widget.contacts,
+        ),
+      ),
+    );
+  }
+
+  /// A member's home server as this group knows it, or null once they have left
+  /// -- the member list is the only place a group records one. `GroupMember`
+  /// defaults it to the empty string, which is an absence and not a server.
+  String? _memberServer(String accountId) {
+    final resolved = widget.session.groupState(widget.groupId)?.resolved;
+    final server = resolved?.memberById(accountId)?.server;
+    return server == null || server.isEmpty ? null : server;
   }
 
   Widget _buildTranscript(BuildContext context, GroupConversation chat) {
@@ -538,6 +664,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           showAuthor: showAuthor,
           chat: chat,
           session: widget.session,
+          contacts: widget.contacts,
           isPinned: chat.pinnedMessageIds.contains(message.id),
           quotedHasImage:
               quoted != null &&
@@ -727,6 +854,7 @@ class _GroupBubble extends StatelessWidget {
     required this.showAuthor,
     required this.chat,
     required this.session,
+    required this.contacts,
     required this.isPinned,
     required this.onLongPress,
     this.quotedHasImage = false,
@@ -735,6 +863,11 @@ class _GroupBubble extends StatelessWidget {
 
   final StoredMessage message;
   final bool showAuthor;
+
+  /// Where the author's name comes from (APP-18/APP-19). Read here rather than
+  /// pre-resolved by the caller, because the quote inside the bubble needs the
+  /// same lookup for a *different* person than the author line does.
+  final ContactStore contacts;
 
   /// Whether the message this one quotes was a picture (APP-13's stand-in
   /// icon). Best-effort, from local history -- see the caller.
@@ -814,7 +947,11 @@ class _GroupBubble extends StatelessWidget {
                   children: [
                     if (showAuthor && author != null)
                       Text(
-                        shortAccountId(author),
+                        personLabel(contacts, author),
+                        // A long name would otherwise widen every bubble in the
+                        // run to the 75% cap and push the text below it around.
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
@@ -860,6 +997,7 @@ class _GroupBubble extends StatelessWidget {
                                     session: session,
                                     groupId: chat.groupId,
                                     messageId: message.id,
+                                    contacts: contacts,
                                   ),
                             child: _statusFor(context, message, onBubble),
                           ),
@@ -896,6 +1034,7 @@ class _GroupBubble extends StatelessWidget {
       reply: message,
       chat: chat,
       myAccountId: session.state.accountId,
+      contacts: contacts,
     );
     return ReplyQuote(
       previewText: message.replyPreviewText ?? '',

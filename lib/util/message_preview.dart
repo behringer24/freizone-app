@@ -3,7 +3,7 @@
 import '../state/chat_target.dart';
 
 /// One-line label for a message referenced somewhere compact (the pinned bar,
-/// the reply preview). Same reasoning as Conversation.lastMessagePreview: a
+/// the reply preview). Same reasoning as ChatTarget.previewFor: a
 /// picture with no caption would otherwise render as a blank line. No emoji
 /// marker here, unlike the chat list -- these bars show the actual thumbnail
 /// next to this text.

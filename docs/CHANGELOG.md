@@ -16,6 +16,38 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Added
+
+* Names instead of five-character addresses throughout a group (`APP-18`).
+  Wherever a group used to label somebody `qk43r`, it now shows the name you have
+  given them with that short address in parentheses — above their messages, in
+  the quote of a reply, in the member list, in the delivery list of your own
+  message, and in the chat list's preview line. Somebody you have not named is
+  shown exactly as before, so nothing goes missing while you work through a
+  group
+* **Name this person** in the long-press menu of a group message. Naming
+  somebody from the transcript takes effect immediately, everywhere — every chat
+  on this device, on all of your accounts — and it is the same list the Contacts
+  area manages, so nothing has to be typed twice
+* **Message them directly** in the same menu. It opens your existing one-to-one
+  chat with that member, or starts one, always from the account whose group you
+  are reading — the one address of yours they have already seen
+
+### Changed
+
+* The member list in a group's info screen shows the same name-and-short-address
+  label as the transcript instead of the member's full 21-character address
+  (`APP-18`), so the same person reads the same in both. The full address is
+  still on their contact and profile screens
+
+### Known limitation
+
+* The grey status lines inside a group ("… joined the group.", "… was removed
+  from the group.") keep the short address even for somebody you have named
+  (`APP-18`). Those lines are written once, when the change happens, and are
+  deliberately never re-worded afterwards — a name you change later must not
+  silently rewrite what the transcript said at the time
+
 ## [0.16.0] — 2026-08-05 (versionCode 20)
 
 Contacts: the people you know, kept once for the whole app instead of once per

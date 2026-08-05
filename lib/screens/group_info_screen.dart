@@ -14,8 +14,10 @@ import 'package:flutter/material.dart';
 
 import '../ffi/models.dart';
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../util/errors.dart';
 import '../util/group_actions.dart';
+import '../util/person_label.dart';
 import '../util/role_icon.dart';
 import '../widgets/peer_avatar.dart';
 
@@ -24,15 +26,23 @@ class GroupInfoScreen extends StatelessWidget {
     super.key,
     required this.session,
     required this.groupId,
+    required this.contacts,
   });
 
   final AppSession session;
   final String groupId;
 
+  /// Where a member's name comes from (APP-18/APP-19). The member list is the
+  /// second place a group has to agree with the transcript about who somebody
+  /// is -- the first being the transcript's own author lines.
+  final ContactStore contacts;
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: session,
+      // Renaming somebody from the transcript behind this screen has to reach
+      // this list too.
+      listenable: Listenable.merge([session, contacts]),
       builder: (context, _) {
         final resolved = session.groupState(groupId)?.resolved;
         if (resolved == null) {
@@ -162,7 +172,11 @@ class GroupInfoScreen extends StatelessWidget {
             ),
           Expanded(
             child: Text(
-              isMe ? 'You' : member.accountId,
+              // The same label the transcript's author lines carry, so a name
+              // here and a bubble there read as one person (APP-18). The full
+              // 21-character id it replaces belonged to no question this screen
+              // answers -- it is not copyable from here and never was.
+              isMe ? 'You' : personLabel(contacts, member.accountId),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),

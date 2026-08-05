@@ -6,7 +6,8 @@
 // that must never happen is a confident wrong name, so the chain is worth
 // testing on its own.
 import '../state/chat_target.dart';
-import 'address_format.dart';
+import '../state/contact_store.dart';
+import 'person_label.dart';
 
 /// The resolved author of a quoted message, ready to render.
 class QuotedAuthor {
@@ -28,6 +29,9 @@ class QuotedAuthor {
 
 /// Resolves the author of the message [reply] quotes.
 ///
+/// The label is the same `personLabel` the transcript's author lines and the
+/// member list use, so the same person reads identically in all three (APP-18).
+///
 /// In order: the author id the sender stated (APP-17's wire field), then the
 /// quoted message in local history, then -- with no id available at all --
 /// the perspective bit `mine`, which answers the single case that needs no
@@ -38,6 +42,7 @@ QuotedAuthor resolveQuotedAuthor({
   required StoredMessage reply,
   required ChatTarget chat,
   required String myAccountId,
+  required ContactStore contacts,
 }) {
   final id = _authorIdFor(reply, chat, myAccountId);
   if (id == null) {
@@ -48,9 +53,7 @@ QuotedAuthor resolveQuotedAuthor({
         : QuotedAuthor.unknown;
   }
   if (id == myAccountId) return const QuotedAuthor(label: 'You');
-  // APP-18 replaces this with the name this account has given them, keeping
-  // the short id in parentheses.
-  return QuotedAuthor(label: shortAccountId(id), accountId: id);
+  return QuotedAuthor(label: personLabel(contacts, id), accountId: id);
 }
 
 String? _authorIdFor(StoredMessage reply, ChatTarget chat, String myAccountId) {
