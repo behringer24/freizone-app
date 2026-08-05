@@ -3,12 +3,18 @@
 // the only thing saying who is being answered.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:freizone/state/chat_target.dart';
+import 'package:freizone/state/contact_store.dart';
 import 'package:freizone/state/group_conversation.dart';
 import 'package:freizone/util/quoted_author.dart';
 
 const me = 'qme00000000000000000a';
 const clara = 'qclara00000000000000a';
 const ben = 'qben000000000000000b0';
+
+/// A device that has named nobody -- the state every branch of the chain has to
+/// resolve in, since a name only changes how an id is *labelled*, never which id
+/// is found.
+final noNames = ContactStore.inMemory();
 
 void main() {
   GroupConversation chatWith(List<StoredMessage> messages) {
@@ -50,6 +56,7 @@ void main() {
         reply: reply(authorId: clara),
         chat: chatWith([]),
         myAccountId: me,
+        contacts: noNames,
       );
       expect(resolved.label, 'qclar');
       expect(resolved.accountId, clara);
@@ -61,6 +68,7 @@ void main() {
         reply: reply(authorId: me),
         chat: chatWith([]),
         myAccountId: me,
+        contacts: noNames,
       );
       expect(resolved.label, 'You');
       expect(resolved.accountId, isNull);
@@ -71,6 +79,7 @@ void main() {
         reply: reply(previewMine: false),
         chat: chatWith([original(id: 'm1', author: clara)]),
         myAccountId: me,
+        contacts: noNames,
       );
       expect(resolved.label, 'qclar');
       expect(resolved.accountId, clara);
@@ -83,6 +92,7 @@ void main() {
         reply: reply(previewMine: true),
         chat: chatWith([original(id: 'm1', mine: true)]),
         myAccountId: me,
+        contacts: noNames,
       );
       expect(resolved.label, 'You');
     });
@@ -94,6 +104,7 @@ void main() {
         reply: reply(previewMine: true),
         chat: chatWith([]),
         myAccountId: me,
+        contacts: noNames,
       );
       expect(resolved.label, 'You');
       expect(resolved.accountId, isNull);
@@ -106,9 +117,42 @@ void main() {
         reply: reply(previewMine: false),
         chat: chatWith([]),
         myAccountId: me,
+        contacts: noNames,
       );
       expect(resolved.label, isNull);
       expect(resolved.accountId, isNull);
+    });
+
+    test('labels a named author with the name and keeps the id (APP-18)', () {
+      // The reason the quote takes the store at all: in a group the quote is
+      // the only thing saying who is being answered, and `qclar` does not say
+      // it.
+      final resolved = resolveQuotedAuthor(
+        reply: reply(authorId: clara),
+        chat: chatWith([]),
+        myAccountId: me,
+        contacts: ContactStore.inMemory(
+          contacts: const [Contact(accountId: clara, name: 'Clara')],
+        ),
+      );
+      expect(resolved.label, 'Clara (qclar)');
+      // Unchanged by the name: the colour is keyed to the person, not to how
+      // this device happens to label them.
+      expect(resolved.accountId, clara);
+    });
+
+    test('still says "You" for my own message, name or no name', () {
+      // Naming yourself is possible -- your own address can be a contact -- and
+      // must not turn the one label that needs no id into one that has one.
+      final resolved = resolveQuotedAuthor(
+        reply: reply(authorId: me),
+        chat: chatWith([]),
+        myAccountId: me,
+        contacts: ContactStore.inMemory(
+          contacts: const [Contact(accountId: me, name: 'Me, work')],
+        ),
+      );
+      expect(resolved.label, 'You');
     });
 
     test('a stated author wins over local history', () {
@@ -119,6 +163,7 @@ void main() {
         reply: reply(authorId: clara),
         chat: chatWith([original(id: 'm1', author: ben)]),
         myAccountId: me,
+        contacts: noNames,
       );
       expect(resolved.accountId, clara);
     });

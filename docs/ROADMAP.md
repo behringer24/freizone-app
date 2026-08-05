@@ -620,7 +620,7 @@ What is missing is the UI, plus one wire field:
 - 2026-08-05 — verified on device, no findings
 
 ### APP-18 — Names, not short ids, in a group transcript
-Status: `planned` · Part of: APP-16 · Related: APP-19
+Status: `done` · Part of: APP-16 · Related: APP-19
 
 A group labels each author with five characters of their account id, so reading
 one means holding a mental table of `qk43r` → Carla. Where this account has
@@ -644,6 +644,39 @@ So this needs a small per-person record keyed by account id, which is the first
 piece of APP-19 and the reason the two are related. Whether that record is
 per-account or app-wide is APP-19's open decision; APP-18 only needs it to exist
 per account, which both options provide.
+
+- 2026-08-05 — raised again from the device: APP-19 shipped the store and the
+  contacts area, but nothing in a group *read* it, so the item that was supposed
+  to make group conversations legible had not landed at all. Built as planned,
+  with four things worth recording:
+  - the label is **one function**, `util/person_label.dart`'s `personLabel`, and
+    all six surfaces call it: the transcript's author lines, a reply's quote, the
+    "replying to …" bar, the member list, the delivery sheet and the chat-list
+    preview. A per-screen `?? shortAccountId(...)` would have drifted, and a
+    person labelled two ways reads as two people — the exact confusion this item
+    exists to remove
+  - the chat-list preview is the **one deliberate exception**
+    (`personLabelCompact`): a name with no id. That row is a single truncated
+    line, and `Clara (qclar): bis morgen` would spend a third of it on
+    parentheses. Safe precisely because nothing is decided from a preview — the
+    full label is one tap away. Unnamed, it still shows the short id
+  - the **member list lost the full 21-character id** it used to print, in favour
+    of the same label the transcript uses. It answered no question that screen
+    asks: it was never copyable from there, and a full address belongs to the
+    contact and peer-profile screens, which have one
+  - `ChatTarget.lastMessagePreview` became `previewFor(ContactStore)` —
+    `titleFor`'s reasoning applied to the second thing a chat-list row draws: a
+    required parameter is what makes the compiler point at every place a name is
+    shown, rather than a forgotten lookup quietly falling back to an id
+- 2026-08-05 — **system lines are deliberately left as short ids.** A line like
+  "qk43r joined the group." is frozen into the stored transcript when it is
+  written (`state/group_system_lines.dart`), not resolved when it is rendered, so
+  that re-labelling it later cannot rewrite history — and the receive path that
+  writes it runs in the push isolate, where the contact store must not be
+  touched. Consequence to live with: a named person reads as "Clara (qclar)" in a
+  bubble and as "qk43r" in the line above it. Revisit by resolving *display*
+  from a stored id rather than by storing a label, which is a change to what a
+  system line is, not a lookup
 
 ### APP-19 — An app-wide contacts area
 Status: `done` · Related: APP-18

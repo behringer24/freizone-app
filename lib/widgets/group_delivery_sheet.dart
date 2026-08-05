@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 
 import '../state/app_session.dart';
 import '../state/chat_target.dart';
+import '../state/contact_store.dart';
 import '../state/group_conversation.dart';
 import '../util/errors.dart';
+import '../util/person_label.dart';
 import 'peer_avatar.dart';
 
 /// Opens the delivery sheet for one of this account's own group messages.
@@ -19,6 +21,7 @@ Future<void> showGroupDeliverySheet(
   required AppSession session,
   required String groupId,
   required String messageId,
+  required ContactStore contacts,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -43,6 +46,7 @@ Future<void> showGroupDeliverySheet(
           session: session,
           chat: chat,
           message: message,
+          contacts: contacts,
         );
       },
     ),
@@ -79,11 +83,16 @@ class _DeliveryList extends StatelessWidget {
     required this.session,
     required this.chat,
     required this.message,
+    required this.contacts,
   });
 
   final AppSession session;
   final GroupConversation chat;
   final StoredMessage message;
+
+  /// Where a recipient's name comes from (APP-18): "not delivered" is only
+  /// actionable if you can tell who it is about.
+  final ContactStore contacts;
 
   @override
   Widget build(BuildContext context) {
@@ -119,7 +128,11 @@ class _DeliveryList extends StatelessWidget {
             ),
           ),
         for (final delivery in rows)
-          _DeliveryRow(stage: chat.stageFor(message, delivery), delivery: delivery),
+          _DeliveryRow(
+            stage: chat.stageFor(message, delivery),
+            delivery: delivery,
+            contacts: contacts,
+          ),
         if (anyFailed)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -157,10 +170,15 @@ class _DeliveryList extends StatelessWidget {
 }
 
 class _DeliveryRow extends StatelessWidget {
-  const _DeliveryRow({required this.stage, required this.delivery});
+  const _DeliveryRow({
+    required this.stage,
+    required this.delivery,
+    required this.contacts,
+  });
 
   final GroupDeliveryStage stage;
   final GroupDelivery delivery;
+  final ContactStore contacts;
 
   @override
   Widget build(BuildContext context) {
@@ -193,7 +211,7 @@ class _DeliveryRow extends StatelessWidget {
     return ListTile(
       leading: PeerAvatar(accountId: delivery.accountId, radius: 20),
       title: Text(
-        delivery.accountId,
+        personLabel(contacts, delivery.accountId),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),

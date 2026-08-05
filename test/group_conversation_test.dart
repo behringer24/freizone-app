@@ -49,16 +49,29 @@ void main() {
       // In a group it does not, so the row has to say.
       final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
       chat.messages.add(line('bis morgen', author: 'qclara00000000000000a'));
-      expect(chat.lastMessagePreview, 'qclar: bis morgen');
+      expect(chat.previewFor(ContactStore.inMemory()), 'qclar: bis morgen');
 
       chat.messages.add(line('gerne', mine: true, minute: 1));
-      expect(chat.lastMessagePreview, 'gerne');
+      expect(chat.previewFor(ContactStore.inMemory()), 'gerne');
+    });
+
+    test('the preview uses an assigned name, without the id (APP-18)', () {
+      // The compact label: this row is one truncated line, and it is the one
+      // place the short id is dropped rather than kept in parentheses.
+      final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
+      chat.messages.add(line('bis morgen', author: 'qclara00000000000000a'));
+      final contacts = ContactStore.inMemory(
+        contacts: const [
+          Contact(accountId: 'qclara00000000000000a', name: 'Clara'),
+        ],
+      );
+      expect(chat.previewFor(contacts), 'Clara: bis morgen');
     });
 
     test('a message from before authors were recorded still reads', () {
       final chat = GroupConversation(groupId: 'p2xjx0000000000000000');
       chat.messages.add(line('older history'));
-      expect(chat.lastMessagePreview, 'older history');
+      expect(chat.previewFor(ContactStore.inMemory()), 'older history');
     });
 
     test('round-trips through JSON, receipt watermarks included', () {

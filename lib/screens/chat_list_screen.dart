@@ -164,7 +164,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
       subtitle: Text(
         group.invitePending
             ? 'You have been invited to this group'
-            : group.lastMessagePreview,
+            : group.previewFor(widget.contacts),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: group.invitePending
@@ -230,7 +230,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         ],
       ),
       subtitle: Text(
-        convo.lastMessagePreview,
+        convo.previewFor(widget.contacts),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),

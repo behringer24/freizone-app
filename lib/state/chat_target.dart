@@ -364,7 +364,12 @@ abstract class ChatTarget {
 
   /// One-line summary for the chat list. An attachment gets a marker, since
   /// a picture with no caption would otherwise show as a blank row.
-  String get lastMessagePreview {
+  ///
+  /// [contacts] is unused here and used by [GroupConversation], which names the
+  /// author of the last message (APP-18). It sits in the signature for
+  /// [titleFor]'s reason: one uniform call for both kinds of chat, and a
+  /// required parameter the compiler can point at.
+  String previewFor(ContactStore contacts) {
     if (messages.isEmpty) return '';
     final last = messages.last;
     if (!last.hasAttachments) return last.text;
