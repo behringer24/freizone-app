@@ -13,6 +13,7 @@ import '../util/admin_format.dart';
 import '../util/admin_list_view.dart';
 import '../util/errors.dart';
 import '../util/role_icon.dart';
+import '../widgets/admin_search_field.dart';
 import 'admin_account_screen.dart';
 
 class AdminScreen extends StatefulWidget {
@@ -329,30 +330,13 @@ class _AdminScreenState extends State<AdminScreen> {
               ),
             ),
           const Spacer(),
-          SizedBox(
-            width: 180,
-            child: TextField(
-              controller: _searchController,
-              // Filtering happens on every keystroke over a list already in
-              // memory, so there is nothing to debounce.
-              onChanged: (v) => setState(() => _query = v),
-              textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'Search id',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                suffixIcon: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.clear, size: 18),
-                        tooltip: 'Clear search',
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() => _query = '');
-                        },
-                      ),
-              ),
-            ),
+          AdminSearchField(
+            controller: _searchController,
+            onChanged: (v) => setState(() => _query = v),
+            onClear: () {
+              _searchController.clear();
+              setState(() => _query = '');
+            },
           ),
           PopupMenuButton<AdminSortOrder>(
             icon: const Icon(Icons.sort),
