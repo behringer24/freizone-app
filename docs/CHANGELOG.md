@@ -16,6 +16,11 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-08-05 (versionCode 20)
+
+Contacts: the people you know, kept once for the whole app instead of once per
+account.
+
 ### Added
 
 * A **Contacts** area, behind its own icon at the top of the chat list
@@ -51,7 +56,6 @@ each of which links the full design document.
   your accounts had called the same address different things, one is kept and you
   will be told which. Nothing about your chats changes, and no name ever leaves
   the device
-
 * The Server Admin account view now looks like the profile screens it sits
   next to (`APP-11`): a large avatar with the role badge, the role and block
   state at a glance, and both addresses copyable with one tap instead of an id
