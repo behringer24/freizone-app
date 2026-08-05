@@ -15,14 +15,26 @@ import 'package:flutter/material.dart';
 
 import '../screens/qr_scan_screen.dart';
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../util/errors.dart';
 import '../util/invite_uri.dart';
 import 'qr_scan_button.dart';
 
 class NewChatSheet extends StatefulWidget {
-  const NewChatSheet({super.key, required this.session, this.initialId});
+  const NewChatSheet({
+    super.key,
+    required this.session,
+    required this.contacts,
+    this.initialId,
+  });
 
   final AppSession session;
+
+  /// Where the optional name goes (APP-19). Written only after
+  /// [AppSession.startConversation] returns, because that is the first moment
+  /// the peer's **canonical** id is known -- the field may hold a prefix, and a
+  /// contact keyed by one would never match anything again.
+  final ContactStore contacts;
 
   /// Pre-fills the address field, e.g. from a Freizone address tapped in a
   /// message. Null for the plain "new chat" case.
@@ -62,10 +74,16 @@ class _NewChatSheetState extends State<NewChatSheet> {
       _error = null;
     });
     try {
-      final convo = await widget.session.startConversation(
-        peerAccountId,
-        displayName: _nameController.text,
-      );
+      final convo = await widget.session.startConversation(peerAccountId);
+      // Now, and keyed by the resolved id rather than by what was typed.
+      final name = _nameController.text.trim();
+      if (name.isNotEmpty) {
+        await widget.contacts.setName(
+          convo.peerAccountId,
+          name: name,
+          server: convo.peerServer,
+        );
+      }
       final greeting = _greetingController.text.trim();
       if (greeting.isNotEmpty) {
         // Contact is already added either way -- a failed greeting send

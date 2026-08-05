@@ -6,18 +6,31 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../util/freizone_address.dart';
 import '../widgets/peer_avatar.dart';
 
 class BlockedContactsScreen extends StatelessWidget {
-  const BlockedContactsScreen({super.key, required this.session});
+  const BlockedContactsScreen({
+    super.key,
+    required this.session,
+    required this.contacts,
+  });
 
   final AppSession session;
+
+  /// Where a blocked peer's name comes from now (APP-19). `BlockedPeer` used to
+  /// snapshot one at block time, purely so this screen could show it with no
+  /// conversation left -- which is exactly what the store answers, and without
+  /// the staleness a second copy had: renaming a contact now shows here too.
+  final ContactStore contacts;
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: session,
+      // Both, because either can change what a row says: the session owns who is
+      // blocked, the store owns what they are called.
+      listenable: Listenable.merge([session, contacts]),
       builder: (context, _) {
         final blocked = session.blockedPeers;
         return Scaffold(
@@ -38,8 +51,9 @@ class BlockedContactsScreen extends StatelessWidget {
                   itemBuilder: (context, i) {
                     final peer = blocked[i];
                     final server = peer.peerServer ?? session.state.server;
+                    final name = contacts.nameFor(peer.peerAccountId);
                     final title =
-                        peer.displayName ??
+                        name ??
                         shortFreizoneAddress(
                           id: peer.peerAccountId,
                           server: server,
@@ -54,7 +68,7 @@ class BlockedContactsScreen extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      subtitle: peer.displayName != null
+                      subtitle: name != null
                           ? Text(
                               shortFreizoneAddress(
                                 id: peer.peerAccountId,

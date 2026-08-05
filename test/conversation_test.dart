@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:freizone/state/contact_store.dart';
 import 'package:freizone/state/conversation.dart';
 import 'package:freizone/state/message_content.dart';
 
@@ -218,7 +219,6 @@ void main() {
       // that quietly fails to load after an update.
       final convo = Conversation(
         peerAccountId: 'peer1',
-        displayName: 'Anna',
         peerServer: 'https://other.example.org',
         peerDeviceId: 'aabbccddeeff0011',
         peerDevicePubKey: Uint8List.fromList(List.filled(32, 7)),
@@ -243,7 +243,8 @@ void main() {
 
       expect(convo.toJson().keys.toSet(), {
         'peer_account_id',
-        'display_name',
+        // 'display_name' is deliberately absent (APP-19) -- see the assertion
+        // below on why it must not come back.
         'messages',
         'last_activity_at',
         'has_unread',
@@ -260,7 +261,11 @@ void main() {
       });
 
       final restored = Conversation.fromJson(convo.toJson());
-      expect(restored.displayName, 'Anna');
+      // No name here any more (APP-19): a peer's name is in the contact store,
+      // so a conversation neither carries nor persists one. The key is gone from
+      // toJson too, which is what lets the old value disappear from existing
+      // profiles on their next save.
+      expect(convo.toJson().containsKey('display_name'), isFalse);
       expect(restored.peerServer, 'https://other.example.org');
       expect(restored.peerDeviceId, 'aabbccddeeff0011');
       expect(restored.peerDevicePubKey, convo.peerDevicePubKey);
@@ -373,6 +378,70 @@ void main() {
       expect(
         StoredMessage.fromJson(authored.toJson()).senderAccountId,
         'peer2',
+      );
+    });
+  });
+
+  // The point of APP-19 phase 2: a conversation no longer holds a name, it asks
+  // for one. These are the properties that make the move safe.
+  group('Conversation.titleFor and the contact store', () {
+    Conversation peer({String? server}) =>
+        Conversation(peerAccountId: 'qclara00000000000000a', peerServer: server);
+
+    test('falls back to the address when this device has not named them', () {
+      final convo = peer();
+      expect(
+        convo.titleFor('https://a.example.org', ContactStore.inMemory()),
+        'qclar*a.example.org',
+      );
+    });
+
+    test('shows the name once there is a contact', () async {
+      final convo = peer();
+      final contacts = ContactStore.inMemory();
+      await contacts.setName('qclara00000000000000a', name: 'Clara');
+      expect(convo.titleFor('https://a.example.org', contacts), 'Clara');
+    });
+
+    test('removing the contact restores the address and keeps the chat', () async {
+      // Deletion #1 from the design document: removing a contact is a labelling
+      // decision, not a relationship one. Nothing about the transcript changes.
+      final convo = peer();
+      convo.messages.add(
+        StoredMessage(
+          text: 'bis Samstag',
+          mine: false,
+          timestamp: DateTime.utc(2026, 8, 5),
+        ),
+      );
+      final contacts = ContactStore.inMemory();
+      await contacts.setName('qclara00000000000000a', name: 'Clara');
+      await contacts.remove('qclara00000000000000a');
+
+      expect(
+        convo.titleFor('https://a.example.org', contacts),
+        'qclar*a.example.org',
+      );
+      expect(convo.messages, hasLength(1));
+    });
+
+    test('one name serves every account of mine that talks to them', () async {
+      // What being central buys: two sessions, two conversations, one name --
+      // and no way for them to disagree, since there is only one copy.
+      final contacts = ContactStore.inMemory();
+      await contacts.setName('qclara00000000000000a', name: 'Clara');
+      final fromWork = peer();
+      final fromPrivate = peer(server: 'https://b.example.org');
+      expect(fromWork.titleFor('https://a.example.org', contacts), 'Clara');
+      expect(fromPrivate.titleFor('https://a.example.org', contacts), 'Clara');
+    });
+
+    test('the peer server still decides the address it falls back to', () async {
+      // Federation: an unnamed peer on another server must not look local.
+      final convo = peer(server: 'https://b.example.org');
+      expect(
+        convo.titleFor('https://a.example.org', ContactStore.inMemory()),
+        'qclar*b.example.org',
       );
     });
   });

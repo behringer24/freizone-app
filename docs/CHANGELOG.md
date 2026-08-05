@@ -16,7 +16,41 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Added
+
+* A **Contacts** area, behind its own icon at the top of the chat list
+  (`APP-19`). It lists everyone you have named, on all your accounts at once, and
+  opening one shows which of your accounts already chat with that person —
+  including which of them have blocked them, since a block is per account. From
+  there you can open one of those chats, or start a new one from another of your
+  accounts; an account that could not reach them at all is shown with the reason
+  instead of being offered and then failing
+* **Remove permanently**, next to "Delete chat" in a chat's long-press menu
+  (`APP-19`). It clears everything about that person from this device, including
+  the encryption state — for a contact who is actually gone. Freizone checks
+  first whether they can still reach you and says what it found; if it could not
+  find out, the option stays available but tells you the risk: should they write
+  again, their first messages cannot be read until the encryption has been
+  rebuilt
+* Adding a contact by hand from an address. It is checked against the server
+  before it is saved, so a mistyped or shortened address is refused now rather
+  than failing later — and if the server simply could not be reached, nothing is
+  saved and you are offered another try
+
 ### Changed
+
+* Deleting a chat now also forgets that you had accepted that person, so if they
+  write again it arrives as a new request you can accept or decline instead of
+  the chat quietly reappearing (`APP-19`). Their messages still arrive — the
+  encryption is deliberately kept, which is what makes the request possible at
+  all
+* Names you give people are now kept once for the whole device instead of per
+  account (`APP-19`). Name somebody in one account and every account of yours
+  that talks to them shows that name; change it once and it changes everywhere.
+  Your existing names are moved over automatically on the first start — if two of
+  your accounts had called the same address different things, one is kept and you
+  will be told which. Nothing about your chats changes, and no name ever leaves
+  the device
 
 * The Server Admin account view now looks like the profile screens it sits
   next to (`APP-11`): a large avatar with the role badge, the role and block

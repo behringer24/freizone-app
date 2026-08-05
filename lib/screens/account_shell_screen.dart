@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import '../state/account_manager.dart';
 import '../state/app_session.dart';
 import '../state/app_settings.dart';
+import '../state/contact_store.dart';
 import '../util/avatar_color.dart';
 import '../util/role_icon.dart';
 import '../util/server_label.dart';
@@ -25,10 +26,14 @@ class AccountShellScreen extends StatefulWidget {
     super.key,
     required this.manager,
     required this.settings,
+    required this.contacts,
   });
 
   final AccountManager manager;
   final AppSettings settings;
+
+  /// Passed through to the screens that show a peer name (APP-19).
+  final ContactStore contacts;
 
   @override
   State<AccountShellScreen> createState() => _AccountShellScreenState();
@@ -378,6 +383,7 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
           session: active,
           settings: widget.settings,
           manager: widget.manager,
+          contacts: widget.contacts,
           appBarBottom: PreferredSize(
             preferredSize: const Size.fromHeight(72),
             child: _buildSwitcher(context, active),

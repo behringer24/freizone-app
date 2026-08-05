@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../state/account_manager.dart';
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../state/app_settings.dart';
 import '../state/conversation.dart';
 import '../util/freizone_address.dart';
@@ -24,11 +25,15 @@ class ShareTargetScreen extends StatelessWidget {
     super.key,
     required this.manager,
     required this.settings,
+    required this.contacts,
     required this.share,
   });
 
   final AccountManager manager;
   final AppSettings settings;
+
+  /// The one place a peer's name lives (APP-19).
+  final ContactStore contacts;
   final IncomingShare share;
 
   String get _title {
@@ -46,6 +51,7 @@ class ShareTargetScreen extends StatelessWidget {
         builder: (_) => ChatScreen(
           session: session,
           peerAccountId: convo.peerAccountId,
+          contacts: contacts,
           settings: settings,
           sharedText: share.text,
           sharedImagePath: share.imagePath,
@@ -98,7 +104,7 @@ class ShareTargetScreen extends StatelessWidget {
           ListTile(
             leading: PeerAvatar(accountId: convo.peerAccountId, radius: 20),
             title: Text(
-              convo.titleFor(session.state.server),
+              convo.titleFor(session.state.server, contacts),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),

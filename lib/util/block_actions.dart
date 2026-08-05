@@ -6,11 +6,13 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_session.dart';
+import '../state/contact_store.dart';
 import '../state/conversation.dart';
 
 Future<void> confirmAndBlock(
   BuildContext context,
   AppSession session,
+  ContactStore contacts,
   Conversation convo,
 ) async {
   final confirmed = await showDialog<bool>(
@@ -18,7 +20,7 @@ Future<void> confirmAndBlock(
     builder: (context) => AlertDialog(
       title: const Text('Block this contact?'),
       content: Text(
-        'You will stop receiving messages from ${convo.titleFor(session.state.server)} on this '
+        'You will stop receiving messages from ${convo.titleFor(session.state.server, contacts)} on this '
         'device -- they are not notified, and this cannot be undone remotely. You can unblock them here '
         'again at any time.',
       ),
@@ -49,6 +51,7 @@ Future<void> confirmAndBlock(
 Future<void> confirmAndResetSession(
   BuildContext context,
   AppSession session,
+  ContactStore contacts,
   Conversation convo,
 ) async {
   final confirmed = await showDialog<bool>(
@@ -56,7 +59,7 @@ Future<void> confirmAndResetSession(
     builder: (context) => AlertDialog(
       title: const Text('Reset secure session?'),
       content: Text(
-        'Use this only if messages with ${convo.titleFor(session.state.server)} have '
+        'Use this only if messages with ${convo.titleFor(session.state.server, contacts)} have '
         'stopped arriving or can no longer be read. Your next message re-establishes '
         'encryption. Message history is kept, and the other side is not notified.',
       ),

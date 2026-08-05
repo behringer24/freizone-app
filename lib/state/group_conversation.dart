@@ -12,6 +12,7 @@
 // every group's file.
 import '../ffi/models.dart';
 import 'chat_target.dart';
+import 'contact_store.dart';
 import 'receipt_signal.dart';
 
 /// How far one member's copy of a group message has got, from the two things
@@ -42,7 +43,7 @@ enum GroupDeliveryStage {
 class GroupConversation extends ChatTarget {
   GroupConversation({
     required this.groupId,
-    super.displayName,
+    this.displayName,
     super.messages,
     super.lastActivityAt,
     super.hasUnread,
@@ -77,6 +78,15 @@ class GroupConversation extends ChatTarget {
 
   @override
   String get id => groupId;
+
+  /// The name the **group gave itself**, refreshed from the folded fact set
+  /// every time that changes (see AppSession's \_refreshGroupName).
+  ///
+  /// This is the one meaning of "display name" that stayed on a transcript when
+  /// the rest moved to the contact store (APP-19). A group is not a contact:
+  /// nobody assigned this name locally, every member sees the same one, and it
+  /// arrives as a signed fact rather than as a label somebody chose privately.
+  String? displayName;
 
   /// True while this account has been added but has not accepted yet.
   ///
@@ -183,11 +193,12 @@ class GroupConversation extends ChatTarget {
 
   /// The group's name if it has one, otherwise a short form of its id.
   ///
-  /// [localServer] is unused: a group has no server. It stays in the signature
+  /// [localServer] and [contacts] are both unused: a group has no server, and
+  /// its name is its own rather than a contact's. They stay in the signature
   /// because a chat list renders groups and one-to-one chats through the same
   /// [ChatTarget] call.
   @override
-  String titleFor(String localServer) =>
+  String titleFor(String localServer, ContactStore contacts) =>
       displayName?.isNotEmpty == true ? displayName! : 'Group $shortGroupId';
 
   /// The first five characters of the id -- the version marker plus four
@@ -214,6 +225,9 @@ class GroupConversation extends ChatTarget {
   Map<String, dynamic> toJson() {
     final j = <String, dynamic>{'group_id': groupId};
     writeBaseJson(j);
+    // Written here now that ChatTarget no longer does it for everybody: the key
+    // is unchanged, so existing group transcripts read back exactly as before.
+    if (displayName != null) j['display_name'] = displayName;
     if (invitePending) j['invite_pending'] = true;
     _writeWatermarks(j, 'member_delivered_up_to', memberDeliveredUpTo);
     _writeWatermarks(j, 'member_read_up_to', memberReadUpTo);

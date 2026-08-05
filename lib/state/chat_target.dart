@@ -10,6 +10,7 @@
 // whoever wrote it. conversation.dart re-exports this file, so existing
 // imports keep working.
 import '../ffi/models.dart';
+import 'contact_store.dart';
 import 'message_content.dart';
 
 /// What kind of transcript line a [StoredMessage] is. [normal] is an ordinary
@@ -320,7 +321,6 @@ class StoredMessage {
 /// stays in Conversation, because a group has none of it.
 abstract class ChatTarget {
   ChatTarget({
-    this.displayName,
     List<StoredMessage>? messages,
     DateTime? lastActivityAt,
     this.hasUnread = false,
@@ -335,7 +335,6 @@ abstract class ChatTarget {
   /// the media directory -- needs no second form.
   String get id;
 
-  String? displayName;
   List<StoredMessage> messages;
   DateTime lastActivityAt;
 
@@ -350,7 +349,18 @@ abstract class ChatTarget {
   List<String> pinnedMessageIds;
 
   /// What to call this chat in a list or an app bar.
-  String titleFor(String localServer);
+  ///
+  /// [contacts] is where a *person's* name comes from (APP-19) -- there is no
+  /// alias on a conversation any more, because a name belongs to the person
+  /// rather than to one of my chats with them. A group ignores it: a group named
+  /// itself, and that name is its own (see [GroupConversation.displayName]).
+  ///
+  /// Taking the store rather than a name resolved by the caller is deliberate:
+  /// the signature has to stay uniform, since a chat list draws both kinds
+  /// through this one call -- and a required parameter is what makes the
+  /// compiler point at every place a name is shown, instead of a forgotten
+  /// lookup silently falling back to the address.
+  String titleFor(String localServer, ContactStore contacts);
 
   /// One-line summary for the chat list. An attachment gets a marker, since
   /// a picture with no caption would otherwise show as a blank row.
@@ -382,7 +392,11 @@ abstract class ChatTarget {
   /// first paints, so a retry can read it back (see
   /// AppSession.\_recoverAttachment).
   void writeBaseJson(Map<String, dynamic> j) {
-    if (displayName != null) j['display_name'] = displayName;
+    // No `display_name` here any more (APP-19): a person's name lives in the
+    // contact store, and a group writes its own in GroupConversation.toJson.
+    // Nothing has to strip the old key from existing profiles -- a profile is
+    // rewritten in full on every message, so it disappears on the next save
+    // simply because nothing emits it.
     j['messages'] = messages.map((m) => m.toJson()).toList();
     j['last_activity_at'] = encodeTime(lastActivityAt);
     j['has_unread'] = hasUnread;

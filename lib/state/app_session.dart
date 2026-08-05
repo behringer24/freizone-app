@@ -1782,13 +1782,13 @@ class AppSession extends ChangeNotifier {
   /// resolves purely locally, with no network round trip. An explicit
   /// `*server` that isn't this session's own (or `local`) is a federated
   /// address (docs/PROTOCOL.md §9): resolved and messaged directly
-  /// against that server, not this session's own. If displayName is
-  /// given and this is a new conversation, it's set as the initial local
-  /// alias.
-  Future<Conversation> startConversation(
-    String peerAddress, {
-    String? displayName,
-  }) async {
+  /// against that server, not this session's own.
+  ///
+  /// Naming the peer is a separate act on the contact store (APP-19), not a
+  /// parameter here: it returns the conversation, whose `peerAccountId` is the
+  /// resolved id the contact has to be keyed by -- which is the only moment that
+  /// id is known for an address typed as a prefix.
+  Future<Conversation> startConversation(String peerAddress) async {
     final parsed = parseFreizoneAddress(peerAddress);
     if (parsed == null) throw StateError('Not a valid Freizone address');
 
@@ -1859,11 +1859,6 @@ class AppSession extends ChangeNotifier {
         : parsed.server;
     convo.peerDeviceId = verified.deviceId;
     convo.peerDevicePubKey = verified.devicePubKey;
-    if (convo.displayName == null &&
-        displayName != null &&
-        displayName.trim().isNotEmpty) {
-      convo.displayName = displayName.trim();
-    }
     convo.pendingApproval = false;
     state.knownPeerIds.add(resolvedId);
     await LocalStateStore.saveProfile(state);
@@ -1886,17 +1881,10 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Sets, changes, or (name == null / blank) removes a conversation's
-  /// local alias. Purely local -- never sent to the peer or the server.
-  Future<void> setDisplayName(String peerAccountId, String? name) async {
-    final convo = state.conversations[peerAccountId];
-    if (convo == null) return;
-    convo.displayName = (name == null || name.trim().isEmpty)
-        ? null
-        : name.trim();
-    await LocalStateStore.saveProfile(state);
-    notifyListeners();
-  }
+  // Naming a peer is no longer a session's business (APP-19): a name belongs to
+  // the person, one contact store holds them all, and writing it here would mean
+  // this account's copy could disagree with another's. Callers use
+  // ContactStore.setName / .remove directly -- see rename_dialog.dart's callers.
 
   /// Every peer blocked locally -- backs the "Blocked contacts" screen,
   /// which needs to list and unblock peers even once their Conversation
@@ -1925,7 +1913,6 @@ class AppSession extends ChangeNotifier {
       state.blockedPeers[peerAccountId] = BlockedPeer(
         peerAccountId: peerAccountId,
         peerServer: convo?.peerServer,
-        displayName: convo?.displayName,
       );
       if (convo != null) {
         convo.blocked = true;
@@ -1978,24 +1965,65 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Removes peerAccountId's conversation entirely -- history and the
-  /// resolved peer device. The ratchet session is deliberately kept: the
-  /// peer doesn't know their chat was deleted on our end and may just keep
-  /// writing in what looks to them like an ongoing conversation, without
-  /// including fresh X3DH material. Without a surviving session, such a
-  /// message can't be decrypted at all (no session and no X3DH material to
-  /// start one -- see _handleIncoming) and is lost silently, for both
-  /// sides, with no error or notification anywhere. Purely local: the
-  /// account itself is untouched on the server.
+  /// Removes peerAccountId's conversation entirely -- history, media and the
+  /// resolved peer device -- while **keeping the ratchet session**.
+  ///
+  /// The session stays because the peer does not know their chat was deleted on
+  /// our end and may keep writing in what looks to them like an ongoing
+  /// conversation, without including fresh X3DH material. With no surviving
+  /// session such a message cannot be decrypted at all (see _handleIncoming),
+  /// and is lost silently for both sides. That is the only arrangement in which
+  /// a resumption can be *seen*, which is what makes it the routine action;
+  /// [removeConversationPermanently] is the one that takes the session too.
+  ///
+  /// The peer is also dropped from [AppState.knownPeerIds], so a resumption
+  /// arrives as a message **request** to accept or decline rather than silently
+  /// reopening the chat. **This reverses an earlier choice** (see
+  /// [acceptConversation], which added them there precisely so a delete would
+  /// not "regress them to an unactioned request"): deleting a chat is now taken
+  /// as a decision about the relationship, so somebody writing again is an event
+  /// worth surfacing rather than a chat quietly reappearing. Decided 2026-08-04,
+  /// recorded in docs/design/19-contacts.md.
+  ///
+  /// Purely local either way: the account itself is untouched on the server.
   Future<void> deleteConversation(String peerAccountId) async {
     final removed = state.conversations.remove(peerAccountId);
     if (removed == null) return;
     if (_openConversationPeerId == peerAccountId)
       _openConversationPeerId = null;
+    state.knownPeerIds.remove(peerAccountId);
     await _deleteChatMedia(peerAccountId);
     await LocalStateStore.saveProfile(state);
     if (removed.hasUnread && !hasAnyUnread)
       unawaited(clearMessageNotification(state.accountId));
+    notifyListeners();
+  }
+
+  /// Everything [deleteConversation] does, **plus the ratchet session** -- for a
+  /// peer who is actually gone.
+  ///
+  /// The durable removal an orphaned chat needs: nothing about this peer is left
+  /// on the device. Only ever safe where there can be no next message from them,
+  /// which is why the UI gates it on evidence from the public account directory
+  /// (see peer_absence.dart) rather than on the user's belief. Where that
+  /// evidence is a definite absence this loses nothing by construction: there is
+  /// no sender left to lose a message from.
+  ///
+  /// Offered even when the directory could not be asked -- somebody who knows a
+  /// server is dead should not be held hostage by a check that cannot
+  /// conclude -- but then with the consequence stated: if that peer does come
+  /// back, their first messages are undecryptable until a re-key completes.
+  ///
+  /// The read-only inbound session goes too (see AppState.inboundSessions):
+  /// leaving half of a discarded pair behind would keep exactly the state this
+  /// action exists to clear.
+  Future<void> removeConversationPermanently(String peerAccountId) async {
+    await deleteConversation(peerAccountId);
+    await _withPeerSessionLock(peerAccountId, () async {
+      state.sessions.remove(peerAccountId);
+      state.inboundSessions.remove(peerAccountId);
+    });
+    await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
 

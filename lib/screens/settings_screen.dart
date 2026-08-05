@@ -7,6 +7,7 @@ import 'package:unifiedpush/unifiedpush.dart';
 import '../push/push_manager.dart';
 import '../state/account_manager.dart';
 import '../state/app_settings.dart';
+import '../state/contact_store.dart';
 import '../util/share_shortcuts.dart';
 import 'push_status_screen.dart';
 
@@ -15,6 +16,7 @@ class SettingsScreen extends StatelessWidget {
     super.key,
     required this.settings,
     required this.manager,
+    required this.contacts,
   });
 
   final AppSettings settings;
@@ -23,6 +25,10 @@ class SettingsScreen extends StatelessWidget {
   /// immediately after the user changes [PushPreference] below, rather
   /// than waiting for the next app start.
   final AccountManager manager;
+
+  /// Needed only to re-publish the direct-share names, which are chat titles
+  /// and therefore contact names (APP-19).
+  final ContactStore contacts;
 
   Future<void> _setPushPreference(PushPreference value) async {
     await settings.setPushPreference(value);
@@ -36,7 +42,7 @@ class SettingsScreen extends StatelessWidget {
   /// have to go away now, not eventually (APP-15).
   Future<void> _setDirectShareEnabled(bool value) async {
     await settings.setDirectShareEnabled(value);
-    await syncShareShortcuts(manager, settings);
+    await syncShareShortcuts(manager, settings, contacts);
   }
 
   Widget _sectionTitle(BuildContext context, String text) => Padding(

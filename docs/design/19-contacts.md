@@ -1,7 +1,114 @@
 # Design: An app-wide contacts area
 
-Status: **shape decided 2026-08-04**, not built · Roadmap:
-[APP-19](../ROADMAP.md)
+Status: shape decided 2026-08-04 · **built 2026-08-05** in four phases; device
+verification outstanding · Roadmap: [APP-19](../ROADMAP.md)
+
+## How it is being built
+
+Four phases, ordered so the risky one is not also the first:
+
+1. **The store and the one-time import.** Self-contained and invisible: the
+   names are lifted into the store while every screen still reads them from the
+   profile. Nothing can regress, because nothing depends on it yet.
+2. **The read path** — where the source of truth actually moves. `ChatTarget
+   .displayName` loses its peer-alias meaning and keeps only "a group's own
+   name", `BlockedPeer.displayName` goes away, and every screen asks the store.
+   This is the phase that can silently un-name people, which is why phase 1
+   lands and is tested first.
+3. **The contacts list and the detail screen**, with the account picker and its
+   reachability check.
+4. **The three deletions.**
+
+### What phase 1 settled
+
+- The store takes **plain maps**, and the profile-reading half is a separate
+  adapter (`contact_import.dart`). A store whose whole point is to be
+  account-independent should not import per-account state; keeping the seam
+  there also means the import's rules can be tested without building a profile.
+- **Collision order is deterministic** — profiles are iterated by sorted account
+  id. Left to the directory listing, which of two names survived would depend on
+  the filesystem. Two profiles that agree on a name do not collide and are not
+  reported: a notice raised for a non-decision is a notice that gets dismissed
+  unread, which is the one thing this notice cannot afford.
+- The import reads `blockedPeers[…].displayName` too, not just the conversation
+  aliases — that field exists purely for a name whose conversation is gone, so
+  skipping it would have discarded the names of exactly the peers a user had most
+  reason to label. Within one profile the live alias wins over the block-time
+  snapshot.
+- Whether the import has run is **recorded**, not inferred from an empty store.
+  Otherwise deleting every contact would resurrect the old aliases on the next
+  start — turning a deliberate decision into a bug.
+- The import reads **raw profile JSON**, not `AppState`. This was a correction:
+  the first version went through the parsed model, which creates an ordering trap
+  it took Andreas' question to expose. Phase 2 takes `display_name` off
+  `Conversation`, so `Conversation.fromJson` stops reading the key — and an
+  import reading parsed state would then find *nothing left to import*. That
+  makes the migration silently correct only if phase 1 and phase 2 ship in
+  separate releases **and** every user passes through the intermediate one. A
+  user updating across two versions would lose every name they had assigned.
+  Reading the JSON makes the migration independent of the model it migrates away
+  from, which is the property a one-shot migration needs in any case.
+
+### What phase 2 settled
+
+- `titleFor` takes the **store**, not a name the caller resolved. The signature
+  has to stay uniform, since a chat list draws groups and one-to-one chats
+  through one call — and making the parameter required is what turned this into
+  a compiler-guided change: 18 call sites named themselves instead of a
+  forgotten lookup silently falling back to an address.
+- **A root-level rebuild does not reach a pushed route.** The plan said one
+  `ListenableBuilder` at the root of `FreizoneApp` would refresh every screen on
+  a rename, the way a theme change does. It would not: a `MaterialPageRoute`
+  builder runs once and its result is held by the route, so an ancestor
+  rebuilding leaves it untouched. A theme survives that only because `Theme` is
+  an `InheritedWidget` and its dependents re-run. So every screen that shows a
+  name listens for itself — `Listenable.merge([session, contacts])` in the chat
+  list, the chat screen, the peer profile and the blocked list. The share picker
+  does not: it is built when a share arrives and nothing renames while it is
+  open.
+- The one place that needed real thought rather than mechanical replacement is
+  `NewChatSheet`. Its optional name field used to ride along on
+  `startConversation(displayName:)`. It now writes the contact **after** that
+  call returns, because the returned conversation's `peerAccountId` is the first
+  moment the *canonical* id is known — the field may hold a five-character
+  prefix, and a contact keyed by one would never match anything again. Same
+  reasoning as resolve-at-creation, arrived at from the other direction.
+
+### What phase 3 settled
+
+- **"No" and "could not ask" are different outcomes.** The design said an
+  unreachable server must leave no contact behind, with a retry offered; building
+  it made clear that this needs a *typed* failure rather than an error message.
+  `ContactResolutionProblem` separates a definite denial (404, or a host that is
+  not a Freizone server) from a non-answer (unreachable, or a 5xx) — the second
+  never creates a contact and turns the button into "Try again". Collapsing the
+  two would mean one dropped connection writes a record that fails the first time
+  it is used.
+- Resolution is account-independent for **authentication** but not for **host
+  selection**: a bare id has to be asked somewhere, and that is the active
+  account's server, matching what the new-chat sheet already does. The document's
+  earlier phrasing ("needs no account of ours at all") was true of the former and
+  glossed over the latter.
+- The detail screen partitions my accounts into *already talking* and *could
+  start*, and shows a third group — **cannot reach** — with its reason rather
+  than omitting it. Omitting was the original plan ("either omits that account or
+  shows it with the reason"); showing it won, because an account missing from a
+  list of my own accounts reads as a bug, where a greyed row with "federation is
+  off on this account's server" reads as an explanation.
+
+### What still stores a name, after phase 2
+
+Nothing, for a person. `display_name` moves off `ChatTarget` and down onto
+`GroupConversation`, where it means "the name this group gave itself" — so a
+`Conversation` has no such field to write, and `writeBaseJson` stops emitting the
+key. No cleanup migration is needed for the old values: a profile is rewritten in
+full on every message, so the key disappears from disk on the next save simply
+because nothing emits it any more. `BlockedPeer.displayName` goes away entirely.
+
+The consequence worth stating: the contacts file becomes the **only** copy of
+every assigned name. Losing it loses them all, with nothing left to re-import
+from — the exact price of "one place a name lives", and the reason names belong
+in APP-05's backup.
 
 ## The problem this comes from
 
@@ -194,6 +301,26 @@ Three consequences, because the name is currently stored in three places:
 rule that decides this: **losing a message is the worst outcome available.** That
 ranks above tidy storage, so it is what the routine action is built around.
 
+### What phase 4 settled
+
+- **Deleting a chat reverses a choice that was already in the code.**
+  `acceptConversation` put the peer into `knownPeerIds` precisely so a later
+  delete would *not* turn them back into an unactioned request — the opposite of
+  what this document decided. The decision here wins (deleting is a statement
+  about the relationship, so a resumption is an event, not a chat quietly
+  reappearing), but the old rationale was deliberate and is now written into
+  `deleteConversation`'s doc comment beside the new one, so nobody rediscovers
+  only half of it.
+- The verdict is **five-valued, not a boolean**. `gone`, `noActiveDevice` and
+  `notAFreizoneServer` are definite absences; `unknown` and `present` both keep
+  `couldStillLoseMessages` true. A boolean would have invited exactly the
+  collapse this check exists to prevent — "could not ask" quietly becoming
+  "gone".
+- The dialog states the risk as **what is actually at stake** rather than as
+  "cannot be undone": their first messages will be unreadable until the
+  encryption has been rebuilt. Shown only where absence could not be
+  established, so the warning keeps its meaning.
+
 ### 1. Remove a contact — the name, and nothing else
 
 Deleting a contact in the contacts area removes **only the name entry**. No effect
@@ -288,6 +415,13 @@ that motivate having several accounts.
 - Whether a **permanent removal** should shorten the re-key window for a peer who
   turns out not to be gone after all, as described above. Only reachable in the
   "unreachable, so unverifiable" case.
+- **A profile that arrives after the import has run** carries aliases nothing
+  will collect. Impossible today — a newly registered account has no aliases, and
+  seed recovery (APP-01) restores an identity, not a history — but **APP-05**
+  (backup) and **APP-02** (multi-device history) both introduce exactly that
+  path. Whoever builds either needs to lift that profile's aliases at the point it
+  is adopted, rather than relying on a device-wide "already imported" flag that
+  was true long before the profile existed.
 
 ## Out of scope
 

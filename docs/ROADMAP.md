@@ -645,7 +645,7 @@ per-account or app-wide is APP-19's open decision; APP-18 only needs it to exist
 per account, which both options provide.
 
 ### APP-19 — An app-wide contacts area
-Status: `planned` (shape decided) · Related: APP-18
+Status: `done` · Device verification outstanding · Related: APP-18
 Design: [design/19-contacts.md](design/19-contacts.md)
 
 One place to keep the people this device knows, with its own icon in the main bar
@@ -689,6 +689,120 @@ this person**, so I do not write to someone from an identity they cannot place.
   consults `federationLocked` per account, so it never offers to start a chat from
   an account that cannot reach the contact — otherwise the option fails after
   being chosen, which is the mistake this screen exists to prevent
+- 2026-08-05 — being built in four phases, because the risk is concentrated in
+  the second: **(1)** the store and the one-time import, **(2)** the read path,
+  where the name's source of truth actually moves, **(3)** the contacts list and
+  the detail screen with its account picker, **(4)** the three deletions.
+- 2026-08-05 — **phase 1 shipped**, and it deliberately changes nothing a user
+  can see: `ContactStore` (`lib/state/contact_store.dart`) is device-wide, in its
+  own JSON file beside `AppSettings` rather than in any profile, and
+  `importExistingAliases` lifts every alias out of every profile at startup. Four
+  things settled while building it:
+  - the store takes **plain maps**, not `AppState`, and the profile-reading half
+    is a separate adapter (`contact_import.dart`). The store is meant to be
+    account-independent, so a dependency on per-account state would have
+    contradicted the decision it exists to implement — and it is testable
+    without building a profile
+  - **collision order is deterministic**: profiles are iterated by sorted account
+    id, not in whatever order the directory listed them, or which of two names
+    survived would depend on the filesystem. Identical names in two profiles are
+    not a collision and are not reported — that would train the dismissal of the
+    one notice meant to say "you have a decision to make"
+  - the import reads `blockedPeers[…].displayName` as well as the conversation
+    aliases. That field exists *only* because the blocked list had to show a name
+    with no conversation left, so skipping it would have lost the names of
+    exactly the peers a user had most reason to label. Within one profile the
+    live conversation alias wins over the block-time snapshot
+  - "has the import run" is **recorded**, not inferred from an empty store: a
+    user who deletes every contact must not have their old aliases resurrected on
+    the next start
+  - the import reads **raw profile JSON**, not `AppState` — a correction Andreas'
+    question forced out. Phase 2 takes `display_name` off `Conversation`, so an
+    import going through the parsed model would find nothing left to import
+    unless the two phases shipped in separate releases *and* every user passed
+    through the intermediate one. A skipped version would have lost every
+    assigned name. `LocalStateStore.listProfileJson` exists for this
+- 2026-08-05 — **phase 2 shipped: the contact store is now the only place a
+  person's name lives.** `displayName` moved off `ChatTarget` down onto
+  `GroupConversation`, where it keeps its other meaning — the name a group gave
+  itself — so a `Conversation` has no such field and `writeBaseJson` no longer
+  emits the key. `BlockedPeer.displayName` and `AppSession.setDisplayName` are
+  gone, and `startConversation` lost its `displayName` parameter. No cleanup
+  migration was needed for the old values: a profile is rewritten in full on
+  every message, so the key disappears on the next save because nothing writes
+  it. Decided against threading the store through `AppSession` (option (a)) in
+  favour of passing it to the screens like `AppSettings` (option (b)): push
+  notifications carry no names, so the background isolate needs nothing, and only
+  three places in `AppSession` ever touched a peer alias. Three findings:
+  - `titleFor` takes the **store** rather than a name the caller looked up. The
+    signature must stay uniform — a chat list draws both kinds through it — and a
+    *required* parameter is what made this compiler-guided: 18 call sites named
+    themselves, where an optional one would have let a forgotten lookup fall
+    back to an address and look like a missing name
+  - **a rebuild at the root does not reach a pushed route**, which is what I had
+    told Andreas would carry the notifications. A `MaterialPageRoute` builder
+    runs once and the route holds its result; a theme survives an ancestor
+    rebuild only because `Theme` is an `InheritedWidget`. So each screen showing
+    a name listens for itself via `Listenable.merge([session, contacts])`
+  - `NewChatSheet`'s optional name was the one non-mechanical case: it now writes
+    the contact *after* `startConversation` returns, because the returned
+    conversation carries the **canonical** id and the field may hold a prefix —
+    resolve-at-creation, arrived at from the other direction
+- 2026-08-05 — **phase 3 shipped: the contacts area exists.** Its own icon in the
+  chat list's app bar rather than an overflow entry, because it is the one screen
+  there that is *not* about the selected account. The list shows every contact
+  with the address still under the name — a name is what one person decided to
+  call another, and somebody else could claim the same one. Adding by hand
+  resolves before it saves (`contact_resolver.dart`), and the detail screen
+  answers the multi-account questions. Four things worth recording:
+  - the resolver distinguishes **"no" from "could not ask"**, and only the first
+    is an answer. A 404 or a non-Freizone host means the address is wrong; an
+    unreachable server or a 500 means nothing was learned, so no contact is
+    created and the button becomes "Try again". Without that split, one dropped
+    connection writes a contact that fails the first time it is used, long after
+    anybody remembers typing it
+  - resolution is genuinely account-independent — `GET /v1/accounts/{id}` is
+    public — but it does need a **host to ask**, so a bare id is resolved against
+    the active account's server, the same convention the new-chat sheet applies.
+    Worth stating, since the design document's "needs no account of ours" is true
+    of authentication and not of host selection
+  - the detail screen splits my accounts into **already talking** and **could
+    start**, which is what keeps "open the chat" distinct from "start a new one".
+    An account that cannot reach the contact is listed separately *with the
+    reason* rather than omitted: `federationLockedFor` is consulted before the
+    action is offered, and silently hiding it would make "any account that isn't
+    talking to them yet" false in exactly the federated setups that motivate
+    having several accounts
+  - the import notice from phase 1 finally has somewhere to appear, at the top of
+    the list, and it is only ever raised for a real disagreement
+- 2026-08-05 — **phase 4 shipped, and with it the item.** The three deletions:
+  *remove a contact* (the name only) landed with phase 3; *delete a chat* now
+  also drops the peer from `knownPeerIds`; and *remove permanently* is new,
+  taking the ratchet session too, gated on evidence from the public account
+  directory (`peer_absence.dart`), and offered below "Delete chat" because it
+  does strictly more. Three things to record:
+  - **deleting a chat reverses an earlier deliberate choice.** `acceptConversation`
+    added the peer to `knownPeerIds` specifically so that a later delete would
+    *not* "regress them to an unactioned request"; the 2026-08-04 decision wants
+    the opposite — deleting is a decision about the relationship, so somebody
+    writing again is an event worth surfacing rather than a chat quietly
+    reappearing. Implemented as decided, with the reversal written into
+    `deleteConversation`'s own doc comment so the next reader does not find only
+    the old rationale. The "delete chat" wording now says so
+  - the verdict type is deliberately five-valued, not a boolean: `gone`,
+    `noActiveDevice`, `notAFreizoneServer` are definite absences and lose nothing
+    by construction, while `unknown` **and** `present` both keep
+    `couldStillLoseMessages` true. Collapsing "I could not ask" into "gone" is
+    exactly how this action would cost somebody their messages
+  - the risk is stated as what it actually is rather than as "cannot be undone":
+    if that peer does write again, their first messages cannot be read until the
+    encryption has been rebuilt. Only shown when the check could not establish
+    absence
+  Left open on purpose, as the design document already had it: whether a
+  permanent removal should mark the peer so their *first* undecryptable envelope
+  triggers an immediate re-key instead of waiting for SRV-03's evidence to
+  accumulate. It only matters in the case just called unlikely.
+
 ### APP-20 — Save a picture from a transcript to the device gallery
 Status: `planned` · Part of: APP-04
 
