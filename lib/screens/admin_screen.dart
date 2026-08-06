@@ -79,6 +79,12 @@ class _AdminScreenState extends State<AdminScreen> {
       // -- this is what populates ownAttestation (SRV-19 / APP-22), same as
       // every other screen that shows it.
       await widget.session.refreshRegistrationPolicy();
+      // Admin only (SRV-22) -- moderators get a 403 there, so this stays
+      // scoped to the role that can actually act on it (renew, cut seats).
+      // _isAdmin reads myRole, which refreshMyRole above just updated.
+      if (_isAdmin) {
+        await widget.session.refreshLicenseStatus();
+      }
       if (!mounted) return;
       setState(() {
         _policy = policy;
@@ -242,7 +248,11 @@ class _AdminScreenState extends State<AdminScreen> {
   /// judgment about the server. Also the one placement carrying an expiry
   /// warning: without it, the first sign of lapse is a badge that silently
   /// stopped appearing elsewhere, discovered by a user rather than by the
-  /// operator who could have renewed it.
+  /// operator who could have renewed it. Also carries a seat-limit warning
+  /// (SRV-22, admin only, from a separate signed request -- see
+  /// [AppSession.licenseStatus]) when active accounts exceed what the
+  /// attestation covers; unlike the expiry warning, absent whenever there is
+  /// nothing to warn about, never a "seats: N of N" line shown at rest.
   Widget _buildAttestationSection(BuildContext context) {
     final attestation = widget.session.ownAttestation;
     const daysBeforeExpiryWarning = 30;
@@ -306,6 +316,36 @@ class _AdminScreenState extends State<AdminScreen> {
                                     daysLeft < 0
                                         ? 'This attestation has expired -- contact the Freizone project for a renewal.'
                                         : 'This attestation expires in $daysLeft day${daysLeft == 1 ? '' : 's'} -- contact the Freizone project for a renewal.',
+                                    style: TextStyle(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.error,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (_isAdmin &&
+                              widget.session.licenseStatus?.overLimit ==
+                                  true) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.warning_amber,
+                                  size: 18,
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'This server has '
+                                    '${widget.session.licenseStatus!.activeAccounts} '
+                                    'active accounts, over the '
+                                    '${widget.session.licenseStatus!.seats} seats '
+                                    'this attestation covers -- contact the '
+                                    'Freizone project to raise the seat count.',
                                     style: TextStyle(
                                       color: Theme.of(
                                         context,

@@ -30,7 +30,7 @@ func signTestAttestation(t *testing.T, domain string, expiresAt time.Time) (stri
 	if err != nil {
 		t.Fatalf("GenerateIssuerKey() error = %v", err)
 	}
-	a, err := attest.Sign(domain, attest.TierCommunity, "Example GmbH", time.Now(), expiresAt, priv)
+	a, err := attest.Sign(domain, attest.TierCommunity, "Example GmbH", 0, time.Now(), expiresAt, priv)
 	if err != nil {
 		t.Fatalf("Sign() error = %v", err)
 	}

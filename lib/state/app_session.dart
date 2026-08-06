@@ -899,6 +899,29 @@ class AppSession extends ChangeNotifier {
   /// identically: nothing. See docs/design/22-verified-badge.md.
   AttestationInfo? ownAttestation;
 
+  /// This server's seat ceiling against its real active-account count
+  /// (SRV-22, admin only) -- a separate signed request from
+  /// [ownAttestation], never folded into the public server-status response
+  /// it comes from: how many accounts a server has is attack-surface
+  /// information, unlike anything the badge itself shows. Null until
+  /// [refreshLicenseStatus] has run, or if it failed (e.g. this device is
+  /// not an admin) -- the admin screen treats both as "nothing to warn
+  /// about" rather than an error.
+  LicenseStatus? licenseStatus;
+
+  /// Refreshes [licenseStatus]. Admin only -- call after confirming
+  /// [myRole] is "admin", the same gate the server itself enforces; a
+  /// moderator calling this just gets a 403 and [licenseStatus] stays null,
+  /// same as a failed fetch of anything else here.
+  Future<void> refreshLicenseStatus() async {
+    try {
+      licenseStatus = await api.getLicenseStatus(state.credentials);
+    } catch (e) {
+      licenseStatus = null;
+      _noteFailure('checking license status failed', e);
+    }
+  }
+
   /// Refreshes [registrationPolicy], [federationEnabled] and [ownAttestation]
   /// from the public server-status endpoint (one call covers all three).
   /// Call once after [init] and again whenever the app returns to the

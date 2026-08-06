@@ -961,3 +961,28 @@ something this attestation does not.
   switcher, own profile. The admin area's placement was not device-checked
   this round -- code-reviewed and passes `flutter analyze`, but no admin
   account was on hand in the session that verified the rest
+
+### APP-23 — Seat-limit warning in Server Admin
+Status: `done` · Also affects: freizone-server (SRV-22), freizone-licensing (LIC-08)
+
+A seat-count warning in the admin area, next to APP-22's attestation status
+there, but deliberately not part of the badge itself: how many accounts a
+server has is admin-only information, unlike anything the badge shows to a
+peer or a stranger's client, so it comes from a separate signed request
+rather than riding along with the publicly-decodable attestation token.
+
+- 2026-08-06 — shipped. `LicenseStatus` (`lib/net/dto.dart`) parses
+  `GET /v1/admin/license`; `AppSession.refreshLicenseStatus` fetches it,
+  called only when `myRole == 'admin'` from the admin screen's own load path
+  (moderators get a 403 server-side and never see the call at all). Rendered
+  as a second warning row beside the existing expiry one in
+  `_buildAttestationSection`, shown only when `overLimit` is true -- no
+  "seats: N of N" line at rest, matching the expiry warning's own
+  show-only-when-it-matters shape. Deliberately does not touch
+  `VerifyAttestation`/`AttestationInfo` (the client-side badge decoder used
+  for peers and strangers) at all -- adding `Seats` there would leak the same
+  account-count figure to anyone who can fetch a server's public
+  `GET /v1/server-status`, exactly the exposure this stayed admin-only to
+  avoid. `go test ./native/...` caught a real break while wiring this up:
+  `attestation_test.go`'s hand-built test token used `attest.Sign`'s old
+  signature, fixed alongside

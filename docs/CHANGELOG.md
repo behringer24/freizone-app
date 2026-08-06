@@ -16,6 +16,19 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-08-06 (versionCode 23)
+
+See when your server is running more accounts than it's licensed for.
+
+### Added
+
+* The Server Admin screen now warns when the number of active accounts
+  passes the seat count a server's attestation covers (`APP-23`, `SRV-22`,
+  freizone-licensing `LIC-08`) — right beside the existing attestation
+  status and its expiry warning. Never shown anywhere else: how many
+  accounts a server has stays between the server and its own admins, unlike
+  the attestation badge itself
+
 ## [0.18.0] — 2026-08-06 (versionCode 22)
 
 Know when a server is run in agreement with the Freizone project.
