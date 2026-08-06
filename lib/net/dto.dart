@@ -305,6 +305,51 @@ class CreateInviteResponse {
   final DateTime? expiresAt;
 }
 
+/// GET /v1/admin/license (SRV-22) -- this server's advisory seat ceiling
+/// against its own active-account count. Admin only, unlike everything else
+/// an attestation carries: how many accounts a server has is attack-surface
+/// information, not something even the [AttestationInfo] badge (verified
+/// client-side from the public, unauthenticated server-status token) is
+/// allowed to reveal, so this is a separate, signed request rather than
+/// another field riding along with that one.
+class LicenseStatus {
+  LicenseStatus({
+    required this.attested,
+    this.tier,
+    this.seats,
+    this.expiresAt,
+    required this.activeAccounts,
+    required this.overLimit,
+  });
+
+  /// False for anything not currently usable -- no attestation configured,
+  /// or one that fails to decode, verify, or falls outside its validity
+  /// window. [tier], [seats], and [expiresAt] are only meaningful when this
+  /// is true; a caller must not render them otherwise, same rule as
+  /// [AttestationInfo.valid] elsewhere.
+  final bool attested;
+  final String? tier;
+
+  /// Null (server omits the field) means "unspecified or unlimited" -- in
+  /// which case [overLimit] is always false, there being no ceiling to
+  /// compare against.
+  final int? seats;
+  final DateTime? expiresAt;
+  final int activeAccounts;
+  final bool overLimit;
+
+  factory LicenseStatus.fromJson(Map<String, dynamic> j) => LicenseStatus(
+    attested: j['attested'] as bool? ?? false,
+    tier: j['tier'] as String?,
+    seats: (j['seats'] as num?)?.toInt(),
+    expiresAt: j['expires_at'] == null
+        ? null
+        : decodeTime(j['expires_at'] as String),
+    activeAccounts: (j['active_accounts'] as num?)?.toInt() ?? 0,
+    overLimit: j['over_limit'] as bool? ?? false,
+  );
+}
+
 class AdminAccountSummary {
   AdminAccountSummary({
     required this.id,

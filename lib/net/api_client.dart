@@ -868,6 +868,15 @@ class ApiClient {
     return CreateInviteResponse.fromJson(_decodeObject(resp, {201}));
   }
 
+  /// This server's seat ceiling (SRV-22) against its real active-account
+  /// count. Admin only -- a moderator calling this gets a 403, matching
+  /// requireAdmin server-side; callers should gate on role before calling
+  /// rather than rely on that to fail quietly.
+  Future<LicenseStatus> getLicenseStatus(DeviceCredentials creds) async {
+    final resp = await _signedRequest('GET', '/v1/admin/license', null, creds);
+    return LicenseStatus.fromJson(_decodeObject(resp, {200}));
+  }
+
   /// Builds (but does not send) a signed GET request for the long-lived
   /// SSE stream endpoint -- used by SseClient, which needs the raw
   /// streamed response rather than a buffered http.Response.
