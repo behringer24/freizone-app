@@ -16,6 +16,22 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-08-06 (versionCode 22)
+
+Know when a server is run in agreement with the Freizone project.
+
+### Added
+
+* A small checkmark badge marks a server as attested by the Freizone project
+  (`APP-22`, `SRV-19`) — never a person. Shown wherever you're deciding
+  *about a server*: the setup wizard when adding one, the account switcher
+  (once per server, beside its label), a contact's profile (next to their
+  server, not their name), your own profile, and — for your own server — the
+  admin area, with a warning before it lapses. Tapping it explains what was
+  actually checked, until when, and states plainly that it says nothing
+  about the security of your messages, which is identical on every Freizone
+  server regardless of who runs it
+
 ## [0.17.0] — 2026-08-05 (versionCode 21)
 
 Groups say who is talking: the names you have given people, everywhere a group

@@ -928,7 +928,7 @@ with APP-17, which needs a wire field first.
   scroll to an older pin.
 
 ### APP-22 — Verified-operator badge
-Status: `planned` · Also affects: freizone-server (SRV-19)
+Status: `done` · Also affects: freizone-server (SRV-19)
 Design: [design/22-verified-badge.md](design/22-verified-badge.md)
 
 Show that a server is operated in agreement with the project. SRV-19 carries the
@@ -939,3 +939,25 @@ delicate half, the places it is kept out of: a tick beside a person's name says
 something this attestation does not.
 
 - 2026-08-05 — created alongside SRV-19
+- 2026-08-06 — shipped. Verification lives in the native core
+  (`VerifyAttestation`), which imports freizone-server's `pkg/attest`
+  directly via native/go.mod's existing sibling-checkout convention rather
+  than reimplementing the format. `VerifiedBadge` paints the same 8-lobe
+  seal as `gfx/verified_badge.svg` with a `CustomPainter` (fixed brand
+  colour, independent of the user's own accent choice) rather than loading
+  the SVG asset, since flutter_svg does not reliably honour its
+  `<style>`/`@media` dark-mode switch. Landed in five places, one more than
+  originally scoped: the design doc's four (setup wizard, account switcher,
+  peer profile, admin area) plus a `Server: …` line on one's own profile,
+  mirroring the peer one
+- 2026-08-06 — the account-switcher placement moved twice after the first
+  cut: initially stacked under the server label, which overflowed the
+  switcher's fixed 64px slot by 9px (`RenderFlex overflowed`) once a badge
+  was actually present; then tried at 8–10px there, too small to comfortably
+  tap. Settled on a 24px badge in the first avatar's bottom-left corner —
+  the corner opposite the existing role/offline badge, so the two never
+  collide, sized to match it for a consistent, tappable target
+- 2026-08-06 — verified on-device (emulator): setup wizard, account
+  switcher, own profile. The admin area's placement was not device-checked
+  this round -- code-reviewed and passes `flutter analyze`, but no admin
+  account was on hand in the session that verified the rest

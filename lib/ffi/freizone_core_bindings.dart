@@ -56,6 +56,7 @@ class FreizoneCoreBindings {
       recoveryWordlist = _lookupNoArg(lib, 'RecoveryWordlist'),
       encryptBlob = _lookupWithReq(lib, 'EncryptBlob'),
       decryptBlob = _lookupWithReq(lib, 'DecryptBlob'),
+      verifyAttestation = _lookupWithReq(lib, 'VerifyAttestation'),
       groupCreate = _lookupWithReq(lib, 'GroupCreate'),
       groupSignEvent = _lookupWithReq(lib, 'GroupSignEvent'),
       groupApplyEvents = _lookupWithReq(lib, 'GroupApplyEvents'),
@@ -98,6 +99,7 @@ class FreizoneCoreBindings {
   final NoArgFn recoveryWordlist;
   final WithReqFn encryptBlob;
   final WithReqFn decryptBlob;
+  final WithReqFn verifyAttestation;
   final WithReqFn groupCreate;
   final WithReqFn groupSignEvent;
   final WithReqFn groupApplyEvents;

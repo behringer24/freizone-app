@@ -19,6 +19,7 @@ class ServerStatus {
     this.maxBlobRecipients = 1,
     this.batchMessages = false,
     this.maxBatchMessages = 0,
+    this.attestation,
   });
 
   factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
@@ -47,6 +48,11 @@ class ServerStatus {
     // and not to another's (docs/PROTOCOL.md §4).
     batchMessages: j['batch_messages'] as bool? ?? false,
     maxBatchMessages: (j['max_batch_messages'] as num?)?.toInt() ?? 0,
+    // Opaque (SRV-19) -- this DTO only carries it; FreizoneCore.
+    // verifyAttestation is what turns it into something safe to render.
+    // Omitted (null), not empty, means no attestation is configured, which
+    // is the ordinary case for the overwhelming majority of servers.
+    attestation: j['attestation'] as String?,
   );
 
   final bool claimed;
@@ -72,6 +78,12 @@ class ServerStatus {
   /// How many items it accepts in one batch, or 0 if it didn't say -- a sender
   /// must split above this rather than have the whole batch refused.
   final int maxBatchMessages;
+
+  /// Opaque pkg/attest token (SRV-19), or null if this server carries no
+  /// attestation -- the ordinary case. Never rendered directly: pass it to
+  /// FreizoneCore.verifyAttestation against the domain actually being shown,
+  /// and only render its result.
+  final String? attestation;
 }
 
 /// What one item of a batch send came back as (docs/PROTOCOL.md §7).

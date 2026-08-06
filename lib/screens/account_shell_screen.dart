@@ -17,6 +17,7 @@ import '../util/role_icon.dart';
 import '../util/server_label.dart';
 import '../util/unread_dot.dart';
 import '../widgets/peer_avatar.dart';
+import '../widgets/verified_badge.dart';
 import 'chat_list_screen.dart';
 import 'profile_screen.dart';
 import 'setup_screen.dart';
@@ -314,6 +315,29 @@ class _AccountShellScreenState extends State<AccountShellScreen> {
                                           size: 16,
                                           color: Colors.black54,
                                         ),
+                                      ),
+                                    ),
+                                  // Verified-operator badge (SRV-19 / APP-22)
+                                  // -- once per server group, on its first
+                                  // avatar's bottom-LEFT corner: the corner
+                                  // opposite the role/offline badge above, so
+                                  // the two never collide, in the flat area
+                                  // the circle's own rounding leaves free.
+                                  // Sized the same as that badge (24px) --
+                                  // the smaller glyph tried first, tucked
+                                  // under the rotated label, was both too
+                                  // small to tap and got clipped by the
+                                  // switcher's fixed height.
+                                  if (session.ownAttestation
+                                      case final attestation?
+                                      when session == groups[gi].first)
+                                    Positioned(
+                                      bottom: -3,
+                                      left: -3,
+                                      child: VerifiedBadge(
+                                        info: attestation,
+                                        server: session.state.server,
+                                        size: 24,
                                       ),
                                     ),
                                   if (session.hasAnyUnread)

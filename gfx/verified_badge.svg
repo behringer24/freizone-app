@@ -1,0 +1,22 @@
+<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+<style>
+.fz-badge-fill{fill:#0c8577}
+.fz-badge-check{stroke:#fff}
+@media (prefers-color-scheme: dark){
+.fz-badge-fill{fill:#3fbfad}
+.fz-badge-check{stroke:#06201c}
+}
+</style>
+<g class="fz-badge-fill">
+<circle cx="32" cy="20" r="7.5"/>
+<circle cx="28.485" cy="28.485" r="7.5"/>
+<circle cx="20" cy="32" r="7.5"/>
+<circle cx="11.515" cy="28.485" r="7.5"/>
+<circle cx="8" cy="20" r="7.5"/>
+<circle cx="11.515" cy="11.515" r="7.5"/>
+<circle cx="20" cy="8" r="7.5"/>
+<circle cx="28.485" cy="11.515" r="7.5"/>
+<circle cx="20" cy="20" r="13"/>
+</g>
+<path class="fz-badge-check" d="M13 21 L18 26 L28 13" fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

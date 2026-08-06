@@ -310,6 +310,23 @@ class FreizoneCore {
     return decodeB64(data['plaintext'] as String);
   }
 
+  // --- Server attestation (SRV-19 / APP-22) --------------------------------
+
+  /// Verifies an opaque attestation token (ServerStatus.attestation) against
+  /// [domain] -- the server it is actually being shown for, not necessarily
+  /// the one it names. Returns null for anything that does not hold up:
+  /// malformed, signed by an untrusted issuer, for a different domain, or
+  /// expired. A null result must be rendered as "nothing configured", never
+  /// as a warning -- see docs/design/22-verified-badge.md.
+  AttestationInfo? verifyAttestation(String token, String domain) {
+    final data = _call(_bindings.verifyAttestation, {
+      'token': token,
+      'domain': domain,
+    });
+    if (data['valid'] != true) return null;
+    return AttestationInfo.fromJson(data);
+  }
+
   // --- Groups (APP-16) -----------------------------------------------------
   //
   // The state blob these pass back and forth is opaque here on purpose: it is
