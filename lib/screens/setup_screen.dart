@@ -20,9 +20,11 @@ import '../ffi/models.dart';
 import '../net/api_client.dart';
 import '../state/local_state.dart';
 import '../util/errors.dart';
+import '../util/freizone_address.dart' show withoutDefaultScheme;
 import '../util/invite_uri.dart';
 import '../util/server_url.dart';
 import '../widgets/qr_scan_button.dart';
+import '../widgets/verified_badge.dart';
 import 'qr_scan_screen.dart';
 
 enum _WizardStep { address, bootstrap, invite, openRegister, closed, recover }
@@ -69,6 +71,12 @@ class _SetupScreenState extends State<SetupScreen> {
   String? _server;
   bool _submitting = false;
   String? _error;
+
+  /// This server's attestation (SRV-19 / APP-22), verified against [_server]
+  /// once [_checkServer] has an answer -- the one moment in the app a user
+  /// makes a decision *about a server*, per docs/design/22-verified-badge.md.
+  /// Null (the ordinary case) renders nothing, never a warning.
+  AttestationInfo? _attestation;
 
   /// An invite code carried by a scanned QR (lib/util/invite_uri.dart),
   /// pre-filled into the token field once _checkServer lands on the
@@ -283,13 +291,25 @@ class _SetupScreenState extends State<SetupScreen> {
     setState(() {
       _submitting = true;
       _error = null;
+      _attestation = null;
     });
 
     final api = ApiClient(baseUrl: server, core: FreizoneCore());
     try {
       final status = await api.getServerStatus();
+      // The attestation's domain is a bare hostname (FREIZONE_DOMAIN on the
+      // server side, no scheme/port) -- Uri.parse(server).host matches that,
+      // the same way the web landing page compares against
+      // location.hostname rather than the full origin.
+      final attestation = status.attestation == null
+          ? null
+          : api.core.verifyAttestation(
+              status.attestation!,
+              Uri.parse(server).host,
+            );
       setState(() {
         _server = server;
+        _attestation = attestation;
         _submitting = false;
         if (!status.claimed) {
           _step = _WizardStep.bootstrap;
@@ -556,6 +576,30 @@ class _SetupScreenState extends State<SetupScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // The one moment this wizard is deciding *about a server*, so the
+        // one moment the attestation is decision-relevant (APP-22). Absent
+        // for the ordinary un-attested server -- no row, no placeholder.
+        if (_attestation case final attestation?) ...[
+          Row(
+            children: [
+              Flexible(
+                child: Text(
+                  withoutDefaultScheme(_server!),
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              VerifiedBadge(
+                info: attestation,
+                server: withoutDefaultScheme(_server!),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         Text(description),
         if (tokenLabel != null) ...[
           const SizedBox(height: 16),

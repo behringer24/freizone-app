@@ -889,17 +889,38 @@ class AppSession extends ChangeNotifier {
   /// [federationLocked].
   bool federationEnabled = true;
 
-  /// Refreshes [registrationPolicy] and [federationEnabled] from the public
-  /// server-status endpoint (one call covers both). Call once after [init]
-  /// and again whenever the app returns to the foreground, the SSE stream
-  /// (re)connects, or the chat list / admin area is shown, so a change made
-  /// elsewhere is picked up in time.
+  /// This account's own home server's attestation (SRV-19 / APP-22), decoded
+  /// and verified inside [refreshRegistrationPolicy] alongside the
+  /// registration policy and federation flag it already fetches from the
+  /// same GET /v1/server-status call -- one more field read off a response
+  /// already in hand, not a second request. Null means either no attestation
+  /// is configured (the ordinary case for the overwhelming majority of
+  /// servers) or one was configured but does not hold up -- both render
+  /// identically: nothing. See docs/design/22-verified-badge.md.
+  AttestationInfo? ownAttestation;
+
+  /// Refreshes [registrationPolicy], [federationEnabled] and [ownAttestation]
+  /// from the public server-status endpoint (one call covers all three).
+  /// Call once after [init] and again whenever the app returns to the
+  /// foreground, the SSE stream (re)connects, or the chat list / admin area
+  /// is shown, so a change made elsewhere is picked up in time.
   Future<void> refreshRegistrationPolicy() async {
     try {
       final status = await api.getServerStatus();
       registrationPolicy = status.registrationPolicy;
       federationEnabled = status.federationEnabled;
       _ownBlobs = BlobCapability.from(status);
+      // The attestation's domain is a bare hostname (FREIZONE_DOMAIN
+      // server-side, no scheme/port); state.server carries the full
+      // https://-prefixed URL used as the API base, so it must be parsed
+      // down to just the host before comparing -- same reasoning as the web
+      // landing page comparing against location.hostname, not the origin.
+      ownAttestation = status.attestation == null
+          ? null
+          : core.verifyAttestation(
+              status.attestation!,
+              Uri.parse(state.server).host,
+            );
     } catch (e) {
       _noteFailure('checking registration policy failed', e);
     }
@@ -1001,6 +1022,43 @@ class AppSession extends ChangeNotifier {
       // surface the real failure rather than us pre-emptively lying about
       // what the peer's server supports.
       _noteFailure('checking attachment support failed', e);
+      return null;
+    }
+  }
+
+  /// Same, per federated peer server, keyed by its URL -- same session-only
+  /// caching trade-off as [_peerBlobs]: a change is only picked up on
+  /// restart, not mid-session, which is fine here since an attestation's
+  /// validity window is measured in months, not minutes.
+  final Map<String, AttestationInfo?> _peerAttestations = {};
+
+  /// The attestation for [server], or for our own home server when null
+  /// (equivalent to reading [ownAttestation] directly, once it has loaded).
+  /// Null means either no attestation is configured or one was configured
+  /// but does not hold up -- see [ownAttestation] on why both render
+  /// identically: nothing, never a warning.
+  Future<AttestationInfo?> attestationFor(String? server) async {
+    if (server == null) {
+      if (_ownBlobs == null) await refreshRegistrationPolicy();
+      return ownAttestation;
+    }
+    final cached = _peerAttestations[server];
+    if (cached != null || _peerAttestations.containsKey(server)) return cached;
+    try {
+      final status = await _clientFor(server).getServerStatus();
+      // Same host-only comparison as ownAttestation's -- server here is
+      // also the full https://-prefixed URL, not the bare domain the
+      // attestation itself names.
+      final info = status.attestation == null
+          ? null
+          : core.verifyAttestation(status.attestation!, Uri.parse(server).host);
+      _peerAttestations[server] = info;
+      return info;
+    } catch (e) {
+      // Unreachable or erroring: unknown, not "not attested" -- leave the
+      // cache unset so the next call tries again, same as
+      // [blobCapabilityForServer]'s identical failure handling.
+      _noteFailure('checking server attestation failed', e);
       return null;
     }
   }

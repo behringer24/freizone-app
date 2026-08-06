@@ -15,6 +15,7 @@ import '../util/admin_list_view.dart';
 import '../util/errors.dart';
 import '../util/role_icon.dart';
 import '../widgets/admin_search_field.dart';
+import '../widgets/verified_badge.dart';
 import 'admin_account_screen.dart';
 
 class AdminScreen extends StatefulWidget {
@@ -74,6 +75,10 @@ class _AdminScreenState extends State<AdminScreen> {
       await widget.session.refreshMyRole();
       final policy = await widget.session.getRegistrationPolicy();
       final federationEnabled = await widget.session.getFederationEnabled();
+      // Public GET /v1/server-status, not one of the admin-only calls above
+      // -- this is what populates ownAttestation (SRV-19 / APP-22), same as
+      // every other screen that shows it.
+      await widget.session.refreshRegistrationPolicy();
       if (!mounted) return;
       setState(() {
         _policy = policy;
@@ -225,6 +230,97 @@ class _AdminScreenState extends State<AdminScreen> {
           onChanged: _isAdmin && _federationEnabled != null
               ? (v) => _setFederationEnabled(v)
               : null,
+        ),
+      ],
+    );
+  }
+
+  /// Own-server attestation status (SRV-19 / APP-22): unlike every other
+  /// placement, this one states "not attested" plainly rather than showing
+  /// nothing -- an operator needs to know their configuration took effect,
+  /// which is a different question from a visitor reading a badge as a
+  /// judgment about the server. Also the one placement carrying an expiry
+  /// warning: without it, the first sign of lapse is a badge that silently
+  /// stopped appearing elsewhere, discovered by a user rather than by the
+  /// operator who could have renewed it.
+  Widget _buildAttestationSection(BuildContext context) {
+    final attestation = widget.session.ownAttestation;
+    const daysBeforeExpiryWarning = 30;
+    final daysLeft = attestation?.expiresAt.difference(DateTime.now()).inDays;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+          child: Text(
+            'Attestation',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: attestation == null
+              ? Text(
+                  'This server carries no attestation from the Freizone project.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                )
+              // Single Row with the glyph as a leading icon and everything
+              // else -- tier line, "Operated by", "Valid until", the expiry
+              // warning -- in one indented Column beside it, so the whole
+              // block reads as one attestation rather than an icon glued to
+              // just its first line.
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const VerifiedBadgeGlyph(size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(attestationTierDescription(attestation.tier)),
+                          if (attestation.subject.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text('Operated by: ${attestation.subject}'),
+                          ],
+                          const SizedBox(height: 4),
+                          Text(
+                            'Valid until ${formatAttestationDate(attestation.expiresAt)}',
+                          ),
+                          if (daysLeft != null &&
+                              daysLeft < daysBeforeExpiryWarning) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.warning_amber,
+                                  size: 18,
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    daysLeft < 0
+                                        ? 'This attestation has expired -- contact the Freizone project for a renewal.'
+                                        : 'This attestation expires in $daysLeft day${daysLeft == 1 ? '' : 's'} -- contact the Freizone project for a renewal.',
+                                    style: TextStyle(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.error,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
         ),
       ],
     );
@@ -464,6 +560,8 @@ class _AdminScreenState extends State<AdminScreen> {
                     _buildPolicySection(context),
                     const Divider(height: 32),
                     _buildFederationSection(context),
+                    const Divider(height: 32),
+                    _buildAttestationSection(context),
                     const Divider(height: 32),
                     _buildUsersHeader(context, accounts, shown),
                     // A search that matches nothing needs saying out loud --

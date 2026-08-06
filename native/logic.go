@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/behringer24/freizone-server/pkg/address"
+	"github.com/behringer24/freizone-server/pkg/attest"
 	"github.com/behringer24/freizone-server/pkg/devicecert"
 	"github.com/behringer24/freizone-server/pkg/httpsig"
 	"github.com/behringer24/freizone-server/pkg/mnemonic"
@@ -688,4 +689,67 @@ func blobAEAD(key []byte) (cipher.AEAD, error) {
 		return nil, fmt.Errorf("blob: creating gcm: %w", err)
 	}
 	return gcm, nil
+}
+
+// --- Server attestation verification (SRV-19 / APP-22) ---------------------
+//
+// Verification lives here, in the shared core, rather than in Dart, for the
+// same reason everything else touching a signature does: this client's
+// notion of "genuine" must never drift from the server's own. See
+// freizone-server's cmd/server checkAttestation, which runs the identical
+// three steps -- Decode, Verify against attest.TrustedIssuers, Valid against
+// a domain -- against the identical trusted-issuer set, since native/go.mod
+// vendors that repo directly rather than reimplementing the format. See
+// docs/design/22-verified-badge.md for where the result is shown.
+
+type verifyAttestationRequest struct {
+	// Token is the opaque string GET /v1/server-status returned verbatim
+	// (ServerStatus.attestation in Dart) -- never interpreted there.
+	Token string `json:"token"`
+	// Domain is the server this token is being checked against: the peer's
+	// home server for a federated contact, or this account's own. Checking
+	// only the signature (attest.Verify) without this would let an
+	// attestation genuinely issued for one server be replayed as if it were
+	// about another.
+	Domain string `json:"domain"`
+}
+
+type attestationResult struct {
+	// Valid is false for anything that does not hold up: a malformed token,
+	// an issuer key outside the trusted set, the wrong domain, or a lapsed
+	// validity window. Callers branch on this alone -- the fields below are
+	// meaningless when it is false, and a caller must never render them.
+	Valid   bool   `json:"valid"`
+	Tier    string `json:"tier,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	// ExpiresAt is Unix seconds (UTC). Carried as a number rather than a
+	// formatted string so Dart parses it with a plain int, not a second
+	// date-format contract across the FFI boundary.
+	ExpiresAt int64 `json:"expires_at,omitempty"`
+}
+
+// doVerifyAttestation decodes req.Token, checks its signature against
+// attest.TrustedIssuers, then checks it actually applies to req.Domain right
+// now. Every failure folds into Valid: false rather than a call error --
+// exactly like verifyResult elsewhere in this file -- so the caller never
+// has to tell "malformed" apart from "expired" apart from "wrong server";
+// see docs/design/22-verified-badge.md on why absence must never be shown as
+// a warning regardless of which of these it was.
+func doVerifyAttestation(req verifyAttestationRequest) (any, error) {
+	a, err := attest.Decode(req.Token)
+	if err != nil {
+		return attestationResult{Valid: false}, nil
+	}
+	if err := a.Verify(attest.TrustedIssuers); err != nil {
+		return attestationResult{Valid: false}, nil
+	}
+	if err := a.Valid(req.Domain, time.Now()); err != nil {
+		return attestationResult{Valid: false}, nil
+	}
+	return attestationResult{
+		Valid:     true,
+		Tier:      a.Tier,
+		Subject:   a.Subject,
+		ExpiresAt: a.ExpiresAt.Unix(),
+	}, nil
 }

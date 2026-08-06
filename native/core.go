@@ -184,6 +184,11 @@ func DecryptBlob(cReq *C.char) *C.char {
 	return jsonCall(cReq, doDecryptBlob)
 }
 
+//export VerifyAttestation
+func VerifyAttestation(cReq *C.char) *C.char {
+	return jsonCall(cReq, doVerifyAttestation)
+}
+
 // Groups (SRV-01 / APP-16). The state blob these pass back and forth is
 // opaque to the caller -- see group.go for why that matters.
 

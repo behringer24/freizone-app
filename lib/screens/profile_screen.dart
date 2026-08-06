@@ -15,6 +15,7 @@ import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/role_icon.dart';
 import '../widgets/peer_avatar.dart';
+import '../widgets/verified_badge.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
@@ -243,6 +244,10 @@ class ProfileScreen extends StatelessWidget {
                   onPressed: () => _copy(context, 'Full address', fullAddress),
                 ),
               ),
+              // Same placement as peer_profile_screen.dart's analogous line
+              // -- on its own row, attached to the server, not the identity
+              // above (APP-22).
+              _OwnServerListTile(session: session),
               const SizedBox(height: 16),
               const Divider(),
               Padding(
@@ -295,6 +300,59 @@ class ProfileScreen extends StatelessWidget {
                   label: const Text('Delete account'),
                 ),
               ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// This account's own home server, with its verified badge once (if) it
+/// checks out (SRV-19 / APP-22) -- mirrors peer_profile_screen.dart's
+/// analogous line. A small self-contained StatefulWidget, not folded into
+/// the (Stateless) ProfileScreen above, purely to kick off one
+/// refreshRegistrationPolicy() call the first time this row is shown --
+/// [session] already notifies once that lands, which is what the
+/// ListenableBuilder here is for.
+class _OwnServerListTile extends StatefulWidget {
+  const _OwnServerListTile({required this.session});
+
+  final AppSession session;
+
+  @override
+  State<_OwnServerListTile> createState() => _OwnServerListTileState();
+}
+
+class _OwnServerListTileState extends State<_OwnServerListTile> {
+  @override
+  void initState() {
+    super.initState();
+    widget.session.refreshRegistrationPolicy();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.session,
+      builder: (context, _) {
+        final attestation = widget.session.ownAttestation;
+        final display = withoutDefaultScheme(widget.session.state.server);
+        return ListTile(
+          title: const Text('Server'),
+          subtitle: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  display,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (attestation != null) ...[
+                const SizedBox(width: 6),
+                VerifiedBadge(info: attestation, server: display),
+              ],
             ],
           ),
         );

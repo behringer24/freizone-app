@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../ffi/models.dart';
 import '../state/app_session.dart';
 import '../state/contact_store.dart';
 import '../state/conversation.dart';
@@ -14,6 +15,7 @@ import '../util/block_actions.dart';
 import '../util/freizone_address.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
+import '../widgets/verified_badge.dart';
 
 class PeerProfileScreen extends StatelessWidget {
   const PeerProfileScreen({
@@ -189,6 +191,11 @@ class PeerProfileScreen extends StatelessWidget {
                   onPressed: () => _copy(context, 'Full address', fullAddress),
                 ),
               ),
+              // On its own line attached to the *server*, never beside the
+              // person's name above -- this attestation is about the server,
+              // and reads as being about the person if it sits next to a
+              // display name (APP-22).
+              _ServerListTile(session: session, server: peerServer),
               if (convo.pendingApproval) ...[
                 const SizedBox(height: 16),
                 Padding(
@@ -290,6 +297,65 @@ class PeerProfileScreen extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// The peer's server, with its verified badge once (if) it checks out
+/// (SRV-19 / APP-22) -- a small self-contained StatefulWidget rather than
+/// converting the whole (Stateless) screen above, since fetching an
+/// attestation is the one piece of this screen that isn't already
+/// available synchronously off [AppSession]/[ContactStore].
+class _ServerListTile extends StatefulWidget {
+  const _ServerListTile({required this.session, required this.server});
+
+  final AppSession session;
+  final String server;
+
+  @override
+  State<_ServerListTile> createState() => _ServerListTileState();
+}
+
+class _ServerListTileState extends State<_ServerListTile> {
+  AttestationInfo? _attestation;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ServerListTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A federated peer's server can change identity as this profile stays
+    // open (e.g. reopened for a different conversation reusing the route) --
+    // re-check rather than keep showing the previous server's badge.
+    if (oldWidget.server != widget.server) _load();
+  }
+
+  Future<void> _load() async {
+    final info = await widget.session.attestationFor(widget.server);
+    if (!mounted) return;
+    setState(() => _attestation = info);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final display = withoutDefaultScheme(widget.server);
+    return ListTile(
+      title: const Text('Server'),
+      subtitle: Row(
+        children: [
+          Flexible(
+            child: Text(display, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          if (_attestation case final info?) ...[
+            const SizedBox(width: 6),
+            VerifiedBadge(info: info, server: display),
+          ],
+        ],
+      ),
     );
   }
 }

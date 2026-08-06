@@ -548,3 +548,40 @@ class GroupStateResult {
   final List<String> known;
   final List<GroupRejection> rejected;
 }
+
+/// A server attestation that has been checked out (SRV-19 / APP-22):
+/// genuinely signed by a trusted issuer, and currently valid for the domain
+/// it was checked against. There is deliberately no factory for "invalid" --
+/// FreizoneCore.verifyAttestation returns null instead of an AttestationInfo
+/// for anything that doesn't hold up, so a caller can never accidentally
+/// read a half-failed result as if it were good. See
+/// docs/design/22-verified-badge.md on why absence must never be shown as a
+/// warning, regardless of which check failed.
+class AttestationInfo {
+  AttestationInfo({
+    required this.tier,
+    required this.subject,
+    required this.expiresAt,
+  });
+
+  factory AttestationInfo.fromJson(Map<String, dynamic> j) => AttestationInfo(
+    tier: j['tier'] as String? ?? '',
+    subject: j['subject'] as String? ?? '',
+    expiresAt: DateTime.fromMillisecondsSinceEpoch(
+      ((j['expires_at'] as num?)?.toInt() ?? 0) * 1000,
+      isUtc: true,
+    ),
+  );
+
+  /// "community" or "commercial" today, but open-ended -- see
+  /// pkg/attest.Tier in freizone-server. Rendering falls back to a neutral
+  /// label for anything this build doesn't recognise rather than showing
+  /// nothing, the same forward-compatibility rule SRV-10 tracks elsewhere.
+  final String tier;
+
+  /// Display name for the operator, e.g. "Example GmbH". Empty is valid --
+  /// not every attestation names one.
+  final String subject;
+
+  final DateTime expiresAt;
+}
