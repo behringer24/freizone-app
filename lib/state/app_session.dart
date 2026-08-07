@@ -21,7 +21,7 @@ import '../ffi/freizone_core_exception.dart';
 import '../ffi/models.dart';
 import '../net/api_client.dart';
 import '../net/dto.dart';
-import '../net/sse_client.dart';
+import '../net/core_stream.dart';
 import '../push/push_manager.dart';
 import '../util/address_format.dart';
 import '../util/errors.dart';
@@ -760,7 +760,7 @@ class AppSession extends ChangeNotifier {
   final AppState state;
   final FreizoneCore core = FreizoneCore();
   late final ApiClient api;
-  SseClient? _sse;
+  CoreStream? _sse;
 
   /// Additional ApiClients for federated peers, keyed by their (already
   /// normalized) server url -- lazily created and reused, since a
@@ -866,7 +866,7 @@ class AppSession extends ChangeNotifier {
   /// How long a dropped-but-previously-online connection may spend
   /// reconnecting before the UI is told the server is [unreachable]. Covers
   /// the sub-second reconnect after a background resume or a brief blip (see
-  /// SseClient's quick retry) without flickering the whole account grey.
+  /// the core's quick retry) without flickering the whole account grey.
   static const _reachabilityGrace = Duration(seconds: 2);
   Timer? _reachabilityGraceTimer;
 
@@ -1537,7 +1537,7 @@ class AppSession extends ChangeNotifier {
   /// The stream dropped or a reconnect attempt failed. Don't flip straight to
   /// [ServerReachability.unreachable] (which greys the account in the UI) when
   /// we were online: a resume from background or a brief blip reconnects in
-  /// well under a second (see SseClient's quick retry), and greying the whole
+  /// well under a second (see the core's quick retry), and greying the whole
   /// account for that is just noise. A drop from [online] sits in [connecting]
   /// (visually identical to online) and only escalates to [unreachable] after
   /// [_reachabilityGrace] with no reconnect. A failure while never-online
@@ -1558,7 +1558,7 @@ class AppSession extends ChangeNotifier {
     if (_reachabilityGraceTimer != null) return; // grace already deciding
     // First drop while in the foreground: stay visually online for the grace
     // window and only escalate to `unreachable` if nothing reconnects within
-    // it. A background resume reconnects in well under a second (SseClient's
+    // it. A background resume reconnects in well under a second (the core's
     // quick retry), so the grey never shows.
     reachability = ServerReachability.connecting;
     _reachabilityGraceTimer = Timer(_reachabilityGrace, () {
@@ -1588,7 +1588,7 @@ class AppSession extends ChangeNotifier {
 
   void _startStream() {
     if (_sse != null) return; // already streaming (or restarted before stop)
-    _sse = SseClient(apiClient: api, creds: state.credentials);
+    _sse = CoreStream(core: core, state: state);
     unawaited(
       _sse!.connect(
         onMessage: _handleIncoming,
@@ -1628,7 +1628,7 @@ class AppSession extends ChangeNotifier {
   /// Closes the live SSE stream and releases this device's subscriber slot on
   /// the server, so a message arriving while the app is backgrounded triggers
   /// a push wake instead of being delivered into a stream nobody is reading
-  /// (see [setForeground]). Closing is a clean disconnect -- SseClient.close
+  /// (see [setForeground]). Closing is a clean disconnect -- CoreStream.close
   /// marks itself closed before tearing down, so its reconnect loop exits
   /// without reporting an error, and reachability is left untouched. Safe to
   /// call when no stream is open.

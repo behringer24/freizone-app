@@ -60,7 +60,13 @@ class FreizoneCoreBindings {
       groupCreate = _lookupWithReq(lib, 'GroupCreate'),
       groupSignEvent = _lookupWithReq(lib, 'GroupSignEvent'),
       groupApplyEvents = _lookupWithReq(lib, 'GroupApplyEvents'),
-      groupResolveState = _lookupWithReq(lib, 'GroupResolveState');
+      groupResolveState = _lookupWithReq(lib, 'GroupResolveState'),
+      coreOpen = _lookupWithReq(lib, 'CoreOpen'),
+      coreClose = _lookupWithReq(lib, 'CoreClose'),
+      coreSetIdentity = _lookupWithReq(lib, 'CoreSetIdentity'),
+      coreStreamStart = _lookupWithReq(lib, 'CoreStreamStart'),
+      coreStreamStop = _lookupWithReq(lib, 'CoreStreamStop'),
+      corePoll = _lookupWithReq(lib, 'CorePoll');
 
   /// [path] is a host-test escape hatch and nothing else: a `flutter test`
   /// process has no core linked into it, so [DynamicLibrary.process] finds
@@ -115,4 +121,18 @@ class FreizoneCoreBindings {
   final WithReqFn groupSignEvent;
   final WithReqFn groupApplyEvents;
   final WithReqFn groupResolveState;
+
+  /// The shared client core (SRV-23). Unlike everything above these are
+  /// stateful: [coreOpen] returns a handle standing in for an open account
+  /// database and the rest operate on it until [coreClose].
+  final WithReqFn coreOpen;
+  final WithReqFn coreClose;
+  final WithReqFn coreSetIdentity;
+  final WithReqFn coreStreamStart;
+  final WithReqFn coreStreamStop;
+
+  /// Blocks until the stream has something to report or the timeout expires.
+  /// **Must be called from an isolate** -- on the UI thread it freezes the app
+  /// for the whole wait.
+  final WithReqFn corePoll;
 }
