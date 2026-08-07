@@ -261,7 +261,9 @@ class ContactDetailScreen extends StatelessWidget {
     final convo = session.state.conversations[accountId]!;
     // Per account, and this is the only place all of them are visible at once --
     // blocking somebody as a private account says nothing about a work one.
-    final blocked = convo.blocked;
+    // From the authoritative block set (AppSession.isBlocked), not the
+    // conversation's mirror, which can go stale.
+    final blocked = session.isBlocked(accountId);
     return ListTile(
       leading: PeerAvatar(accountId: session.state.accountId, radius: 20),
       title: Text(_accountLabel(session)),

@@ -263,3 +263,44 @@ StoredMessage storeGroupMessage(
   if (openChatId != groupId) chat.hasUnread = true;
   return message;
 }
+
+/// Leaves a visible trace of a group message that was dropped because its
+/// sender is blocked (see processIncomingMessage's group branch).
+///
+/// A one-to-one chat with a blocked peer can stay silent -- its blocked bar
+/// is the standing explanation. A group transcript is shared, though: the
+/// other members go on replying to messages this account never saw, and
+/// without a trace those replies read as non-sequiturs, indistinguishable
+/// from delivery loss (which is exactly what a live debugging session spent
+/// hours ruling out). One line per run rather than per message: consecutive
+/// drops from the same sender collapse into the line already there, so a
+/// chatty blocked member costs one line, not a column -- how *much* they
+/// wrote stays as unknowable as the content, which is the point of blocking.
+///
+/// Deliberately bumps neither lastActivityAt nor hasUnread: a blocked member
+/// must not be able to move this group up the chat list or put a badge on
+/// it.
+///
+/// A group this device has no transcript for yet gets nothing minted: unlike
+/// a real message (see storeGroupMessage), a shell group whose only content
+/// is "somebody blocked wrote" is not worth creating -- if the group is
+/// real, its facts and other members' messages will introduce it.
+void recordBlockedGroupMessage(
+  AppState state,
+  String groupId,
+  String senderAccountId,
+  DateTime receivedAt,
+) {
+  final chat = state.groups[groupId];
+  if (chat == null) return;
+  final line =
+      'A message from ${groupMemberLabel(senderAccountId)} was hidden '
+      '(blocked contact).';
+  final last = chat.messages.isEmpty ? null : chat.messages.last;
+  if (last != null &&
+      last.kind == StoredMessageKind.systemInfo &&
+      last.text == line) {
+    return;
+  }
+  chat.messages.add(StoredMessage.system(line, receivedAt));
+}
