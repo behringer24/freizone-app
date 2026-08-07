@@ -19,6 +19,13 @@ $toolchain = "$ndkRoot\$ndkVersion\toolchains\llvm\prebuilt\windows-x86_64\bin"
 
 # One entry per Android ABI: the jniLibs folder name, the Go GOARCH, and the
 # NDK clang wrapper that targets it (min API level 21).
+#
+# KEEP IN STEP with abiFilters in android/app/build.gradle.kts. Flutter emits a
+# split per ABI it knows about, whether or not there is a core for it, so an ABI
+# missing here but allowed there ships an app that installs and dies on its
+# first FFI call. That is exactly what happened with armeabi-v7a: every other
+# native library was in the split, this one was not, and nobody noticed because
+# no test device is 32-bit.
 $targets = @(
     @{ Abi = "arm64-v8a"; GoArch = "arm64"; Clang = "aarch64-linux-android21-clang.cmd" },
     @{ Abi = "x86_64";    GoArch = "amd64"; Clang = "x86_64-linux-android21-clang.cmd" }

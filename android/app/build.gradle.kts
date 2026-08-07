@@ -43,6 +43,37 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+    }
+
+    // The ABIs this app actually works on are exactly the set
+    // native/build_android.ps1 builds libfreizonecore.so for: arm64-v8a and
+    // x86_64. KEEP THE TWO IN STEP -- allowing an ABI here that has no core
+    // built for it produces a build that installs and then dies.
+    //
+    // Without this, Flutter emits an armeabi-v7a split too, and Play serves it
+    // to 32-bit-only devices. That split carried every other native library but
+    // not the core, so DynamicLibrary.open failed the moment AppSession was
+    // constructed -- unusable from first launch, not merely degraded. Excluding
+    // the ABI shows "not compatible" in the store instead, which is honest, and
+    // costs nothing: no working installation on it ever existed.
+    //
+    // Done here rather than with defaultConfig.ndk.abiFilters, which was tried
+    // first and had no effect -- Flutter's Gradle plugin sets that itself from
+    // --target-platform and overwrites it. --target-platform alone is not
+    // enough either: it drops Flutter's own libflutter.so and libapp.so for the
+    // ABI but leaves the plugins' prebuilt .so behind, which is a worse split
+    // than before rather than none at all. Excluding at packaging time is the
+    // only one of the three that acts on what actually ends up in the archive.
+    //
+    // 64-bit-only is ordinary now: Play has required 64-bit support since 2019,
+    // and with minSdk 24 this leaves out 32-bit-only hardware from around 2016.
+    // Revisit before any public launch, with real install numbers from the Play
+    // console rather than a guess.
+    packaging {
+        jniLibs {
+            excludes += "lib/armeabi-v7a/**"
+        }
     }
 
     signingConfigs {
