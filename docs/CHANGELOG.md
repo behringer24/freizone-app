@@ -16,6 +16,8 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-08-07 (versionCode 24)
+
 ### Added
 
 * Pictures you receive can now leave the app (`APP-20`). Open one full-screen
