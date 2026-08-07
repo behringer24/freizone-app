@@ -73,8 +73,9 @@ class ShareTargetScreen extends StatelessWidget {
     for (final session in sessions) {
       final convos = session.conversations
           // A pending request is someone we haven't accepted yet; sending them
-          // a shared link before answering that question would be odd.
-          .where((c) => !c.pendingApproval && !c.blocked)
+          // a shared link before answering that question would be odd. Blocked
+          // is asked of the authoritative set, not the conversation's mirror.
+          .where((c) => !c.pendingApproval && !session.isBlocked(c.peerAccountId))
           .toList();
       if (convos.isEmpty) continue;
 

@@ -130,7 +130,10 @@ Future<void> syncShareShortcuts(
     for (final convo in session.conversations) {
       // Never offer a chat the user hasn't accepted or has blocked: it would
       // put a stranger's or a blocked contact's name into the share sheet.
-      if (convo.pendingApproval || convo.blocked) continue;
+      // Blocked comes from the authoritative set, not the mirror.
+      if (convo.pendingApproval || session.isBlocked(convo.peerAccountId)) {
+        continue;
+      }
       candidates.add((
         accountId: session.state.accountId,
         peerAccountId: convo.peerAccountId,

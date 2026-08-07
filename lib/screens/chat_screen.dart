@@ -682,8 +682,12 @@ class _ChatScreenState extends State<ChatScreen> {
           // it -- which is how the reply bar could previously linger above a
           // blocked or federation-locked chat that has no input at all.
           final federationLocked = widget.session.federationLocked(convo);
+          // Off the authoritative block set, not the conversation's mirror
+          // (AppSession.isBlocked) -- a stale mirror once showed a normal
+          // composer for a peer whose incoming messages were being dropped.
+          final peerBlocked = widget.session.isBlocked(convo.peerAccountId);
           final composerAvailable =
-              !convo.blocked &&
+              !peerBlocked &&
               !convo.pendingApproval &&
               !unreachable &&
               !federationLocked;
@@ -708,7 +712,7 @@ class _ChatScreenState extends State<ChatScreen> {
               // context for the message, the picture is part of it.
               if (_pendingAttachment != null && composerAvailable)
                 _buildAttachmentComposerBar(context, _pendingAttachment!),
-              if (convo.blocked)
+              if (peerBlocked)
                 _buildBlockedBar(context, convo)
               else if (convo.pendingApproval)
                 _buildPendingRequestBar(context, convo)

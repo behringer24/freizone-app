@@ -68,7 +68,11 @@ class PeerProfileScreen extends StatelessWidget {
   }
 
   Future<void> _toggleBlock(BuildContext context, Conversation convo) async {
-    if (convo.blocked) {
+    // Decided off the authoritative block set, not the conversation's mirror
+    // (see AppSession.isBlocked): a mirror gone stale used to render "Block
+    // this contact" for a peer the receive path was already silently
+    // dropping -- and the toggle then re-blocked instead of unblocking.
+    if (session.isBlocked(peerAccountId)) {
       await session.setBlocked(peerAccountId, false);
       return;
     }
@@ -116,7 +120,7 @@ class PeerProfileScreen extends StatelessWidget {
               Center(
                 child: PeerAvatar(accountId: convo.peerAccountId, radius: 48),
               ),
-              if (convo.blocked) ...[
+              if (session.isBlocked(peerAccountId)) ...[
                 const SizedBox(height: 12),
                 Center(
                   child: Chip(
@@ -275,7 +279,7 @@ class PeerProfileScreen extends StatelessWidget {
               const SizedBox(height: 12),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: convo.blocked
+                child: session.isBlocked(peerAccountId)
                     ? FilledButton.icon(
                         onPressed: () => _toggleBlock(context, convo),
                         icon: const Icon(Icons.block_flipped),

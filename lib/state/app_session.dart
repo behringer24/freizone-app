@@ -44,6 +44,7 @@ import 'local_state.dart';
 import 'receipt_signal.dart';
 import 'rekey_signal.dart';
 import 'session_recovery.dart';
+import 'stale_device.dart';
 
 /// How many one-time prekeys to generate and upload at once, mirroring
 /// cmd/devclient's defaultOneTimePrekeyBatch.
@@ -482,8 +483,17 @@ Future<IncomingMessageResult?> processIncomingMessage(
   // than `v: 1` plus a field.
   if (content.isGroupMessage) {
     if (blocked) {
-      // Decrypted so the ratchet and the queue stay clean, then dropped -- the
-      // same treatment a blocked peer's one-to-one message gets.
+      // Decrypted so the ratchet and the queue stay clean, then dropped --
+      // but unlike a blocked peer's one-to-one message, not without a trace:
+      // a shared transcript with invisible holes reads as delivery loss, so
+      // the group shows a collapsed system line instead (see
+      // recordBlockedGroupMessage).
+      recordBlockedGroupMessage(
+        state,
+        content.groupId!,
+        msg.senderAccountId,
+        now,
+      );
       return IncomingMessageResult(
         peerAccountId: msg.senderAccountId,
         shouldNotify: false,
@@ -543,6 +553,14 @@ Future<IncomingMessageResult?> processIncomingMessage(
       pendingApproval: isFirstContact && !blocked,
     ),
   );
+  // The conversation's flag is only a mirror of AppState.blockedPeers (see
+  // setBlocked); resynced here so a mirror that went stale -- e.g. a
+  // conversation minted by an older build's startConversation after the
+  // blocked one was deleted -- cannot make the 1:1 path disagree with the
+  // group path about the same sender. The map is the authority in both
+  // directions: a missing entry un-blocks a stray true just as an existing
+  // one re-blocks a stray false.
+  convo.blocked = blocked;
   // Refreshed on every message that carries one (not just the first), so
   // this self-heals if local state is ever lost -- see message_content
   // .dart's senderServer.
@@ -1934,7 +1952,18 @@ class AppSession extends ChangeNotifier {
 
     final convo = state.conversations.putIfAbsent(
       resolvedId,
-      () => Conversation(peerAccountId: resolvedId),
+      // Seeded from AppState.blockedPeers, the block's authoritative home
+      // (see setBlocked): a block deliberately outlives deleteConversation,
+      // so re-starting a chat with a blocked peer must surface as a blocked
+      // conversation rather than quietly minting an unblocked mirror. That
+      // divergence is not cosmetic -- the group receive path reads the map
+      // and drops, while the 1:1 path and the profile screen read the
+      // mirror, so a stale mirror shows a working chat whose group messages
+      // silently vanish.
+      () => Conversation(
+        peerAccountId: resolvedId,
+        blocked: state.blockedPeers.containsKey(resolvedId),
+      ),
     );
     convo.peerServer = sameServer(parsed.server ?? state.server, state.server)
         ? null
@@ -1972,6 +2001,15 @@ class AppSession extends ChangeNotifier {
   /// which needs to list and unblock peers even once their Conversation
   /// (and thus their profile screen) no longer exists.
   List<BlockedPeer> get blockedPeers => state.blockedPeers.values.toList();
+
+  /// Whether [peerAccountId] is blocked, from the block's authoritative home
+  /// (see [setBlocked]). UI that has a [Conversation] at hand may still read
+  /// its `blocked` mirror for rebuild-cheapness, but anything that *decides*
+  /// -- what to render as the block toggle, whether to store a message --
+  /// must ask this, so a mirror gone stale can never answer differently than
+  /// the receive path does.
+  bool isBlocked(String peerAccountId) =>
+      state.blockedPeers.containsKey(peerAccountId);
 
   /// Blocks or unblocks a peer -- purely local, since Freizone's open
   /// registration means an unwanted contact can't be reported or banned
@@ -2889,7 +2927,17 @@ class AppSession extends ChangeNotifier {
           // row stays until a moderator removes it, which is the only thing that
           // can actually resolve it. Without this, every resume would retry
           // forever and re-raise the same banner.
+          //
+          // But not every 404 is that: a dead *device* is not a dead *account*
+          // (§4's stale-device rule). Those two codes name a member whose
+          // device was replaced or is not yet provisioned -- and only reach
+          // here when the claim path's re-resolve could not heal it this pass,
+          // so the debt stays for the next one.
           if (e is ApiException && e.statusCode == 404) {
+            if (e.code == 'unknown_device' || e.code == 'no_prekey_bundle') {
+              _noteFailure('group sync to $accountId', e);
+              continue;
+            }
             _clearGroupSnapshotDebt(groupId, accountId);
             changed = true;
             lastError =
@@ -3880,32 +3928,23 @@ class AppSession extends ChangeNotifier {
     final existing = state.sessions[peer.accountId];
     if (existing != null) return (existing, null);
 
-    // Signed either way (SRV-04) -- an unauthenticated claim still returns a
-    // usable bundle but without a one-time prekey, quietly costing this session
-    // forward secrecy on its first message. Which form applies is decided the
-    // same way the send path decides it (see _encryptAndSend): a peer on our own
-    // server authenticates by device id, one on another server by presenting
-    // its whole certificate chain, since that server has never seen us.
-    final PrekeyBundleResponse bundle;
-    if (peer.server == null) {
-      bundle = await api.claimPrekeyBundle(
-        peer.deviceId!,
-        state.credentials,
-      );
-    } else {
-      bundle = await _clientFor(peer.server).claimFederatedPrekeyBundle(
-        deviceId: peer.deviceId!,
-        devicePriv: state.devicePriv,
-        rootPub: state.rootPub,
-        senderAccountId: state.accountId,
-        cert: core.signDeviceCertificate(
-          accountId: state.accountId,
-          deviceId: state.deviceId,
-          devicePub: state.devicePub,
-          issuedAt: DateTime.now().toUtc(),
-          rootPriv: state.rootPriv,
-        ),
-      );
+    PrekeyBundleResponse bundle;
+    try {
+      bundle = await _claimBundleFor(peer);
+    } on ApiException catch (e) {
+      // docs/PROTOCOL.md §4's stale-device rule: a 404 here is the first
+      // moment a replaced peer device becomes visible to us -- nothing
+      // propagates device revocations or account re-creations across servers
+      // (§9's known gap), and this cache never expires on its own. So the
+      // send that trips over the dead id is the one that heals it: forget
+      // the id, re-resolve, retry once. Never more than once -- a second
+      // 404 is a real answer, not a worse cache. If the re-resolve finds
+      // the *account* gone, its own 404 propagates instead, which is then
+      // the right error to surface.
+      if (!isStaleDeviceError(e) || !await _refreshPeerDevice(peer)) {
+        rethrow;
+      }
+      bundle = await _claimBundleFor(peer);
     }
 
     // Never expected: this app signs every claim, so hearing otherwise means
@@ -4294,6 +4333,84 @@ class AppSession extends ChangeNotifier {
     await LocalStateStore.saveProfile(state);
   }
 
+  /// The reaction §4's stale-device rule prescribes: forget the cached device
+  /// id and ask the peer's home server which device is current. Returns
+  /// whether that produced a *different* device -- retrying with the same one
+  /// would only repeat the same 404, so the caller rethrows instead.
+  ///
+  /// Cached ids go stale legitimately and invisibly: the peer revokes a
+  /// device, or re-creates their account from its seed and the old device
+  /// rows cascade away entirely. Exactly that happened on a live group where
+  /// one member never received anything -- every sender kept claiming a
+  /// prekey bundle for a device id the member's server had long forgotten.
+  Future<bool> _refreshPeerDevice(PeerEndpoint peer) async {
+    final stale = peer.deviceId;
+    final (_, verified) = await _resolvePeerDevice(
+      peer.accountId,
+      _clientFor(peer.server),
+    );
+    if (verified.deviceId == stale) return false;
+    peer.deviceId = verified.deviceId;
+    peer.devicePubKey = verified.devicePubKey;
+    developer.log(
+      '${peer.accountId} replaced device $stale with ${verified.deviceId}; '
+      'adopting it',
+      name: 'session-recovery',
+    );
+    await LocalStateStore.saveProfile(state);
+    return true;
+  }
+
+  /// The queueing-time form of the same discovery (§7's `unknown_recipient`):
+  /// the message POST itself named a device the peer's server no longer
+  /// knows. Unlike the claim-time form there is a ratchet session here, and
+  /// it is bound to the dead device -- so it goes too, and the next send
+  /// re-resolves and re-keys in one step via [_getOrCreateCryptoSession]'s
+  /// claim-path healing.
+  Future<void> _noteStaleRecipientDevice(PeerEndpoint peer) async {
+    developer.log(
+      'server no longer knows device ${peer.deviceId} of ${peer.accountId}; '
+      'discarding it and its session',
+      name: 'session-recovery',
+    );
+    peer.deviceId = null;
+    peer.devicePubKey = null;
+    // Deliberately NOT under _withPeerSessionLock: one caller
+    // (_encryptAndSend's failure path) already holds that lock, and it is a
+    // future chain, not reentrant. The bare synchronous remove cannot
+    // interleave with anything -- the same reasoning _rollBackGroupCopy
+    // relies on when it touches sessions outside the lock.
+    state.sessions.remove(peer.accountId);
+    await LocalStateStore.saveProfile(state);
+  }
+
+  /// Claims [peer]'s prekey bundle from whichever server holds it. Signed
+  /// either way (SRV-04) -- an unauthenticated claim still returns a usable
+  /// bundle but without a one-time prekey, quietly costing this session
+  /// forward secrecy on its first message. Which form applies is decided the
+  /// same way the send path decides it (see [_encryptAndSend]): a peer on our
+  /// own server authenticates by device id, one on another server by
+  /// presenting its whole certificate chain, since that server has never
+  /// seen us.
+  Future<PrekeyBundleResponse> _claimBundleFor(PeerEndpoint peer) {
+    if (peer.server == null) {
+      return api.claimPrekeyBundle(peer.deviceId!, state.credentials);
+    }
+    return _clientFor(peer.server).claimFederatedPrekeyBundle(
+      deviceId: peer.deviceId!,
+      devicePriv: state.devicePriv,
+      rootPub: state.rootPub,
+      senderAccountId: state.accountId,
+      cert: core.signDeviceCertificate(
+        accountId: state.accountId,
+        deviceId: state.deviceId,
+        devicePub: state.devicePub,
+        issuedAt: DateTime.now().toUtc(),
+        rootPriv: state.rootPriv,
+      ),
+    );
+  }
+
   /// Encrypts plaintext for convo's peer device and posts it via the
   /// correct path (same-server vs federated) -- the shared core of
   /// [sendMessage] and [_sendReceipt]. Requires convo.peerDeviceId to
@@ -4361,8 +4478,13 @@ class AppSession extends ChangeNotifier {
       );
       try {
         await _postEnvelope(peer, wireMessageId, payload);
-      } catch (_) {
+      } catch (e) {
         _rollBackSession(peer.accountId, previousSession);
+        // §4's stale-device rule, queueing-time form: the POST named a device
+        // the server no longer knows. Drop the id and the session bound to it
+        // so the retry (manual or next flush) re-resolves and re-keys instead
+        // of failing against the same dead id forever.
+        if (isStaleDeviceError(e)) await _noteStaleRecipientDevice(peer);
         rethrow;
       }
     });
@@ -4498,6 +4620,12 @@ class AppSession extends ChangeNotifier {
             copy.delivery.error = result == null
                 ? 'no answer for this copy'
                 : 'server said ${result.status}';
+            // The batch form of the same discovery: this member's copy named
+            // a device their server no longer knows (§7's unknown_recipient
+            // per-item status).
+            if (isStaleRecipientStatus(result?.status)) {
+              await _noteStaleRecipientDevice(copy.peer);
+            }
           }
         }
       } catch (e) {
@@ -4526,6 +4654,9 @@ class AppSession extends ChangeNotifier {
       _rollBackGroupCopy(copy);
       copy.delivery.state = MessageSendState.failed;
       copy.delivery.error = describeError(e);
+      // Same stale-device reaction as _encryptAndSend's failure path, so a
+      // group member whose device went away heals on the next fan-out.
+      if (isStaleDeviceError(e)) await _noteStaleRecipientDevice(copy.peer);
     }
   }
 
