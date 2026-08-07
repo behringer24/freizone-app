@@ -8,6 +8,7 @@ import '../push/push_manager.dart';
 import '../state/account_manager.dart';
 import '../state/app_settings.dart';
 import '../state/contact_store.dart';
+import '../util/gallery.dart';
 import '../util/share_shortcuts.dart';
 import 'push_status_screen.dart';
 
@@ -43,6 +44,36 @@ class SettingsScreen extends StatelessWidget {
   Future<void> _setDirectShareEnabled(bool value) async {
     await settings.setDirectShareEnabled(value);
     await syncShareShortcuts(manager, settings, contacts);
+  }
+
+  /// Asks for the storage permission here rather than when the first picture
+  /// arrives (APP-20): this is the moment the user is looking at an
+  /// explanation of what the permission is for, and an automatic save must
+  /// never raise a dialog by itself. Older Android only — from API 29 on the
+  /// save needs no permission and this grants silently.
+  Future<void> _setAutoSavePicturesToGallery(
+    BuildContext context,
+    bool value,
+  ) async {
+    if (!value) {
+      await settings.setAutoSavePicturesToGallery(false);
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    if (!await ensureGalleryPermission()) {
+      // Left off rather than on-but-silently-broken: a switch that says
+      // pictures are being saved has to mean it.
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Freizone needs permission to write to your gallery before it can '
+            'save pictures automatically.',
+          ),
+        ),
+      );
+      return;
+    }
+    await settings.setAutoSavePicturesToGallery(true);
   }
 
   Widget _sectionTitle(BuildContext context, String text) => Padding(
@@ -161,6 +192,20 @@ class SettingsScreen extends StatelessWidget {
                 ),
                 value: settings.readReceiptsEnabled,
                 onChanged: settings.setReadReceiptsEnabled,
+              ),
+              SwitchListTile(
+                title: const Text('Save pictures to your gallery'),
+                subtitle: const Text(
+                  'Off by default. Turn this on to have every picture you '
+                  'receive copied into the phone\'s gallery as it arrives. A '
+                  'copy there is outside Freizone: other apps can read it, '
+                  'and a photo backup will normally upload it. Without this '
+                  'you can still save any single picture by hand, from the '
+                  'picture itself or by holding the message.',
+                ),
+                value: settings.autoSavePicturesToGallery,
+                onChanged: (value) =>
+                    _setAutoSavePicturesToGallery(context, value),
               ),
               const Divider(height: 32),
               _sectionTitle(context, 'Chat'),

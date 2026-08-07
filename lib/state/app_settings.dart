@@ -64,6 +64,7 @@ class AppSettings extends ChangeNotifier {
     required bool readReceiptsEnabled,
     required bool enterSendsMessage,
     required bool directShareEnabled,
+    required bool autoSavePicturesToGallery,
     String? lastActiveAccountId,
   }) : _themeMode = themeMode,
        _accentPreset = accentPreset,
@@ -74,6 +75,7 @@ class AppSettings extends ChangeNotifier {
        _readReceiptsEnabled = readReceiptsEnabled,
        _enterSendsMessage = enterSendsMessage,
        _directShareEnabled = directShareEnabled,
+       _autoSavePicturesToGallery = autoSavePicturesToGallery,
        _lastActiveAccountId = lastActiveAccountId;
 
   ThemeMode _themeMode;
@@ -85,6 +87,7 @@ class AppSettings extends ChangeNotifier {
   bool _readReceiptsEnabled;
   bool _enterSendsMessage;
   bool _directShareEnabled;
+  bool _autoSavePicturesToGallery;
   String? _lastActiveAccountId;
 
   ThemeMode get themeMode => _themeMode;
@@ -126,6 +129,25 @@ class AppSettings extends ChangeNotifier {
   /// syncShareShortcuts clears anything an earlier build had published.
   bool get directShareEnabled => _directShareEnabled;
 
+  /// Whether every picture this account receives is copied into the device's
+  /// gallery as soon as its download finishes (APP-20).
+  ///
+  /// **Off by default, deliberately.** Everything the app stores sits in its
+  /// own private directory, readable by nothing else on the device. A copy in
+  /// the gallery is readable by every app holding media permission and, on
+  /// most phones, uploaded to the user's cloud photo library within minutes.
+  /// That is the entire point of the feature, and also the one property an
+  /// end-to-end-encrypted messenger must not hand over by accident — so this
+  /// is a decision the user makes once, knowingly, rather than a convenience
+  /// that happens to be on. Saving a single picture by hand is an act each
+  /// time and needs no such framing.
+  ///
+  /// Applies to *received* pictures only, like the manual save (see
+  /// maySavePicture): one this account sent came out of the gallery to begin
+  /// with. Installs predating the setting have no such key stored, so they
+  /// read as off — nothing starts leaving the sandbox because of an update.
+  bool get autoSavePicturesToGallery => _autoSavePicturesToGallery;
+
   /// The account id AccountManager should activate on the next app
   /// start, so a multi-account setup doesn't fall back to an
   /// arbitrary "first in the list" order every time. Not a
@@ -153,6 +175,7 @@ class AppSettings extends ChangeNotifier {
         readReceiptsEnabled: true,
         enterSendsMessage: false,
         directShareEnabled: false,
+        autoSavePicturesToGallery: false,
       );
     }
     final j = json.decode(await file.readAsString()) as Map<String, dynamic>;
@@ -175,6 +198,8 @@ class AppSettings extends ChangeNotifier {
       readReceiptsEnabled: j['read_receipts_enabled'] as bool? ?? true,
       enterSendsMessage: j['enter_sends_message'] as bool? ?? false,
       directShareEnabled: j['direct_share_enabled'] as bool? ?? false,
+      autoSavePicturesToGallery:
+          j['auto_save_pictures_to_gallery'] as bool? ?? false,
       lastActiveAccountId: j['last_active_account_id'] as String?,
     );
   }
@@ -192,6 +217,7 @@ class AppSettings extends ChangeNotifier {
         'read_receipts_enabled': _readReceiptsEnabled,
         'enter_sends_message': _enterSendsMessage,
         'direct_share_enabled': _directShareEnabled,
+        'auto_save_pictures_to_gallery': _autoSavePicturesToGallery,
         if (_lastActiveAccountId != null)
           'last_active_account_id': _lastActiveAccountId,
       }),
@@ -260,6 +286,17 @@ class AppSettings extends ChangeNotifier {
   Future<void> setDirectShareEnabled(bool value) async {
     if (_directShareEnabled == value) return;
     _directShareEnabled = value;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Persists the flag only. Obtaining the storage permission that older
+  /// Android versions need for it is the caller's job (see
+  /// ensureGalleryPermission) -- this class deliberately owns no platform
+  /// channels.
+  Future<void> setAutoSavePicturesToGallery(bool value) async {
+    if (_autoSavePicturesToGallery == value) return;
+    _autoSavePicturesToGallery = value;
     await _save();
     notifyListeners();
   }

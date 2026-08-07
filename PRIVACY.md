@@ -65,8 +65,11 @@ Depending on your device's platform, Freizone may request access to:
 - **Photo selection**, when you choose to send a picture. Freizone requests no access to your photo library: the picture is chosen in your device's own system picker, and only the single file you select is handed to the App. Freizone cannot browse, read, or see anything else in your gallery.
 - **Notifications**, to alert you to new messages.
 - **Network access**, required to communicate with the server you configure.
+- **Writing to your photo gallery**, and only on older Android versions (API 28 and below), when you choose to save a picture you received. Newer versions require no permission for this, and Freizone does not request one there. This permission allows the App to add a picture to your gallery; it grants no ability to read what is already in it. Nothing is saved unless you ask for it, either by saving a single picture or by switching on the corresponding setting, and no picture is ever copied out of the App by default.
 
-Freizone does not request access to your location, contacts, or microphone, and requests no permission beyond those necessary for the functionality described above. It does not request broad access to your stored files either — a picture reaches the App only because you selected that one file yourself in the system picker, or because you deliberately shared it into Freizone from another app.
+Freizone does not request access to your location, contacts, or microphone, and requests no permission beyond those necessary for the functionality described above. It does not request broad or read access to your stored files — a picture reaches the App only because you selected that one file yourself in the system picker, or because you deliberately shared it into Freizone from another app.
+
+Note that a picture you save to your gallery leaves the App's protection: it becomes readable by other apps holding media access, and may be included in whatever photo backup your device performs. That is the purpose of saving it, and is why the App never does so on its own.
 
 ## 8. What We Do Not Do
 

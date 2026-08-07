@@ -26,6 +26,7 @@ import '../push/push_manager.dart';
 import '../util/address_format.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
+import '../util/gallery.dart';
 import '../util/server_url.dart';
 import 'app_settings.dart';
 import 'chat_target.dart';
@@ -3711,6 +3712,16 @@ class AppSession extends ChangeNotifier {
         chatId: chatId,
         messageId: message.id,
       );
+      // APP-20's automatic save, off unless the user turned it on: this is
+      // the moment a received picture first exists as a file, and the only
+      // one at which "as it arrives" can mean anything. Best-effort and
+      // never prompting -- a picture landing in the background must not
+      // raise a permission dialog, and a save that fails leaves the copy
+      // inside the app exactly as before.
+      if (attachment.isImage &&
+          (await AppSettings.load()).autoSavePicturesToGallery) {
+        unawaited(saveImageToGallery(target, mayPrompt: false));
+      }
       // The file is safely on disk, so the server copy has served its
       // purpose: free the quota now rather than waiting for the retention
       // sweep. Best effort -- if it fails, the TTL cleanup gets it later.

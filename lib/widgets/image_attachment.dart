@@ -16,6 +16,7 @@ import '../screens/image_view_screen.dart';
 import '../state/conversation.dart';
 import '../state/media_store.dart';
 import '../state/app_session.dart';
+import '../util/message_actions.dart';
 
 class ImageAttachment extends StatefulWidget {
   const ImageAttachment({
@@ -201,7 +202,11 @@ class _ImageAttachmentState extends State<ImageAttachment> {
       return GestureDetector(
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => ImageViewScreen(file: file, heroTag: widget.message.id),
+            builder: (_) => ImageViewScreen(
+              file: file,
+              heroTag: widget.message.id,
+              canSave: maySavePicture(widget.message),
+            ),
           ),
         ),
         child: Hero(

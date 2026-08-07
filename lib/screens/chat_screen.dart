@@ -369,15 +369,25 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Long-press menu for a single message bubble: reply, pin/unpin (both
-  /// purely local except reply, whose reference rides along inside the
-  /// next message sent), or delete from this device only.
+  /// Long-press menu for a single message bubble: reply, save/share a picture
+  /// it carries (APP-20), pin/unpin (all purely local except reply, whose
+  /// reference rides along inside the next message sent), or delete from this
+  /// device only.
   Future<void> _showMessageActions(
     BuildContext context,
     Conversation convo,
     StoredMessage message,
   ) async {
     final isPinned = convo.pinnedMessageIds.contains(message.id);
+    // Resolved before the sheet is built rather than inside it: a picture
+    // still downloading has no file yet, and the entries then have to be
+    // absent rather than present and failing.
+    final picture = await attachedPictureFile(
+      widget.session,
+      chatId: widget.peerAccountId,
+      message: message,
+    );
+    if (!context.mounted) return;
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
@@ -388,6 +398,24 @@ class _ChatScreenState extends State<ChatScreen> {
               title: const Text('Reply'),
               onTap: () => Navigator.of(context).pop('reply'),
             ),
+            // The two about the picture, kept together and above the ones
+            // about this device's view of the message.
+            if (picture != null) ...[
+              if (maySavePicture(message))
+                ListTile(
+                  leading: const Icon(Icons.download_outlined),
+                  title: const Text('Save to gallery'),
+                  // Worth saying: this is the one copy that leaves the app's
+                  // own storage and becomes readable by other apps.
+                  subtitle: const Text('Other apps can read it from there'),
+                  onTap: () => Navigator.of(context).pop('save'),
+                ),
+              ListTile(
+                leading: const Icon(Icons.share_outlined),
+                title: const Text('Share picture'),
+                onTap: () => Navigator.of(context).pop('share'),
+              ),
+            ],
             ListTile(
               leading: Icon(
                 isPinned ? Icons.push_pin_outlined : Icons.push_pin,
@@ -410,6 +438,12 @@ class _ChatScreenState extends State<ChatScreen> {
     switch (action) {
       case 'reply':
         setState(() => _replyingTo = message);
+        break;
+      case 'save':
+        await savePictureToGallery(context, picture!);
+        break;
+      case 'share':
+        await sharePicture(picture!);
         break;
       case 'pin':
         await widget.session.pinMessage(widget.peerAccountId, message.id);

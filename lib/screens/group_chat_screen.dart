@@ -438,9 +438,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
   }
 
-  /// Long-press menu for one group message: reply (APP-17), pin/unpin, or
-  /// delete it from this device (APP-21). Only the reply leaves this device;
-  /// the other two are local, and no other member sees them.
+  /// Long-press menu for one group message: reply (APP-17), save/share a
+  /// picture it carries (APP-20), pin/unpin, or delete it from this device
+  /// (APP-21). Only the reply leaves this device; the rest are local, and no
+  /// other member sees them.
   Future<void> _showMessageActions(
     BuildContext context,
     GroupConversation chat,
@@ -453,6 +454,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     // the author are simply absent rather than inert (APP-18).
     final author = message.mine ? null : message.senderAccountId;
     final named = author != null && widget.contacts.nameFor(author) != null;
+    // Resolved before the sheet is built rather than inside it: a picture
+    // still downloading has no file yet, and the entries then have to be
+    // absent rather than present and failing.
+    final picture = await attachedPictureFile(
+      widget.session,
+      chatId: widget.groupId,
+      message: message,
+    );
+    if (!context.mounted) return;
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
@@ -480,6 +490,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 leading: const Icon(Icons.chat_bubble_outline),
                 title: const Text('Message them directly'),
                 onTap: () => Navigator.of(context).pop('message'),
+              ),
+            ],
+            // Then the two about the picture, still above the ones about this
+            // device's view of the message. Same wording as ChatScreen's.
+            if (picture != null) ...[
+              if (maySavePicture(message))
+                ListTile(
+                  leading: const Icon(Icons.download_outlined),
+                  title: const Text('Save to gallery'),
+                  subtitle: const Text('Other apps can read it from there'),
+                  onTap: () => Navigator.of(context).pop('save'),
+                ),
+              ListTile(
+                leading: const Icon(Icons.share_outlined),
+                title: const Text('Share picture'),
+                onTap: () => Navigator.of(context).pop('share'),
               ),
             ],
             ListTile(
@@ -510,6 +536,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         break;
       case 'message':
         await _messageDirectly(context, author!);
+        break;
+      case 'save':
+        await savePictureToGallery(context, picture!);
+        break;
+      case 'share':
+        await sharePicture(picture!);
         break;
       case 'pin':
         await widget.session.pinMessage(widget.groupId, message.id);
