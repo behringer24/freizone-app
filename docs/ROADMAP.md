@@ -56,6 +56,12 @@ Status: `planned` · Also affects: freizone-gateway (GAW-01)
 No `ios/` directory yet; only Android is built and tested. iOS push delivery
 needs the gateway's APNs path (GAW-01).
 
+- 2026-08-07 — the Go core has to reach iOS too, which is the last stage of
+  freizone-server's `SRV-23` (shared protocol client core): `native/` currently
+  builds only as an Android `.so`, and an xcframework target is a prerequisite
+  for any iOS build, Flutter or otherwise. That work is tracked there, not
+  here. A Mac is the other prerequisite and is planned
+
 ### APP-04 — Multimedia messaging
 Status: `in progress` · Also affects: freizone-server (SRV-07)
 Design: [design/04-multimedia-messaging.md](design/04-multimedia-messaging.md)
@@ -844,68 +850,37 @@ this person**, so I do not write to someone from an identity they cannot place.
   state genuinely hard; this is a store with one writer and screens that read it.
 
 ### APP-20 — Save a picture from a transcript to the device gallery
-Status: `planned` · Part of: APP-04
+Status: `done` · Part of: APP-04
+Design: [design/20-gallery-save.md](design/20-gallery-save.md)
 
-A picture in a transcript can be looked at and nothing else. Full-screen view
-exists (`ImageViewScreen`, reached by tapping the bubble in a one-to-one chat and
-in a group alike, since both render through `ImageAttachment`), but its app bar
-holds only the back button, and the long-press sheet offers reply, pin and
-"delete for me" — so a picture somebody sent cannot leave the app at all. Two
-routes to add, plus an optional third:
+A picture in a transcript could be looked at and nothing else: the full-screen
+view's app bar held only the back button, and the long-press sheet offered
+reply, pin and "delete for me". Three routes added — the app bar, one entry per
+long-press sheet, and an opt-in setting that saves every received picture as it
+arrives. The design document has the reasoning; the short version is that a
+gallery copy leaves the app's protection entirely, which is both the point of
+the feature and the reason the automatic variant is off by default.
 
-- **From the full-screen view** — a save action in `ImageViewScreen`'s app bar,
-  which is empty today and is where someone who is already looking at the picture
-  will reach for it.
-- **From the long-press sheet** — one more entry in `_showMessageActions`, shown
-  only for a message that actually has a picture. Both chat kinds have that sheet
-  now (APP-21), so this is one entry per screen and no gesture work.
-- **Automatically on receipt** — a setting, so the pictures of a chosen
-  conversation (or of all of them) land in the gallery without being asked for
-  each time.
-
-Four things decided 2026-08-04, before any of it is built:
-
-- **A gallery copy leaves the app's protection**, and the automatic variant is
-  therefore **opt-in, off by default**. Everything the app stores today sits in
-  its own private directory; a picture in the gallery is readable by every app
-  holding media permission and, on most phones, uploaded to Google Photos within
-  minutes. That is the whole point of the feature and also the one property an
-  end-to-end-encrypted messenger must not hand over by accident, so the setting
-  has to state what it does rather than read as a tidy convenience toggle. The
-  manual save is an act each time and needs no such framing.
-- **Share as well as save**, not instead of it. `share_plus` is already a
-  dependency and hands the picture to whatever app the user picks; saving files
-  it in the gallery. Different destinations, both offered — in the full-screen
-  view's app bar and in the long-press sheet.
-- **Only received pictures.** One this account sent came out of this device's own
-  gallery in the first place (`image_picker`), so saving it would file a second
-  copy of something already there. Worth revisiting when APP-04's **camera
-  capture** lands: `image_picker`'s camera source writes to the app's cache
-  directory, not the gallery, so a self-taken picture would then be one that
-  exists nowhere else — at which point "only received" stops being the obvious
-  rule.
-- **The storage permission is requested, not designed around.** Saving means an
-  insert into Android's own `MediaStore` (`MediaStore.Images`, `RELATIVE_PATH` of
-  `Pictures/Freizone` so the copies are grouped) — not to be confused with this
-  app's `MediaStore` (`lib/state/media_store.dart`), the local media cache. On
-  API 29+ that insert needs no permission at all; `minSdk` is Flutter's default
-  **24**, so API 24–28 devices are in scope and there the write needs
-  `WRITE_EXTERNAL_STORAGE`. The manifest gets it with
-  `android:maxSdkVersion="28"` and the platform side asks for it at runtime
-  before the first save, rather than the cheaper alternative of hiding the action
-  below API 29. Following APP-15 and `secure_screen.dart` this belongs on our own
-  `MethodChannel` in `MainActivity` rather than a dependency — and it is the
-  first runtime permission the app asks for *itself* (`CAMERA` and
-  `POST_NOTIFICATIONS` are requested by `image_picker` and
-  `flutter_local_notifications`), so `MainActivity` needs
-  `requestPermissions` plus an `onRequestPermissionsResult` that resolves the
-  pending channel result. A refusal has to leave the picture where it is and say
-  so, and be re-askable later.
-
-One detail that survives all of it: the on-disk file is already plaintext
-(`MediaStore.fileFor`, written after `core.decryptBlob`), so a save copies bytes
-and decrypts nothing — but a picture whose download has not finished has no file
-yet, and the action must be absent rather than fail.
+- 2026-08-04 — the four decisions taken before building anything (opt-in
+  automatic save, share alongside save, received pictures only, request the
+  storage permission rather than hiding the action below API 29) — now in the
+  design document
+- 2026-08-07 — **done.** `freizone/gallery` MethodChannel in `MainActivity`
+  (first runtime permission the app asks for itself, so `requestPermissions`
+  plus `onRequestPermissionsResult` are new), `lib/util/gallery.dart`,
+  save/share in `ImageViewScreen`'s app bar and in both `_showMessageActions`
+  sheets via shared helpers in `lib/util/message_actions.dart`, and
+  `AppSettings.autoSavePicturesToGallery` firing from
+  `ensureAttachmentDownloaded`. Tests cover the two things worth pinning: that
+  only a native `saved` reads as saved, and that the setting is off both on a
+  fresh install and on one predating it. **Not device-tested yet** — the save
+  path is Android-side and needs a real run
+- 2026-08-07 — **left open:** the automatic save is global, not per
+  conversation. The original sketch allowed "a chosen conversation (or all of
+  them)"; only the second shipped, since per-chat scoping needs somewhere to
+  persist a per-chat flag and the decision that actually matters (do pictures
+  leave the sandbox at all) is global. Worth revisiting if anyone wants one
+  chat's pictures in the gallery and not another's
 
 ### APP-21 — Pin and delete a message in a group
 Status: `done` · Part of: APP-16 · Related: APP-17

@@ -16,6 +16,46 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Added
+
+* Pictures you receive can now leave the app (`APP-20`). Open one full-screen
+  and the app bar offers **Save to gallery** and **Share**; holding the message
+  offers the same two. There is also a setting — off unless you turn it on —
+  that saves every picture you receive as it arrives. Worth knowing either way:
+  a copy in your gallery is outside Freizone, where other apps can read it and
+  a photo backup will normally upload it, which is why nothing is copied there
+  until you ask. Pictures you sent yourself are not offered for saving, since
+  they came out of your gallery to begin with
+
+### Fixed
+
+* Messages to a contact or group member who reinstalled Freizone (or restored
+  their account from its recovery phrase) could fail forever, silently for
+  them: the app kept addressing the device their server had since forgotten,
+  and never re-checked. Now the first failed send notices, looks the contact's
+  current device up again, and delivers — following the stale-device rule the
+  server protocol now spells out (freizone-server PROTOCOL §4). Found in a
+  live group where one member stopped receiving anything after re-creating
+  their account
+* Blocking could fall out of sync with itself: deleting a blocked contact's
+  chat keeps the block (on purpose), but starting a new chat with them again
+  created a conversation that *looked* unblocked — profile said "Block this
+  contact", direct messages came through — while their group messages were
+  still silently dropped. The block list is now the single authority: new
+  conversations inherit it, incoming messages re-sync it, and every screen
+  that shows or toggles a block asks it directly
+
+### Changed
+
+* A blocked contact's messages in a **group** no longer vanish without a
+  trace. The shared transcript now shows a centered line — "A message from
+  … was hidden (blocked contact)." — where their message would have been,
+  so other members' replies stop reading as answers to nothing.
+  Consecutive hidden messages collapse into one line, and a blocked member
+  still can't ring you: no notification, no unread badge, and the group
+  doesn't move up the chat list. One-to-one chats are unchanged — there the
+  block bar on the chat itself already says everything
+
 ## [0.19.0] — 2026-08-06 (versionCode 23)
 
 See when your server is running more accounts than it's licensed for.
