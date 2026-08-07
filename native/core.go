@@ -189,6 +189,45 @@ func VerifyAttestation(cReq *C.char) *C.char {
 	return jsonCall(cReq, doVerifyAttestation)
 }
 
+// Shared client core (SRV-23). Unlike everything above, these are stateful:
+// CoreOpen returns a handle standing in for an open account database, and the
+// rest operate on it until CoreClose. The state and the decisions live in
+// freizone-server's pkg/client; client.go here is only the adapter that turns
+// its channels and contexts into something that can cross cgo.
+
+//export CoreOpen
+func CoreOpen(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreOpen)
+}
+
+//export CoreClose
+func CoreClose(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreClose)
+}
+
+//export CoreSetIdentity
+func CoreSetIdentity(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreSetIdentity)
+}
+
+//export CoreStreamStart
+func CoreStreamStart(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreStreamStart)
+}
+
+//export CoreStreamStop
+func CoreStreamStop(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreStreamStop)
+}
+
+// CorePoll blocks for up to the requested timeout. Dart must call it from an
+// isolate -- on the UI thread it would freeze the app for the whole wait.
+//
+//export CorePoll
+func CorePoll(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCorePoll)
+}
+
 // Groups (SRV-01 / APP-16). The state blob these pass back and forth is
 // opaque to the caller -- see group.go for why that matters.
 
