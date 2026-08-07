@@ -1,14 +1,22 @@
 package de.behringer24.freizone
 
+import android.Manifest
+import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.WindowManager
+import androidx.core.app.ActivityCompat
 import androidx.core.app.Person
+import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -37,6 +45,27 @@ class MainActivity : FlutterActivity() {
     // Must match res/xml/shortcuts.xml's <category>, or the shortcuts get
     // published but are never offered as share targets.
     private val shareTargetCategory = "de.behringer24.freizone.category.SHARE_TARGET"
+
+    // Copies a received picture out of the app's private storage and into the
+    // device's own gallery (APP-20). See lib/util/gallery.dart.
+    private val galleryChannel = "freizone/gallery"
+
+    // Album the copies are grouped under, so they are recognisable in the
+    // gallery and easy to remove again as a set.
+    private val galleryAlbum = "Freizone"
+
+    private val galleryPermissionRequest = 0x4620
+
+    /**
+     * The gallery call waiting on the storage permission dialog, or null.
+     *
+     * The path is null when Dart only asked for the permission itself (the
+     * settings toggle does that, so turning automatic saving on is the moment
+     * the request is explained rather than some later picture arriving). At
+     * most one is ever outstanding: a second call while the dialog is up is
+     * refused instead of queued, since the user is looking at the first.
+     */
+    private var pendingGallerySave: Pair<String?, MethodChannel.Result>? = null
 
     /**
      * The share waiting to be collected, or null.
@@ -146,6 +175,173 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, galleryChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // Returns one of "saved", "permission_denied", "failed".
+                    "save" -> {
+                        val path = call.argument<String>("path")
+                        val mayPrompt = call.argument<Boolean>("mayPrompt") ?: true
+                        when {
+                            path == null -> result.success("failed")
+                            !galleryPermissionMissing() ->
+                                result.success(saveToGallery(path))
+                            // An automatic save (the opt-in setting) must never
+                            // raise a permission dialog by itself: the picture
+                            // arrived on its own schedule, and a dialog with no
+                            // action behind it is unexplainable.
+                            !mayPrompt -> result.success("permission_denied")
+                            pendingGallerySave != null -> result.success("failed")
+                            else -> requestGalleryPermission(path, result)
+                        }
+                    }
+                    // Returns "granted" or "permission_denied". Asks only when
+                    // the platform actually needs it -- on API 29+ the answer
+                    // is always "granted" without any dialog.
+                    "requestPermission" -> {
+                        when {
+                            !galleryPermissionMissing() -> result.success("granted")
+                            pendingGallerySave != null -> result.success("permission_denied")
+                            else -> requestGalleryPermission(null, result)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /**
+     * Whether writing to the gallery still needs a runtime permission here.
+     *
+     * Only below API 29: from Q on, an app may insert its own images into
+     * MediaStore without holding any storage permission, which is why the
+     * manifest caps WRITE_EXTERNAL_STORAGE at API 28.
+     */
+    private fun galleryPermissionMissing(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return false
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+        ) != PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestGalleryPermission(path: String?, result: MethodChannel.Result) {
+        pendingGallerySave = path to result
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+            galleryPermissionRequest,
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        // Always first: image_picker and mobile_scanner request permissions of
+        // their own through the plugin registry, and swallowing their results
+        // would hang the camera and the QR scanner.
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != galleryPermissionRequest) return
+
+        val pending = pendingGallerySave ?: return
+        pendingGallerySave = null
+        val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            // Refusing leaves the picture exactly where it was, and the request
+            // can be made again later -- Dart says so rather than failing mute.
+            pending.second.success("permission_denied")
+            return
+        }
+        val path = pending.first
+        pending.second.success(if (path == null) "granted" else saveToGallery(path))
+    }
+
+    /**
+     * Copies the file at [path] into the device's picture gallery, returning
+     * "saved" or "failed".
+     *
+     * The bytes are copied verbatim: the file is already the decrypted picture
+     * on disk (see MediaStore.fileFor in lib/state/media_store.dart), so there
+     * is nothing to decode or re-encode here.
+     *
+     * Deliberately the platform's own MediaStore rather than a plugin: this is
+     * the one moment a picture leaves the app's private directory, and it is
+     * worth being able to read exactly what happens to it. The two halves of
+     * the version split are genuinely different operations, not a compat
+     * wrapper -- on API 29+ the resolver owns the file and IS_PENDING hides a
+     * half-written one from other apps; below that we write the file ourselves
+     * and only tell MediaStore where it is.
+     */
+    private fun saveToGallery(path: String): String {
+        return try {
+            val source = File(path)
+            if (!source.exists()) return "failed"
+            val name = "freizone_${System.currentTimeMillis()}.jpg"
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(
+                        MediaStore.Images.Media.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_PICTURES}/$galleryAlbum",
+                    )
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    values,
+                ) ?: return "failed"
+                try {
+                    contentResolver.openOutputStream(uri)?.use { out ->
+                        source.inputStream().use { it.copyTo(out) }
+                    } ?: run {
+                        contentResolver.delete(uri, null, null)
+                        return "failed"
+                    }
+                } catch (e: Exception) {
+                    // Never leave a half-written row behind -- the gallery would
+                    // show it as a broken picture forever.
+                    contentResolver.delete(uri, null, null)
+                    return "failed"
+                }
+                contentResolver.update(
+                    uri,
+                    ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
+                    null,
+                    null,
+                )
+                return "saved"
+            }
+
+            @Suppress("DEPRECATION")
+            val album = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                galleryAlbum,
+            )
+            if (!album.exists() && !album.mkdirs()) return "failed"
+            val target = File(album, name)
+            source.inputStream().use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            @Suppress("DEPRECATION")
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.DATA, target.absolutePath)
+            }
+            // Without this row the file is on the card but invisible to every
+            // gallery app until the next media scan.
+            contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return "failed"
+            "saved"
+        } catch (e: Exception) {
+            "failed"
+        }
     }
 
     /**
