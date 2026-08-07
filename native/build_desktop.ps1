@@ -39,7 +39,14 @@ try {
     Remove-Item Env:GOOS -ErrorAction SilentlyContinue
     Remove-Item Env:GOARCH -ErrorAction SilentlyContinue
 
-    $name = if ($IsMacOS) { "libfreizonecore.dylib" } elseif ($IsLinux) { "libfreizonecore.so" } else { "freizonecore.dll" }
+    # $IsMacOS and $IsLinux exist only in PowerShell 7+. Under Windows
+    # PowerShell 5.1 they are $null, which is the right answer there anyway --
+    # 5.1 runs on nothing else. Spelled out rather than left to that
+    # coincidence, so this script works under either shell for the reason it
+    # appears to.
+    $name = "freizonecore.dll"
+    if ($IsMacOS) { $name = "libfreizonecore.dylib" }
+    elseif ($IsLinux) { $name = "libfreizonecore.so" }
     $out = Join-Path $PSScriptRoot $name
 
     go build -buildmode=c-shared -o $out .

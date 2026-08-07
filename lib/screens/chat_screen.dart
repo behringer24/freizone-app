@@ -827,7 +827,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// (see AppSession.reachability). Sending is disabled; the chat history
   /// above stays fully readable. Unlike the blocked bar this is nothing the
   /// user did wrong, so it uses a neutral tone rather than error red, and
-  /// offers no action -- reconnection is automatic (SseClient's backoff),
+  /// offers no action -- reconnection is automatic (the core's backoff),
   /// and the bar clears itself once the server is reachable again.
   Widget _buildServerOfflineBar(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;

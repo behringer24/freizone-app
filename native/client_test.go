@@ -291,3 +291,36 @@ func TestCloseStopsARunningStream(t *testing.T) {
 		t.Error("the handle should be gone after closing")
 	}
 }
+
+// A poll already blocked when the stream is stopped must come back promptly,
+// not sit out its whole timeout. Dart's close() depends on it: the loop only
+// notices it should end when the poll it is waiting on returns.
+func TestStopUnblocksAPollInFlight(t *testing.T) {
+	handle := newStreamingHandle(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	if _, err := doCoreStreamStart(coreHandleRequest{Handle: handle}); err != nil {
+		t.Fatalf("doCoreStreamStart: %v", err)
+	}
+	poll(t, handle, 2000) // drain the connected event
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		doCorePoll(corePollRequest{Handle: handle, TimeoutMS: 20000}) //nolint:errcheck // the timing is the assertion
+	}()
+
+	time.Sleep(200 * time.Millisecond) // let the poll get in and block
+	if _, err := doCoreStreamStop(coreHandleRequest{Handle: handle}); err != nil {
+		t.Fatalf("doCoreStreamStop: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopping the stream left a poll blocked -- Dart's close() would hang until the poll timed out")
+	}
+}
