@@ -15,7 +15,10 @@ import 'models.dart';
 class FreizoneCore {
   FreizoneCore._(this._bindings);
 
-  factory FreizoneCore() => FreizoneCore._(FreizoneCoreBindings.open());
+  /// [libraryPath] is only for host tests -- see
+  /// [FreizoneCoreBindings.open]. Production callers use `FreizoneCore()`.
+  factory FreizoneCore({String? libraryPath}) =>
+      FreizoneCore._(FreizoneCoreBindings.open(path: libraryPath));
 
   final FreizoneCoreBindings _bindings;
 

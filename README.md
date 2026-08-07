@@ -65,6 +65,24 @@ Every account's local state (its keys, conversation history, ratchet sessions) i
    ```
 4. On first launch, the setup wizard asks for a server address (no `https://` or port needed for a normally-deployed server) and walks through whatever that server actually needs — bootstrap, open registration, or an invite code — including scanning an invite QR code instead of typing.
 
+## Running the tests
+
+`flutter test` works out of the box for everything that is pure Dart. Tests that
+exercise `lib/state/` need the native core, and the Android `.so` cannot be
+loaded by a test running on your machine — so build a host copy once:
+
+```powershell
+./native/build_desktop.ps1
+```
+
+This needs a C compiler, because the core is cgo. On Windows:
+`winget install --id BrechtSanders.WinLibs.POSIX.UCRT --source winget`. The
+Android NDK's clang cannot stand in — it only targets Android.
+
+Tests needing the core **skip** rather than fail when it is missing, so a fresh
+checkout is never red; a skipped test says which script to run. Re-run the
+script whenever `native/*.go` changes, same as the Android one.
+
 ## Push notifications
 
 Two independent, non-interfering delivery mechanisms exist; a device uses exactly one at a time per account:

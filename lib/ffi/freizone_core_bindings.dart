@@ -62,7 +62,18 @@ class FreizoneCoreBindings {
       groupApplyEvents = _lookupWithReq(lib, 'GroupApplyEvents'),
       groupResolveState = _lookupWithReq(lib, 'GroupResolveState');
 
-  factory FreizoneCoreBindings.open() {
+  /// [path] is a host-test escape hatch and nothing else: a `flutter test`
+  /// process has no core linked into it, so [DynamicLibrary.process] finds
+  /// nothing and any test touching lib/state/ would fail to load. A host test
+  /// points this at what `native/build_desktop.ps1` produced.
+  ///
+  /// Production callers pass nothing and the platform decides: Android opens
+  /// the .so packaged into jniLibs, Apple platforms link the core into the app
+  /// binary itself, so its symbols are already in the process.
+  factory FreizoneCoreBindings.open({String? path}) {
+    if (path != null) {
+      return FreizoneCoreBindings._(DynamicLibrary.open(path));
+    }
     final lib = Platform.isAndroid
         ? DynamicLibrary.open('libfreizonecore.so')
         : DynamicLibrary.process();
