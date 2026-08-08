@@ -54,6 +54,13 @@ const _messagesChannelId = 'freizone_messages';
 /// device. print() reaches logcat as `I/flutter`, which is the only
 /// channel that survives a background wake, so failures on this path are
 /// deliberately logged there too rather than only to the debugger.
+///
+/// Deliberately NOT util/log.dart's [logDiagnostic], which is otherwise the
+/// same idea: that one prints only in a debug build, and this path's whole
+/// problem is a wake failing on a release build on somebody's actual phone.
+/// The lines here are kept free of message content for that reason -- what
+/// they say is that a wake arrived and what went wrong with it, never what it
+/// was about.
 void _log(String message) {
   developer.log(message, name: 'push');
   // ignore: avoid_print
