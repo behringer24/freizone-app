@@ -69,8 +69,15 @@ android {
     // 64-bit-only is ordinary now: Play has required 64-bit support since 2019,
     // and with minSdk 24 this leaves out 32-bit-only hardware from around 2016.
     //
-    // Worth revisiting before any public launch -- but note what to revisit it
-    // WITH. Install numbers cannot answer it: excluding the ABI means Play stops
+    // No deadline on revisiting this, and deliberately so: the only change ever
+    // on the table is adding the ABI back, which is purely additive -- devices
+    // that cannot install today would be able to, and nobody loses anything.
+    // (Shipping it and then removing it would strand users, but that is not the
+    // direction available here.) So it can wait until after a launch as easily
+    // as before one, and the 32-bit share only shrinks meanwhile.
+    //
+    // Note what to revisit it WITH. Install numbers cannot answer it: excluding
+    // the ABI means Play stops
     // offering the app to those devices, so the installs are zero by
     // construction and would merely confirm the decision that caused them. They
     // were never informative here anyway, since the app crashed on launch on
