@@ -82,15 +82,15 @@ class CoreStreamEvent {
 const _pollTimeout = Duration(seconds: 20);
 
 class CoreStream {
-  CoreStream({required this.core, required this.state, this.databasePath});
+  CoreStream({required this.core, required this.state, this.statePath});
 
   final FreizoneCore core;
   final AppState state;
 
-  /// Where to put the core's database, given an account id. Null uses
-  /// [coreDatabasePath], which resolves through path_provider -- correct in the
+  /// Where to put the core's state directory, given an account id. Null uses
+  /// [coreStatePath], which resolves through path_provider -- correct in the
   /// app and unavailable in a plain `flutter test`, which is why this is here.
-  final Future<String> Function(String accountId)? databasePath;
+  final Future<String> Function(String accountId)? statePath;
 
   bool _closed = false;
   int? _handle;
@@ -205,7 +205,7 @@ class CoreStream {
   /// avoids threading a second lifecycle through AppSession for no gain. When
   /// the state migrates, the handle moves up to AppSession and this goes away.
   Future<int> _openCore() async {
-    final resolve = databasePath ?? coreDatabasePath;
+    final resolve = statePath ?? coreStatePath;
     final handle = core.coreOpen(await resolve(state.accountId));
     try {
       core.coreSetIdentity(
@@ -239,10 +239,15 @@ Map<String, dynamic> _pollInIsolate(int handle, String? libraryPath) =>
       libraryPath: libraryPath,
     ).corePoll(handle: handle, timeoutMs: _pollTimeout.inMilliseconds);
 
-/// Where the core keeps this account's database -- beside the profile file
+/// Where the core keeps this account's state -- beside the profile file
 /// local_state.dart writes, so both live and die with the app's data. Same
 /// directory the settings, contact and group stores use.
-Future<String> coreDatabasePath(String accountId) async {
+///
+/// A directory, not a file: the core stores plain files rather than a database.
+/// The name deliberately carries no `.db` suffix, which it did while this was
+/// SQLite -- besides being a lie now, that name is already taken on any install
+/// from that period, and creating a directory where a file sits fails.
+Future<String> coreStatePath(String accountId) async {
   final dir = await getApplicationDocumentsDirectory();
-  return '${dir.path}${Platform.pathSeparator}core-$accountId.db';
+  return '${dir.path}${Platform.pathSeparator}core-$accountId';
 }

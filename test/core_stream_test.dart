@@ -113,8 +113,8 @@ void main() {
       final stream = CoreStream(
         core: FreizoneCore(libraryPath: _corePath),
         state: _stateFor('http://${server.address.host}:${server.port}'),
-        databasePath: (id) async =>
-            "${tempDir.path}${Platform.pathSeparator}core-$id.db",
+        statePath: (id) async =>
+            "${tempDir.path}${Platform.pathSeparator}core-$id",
       );
       addTearDown(stream.close);
 
@@ -165,8 +165,8 @@ void main() {
         final stream = CoreStream(
           core: FreizoneCore(libraryPath: _corePath),
           state: _stateFor('http://${server.address.host}:${server.port}'),
-          databasePath: (id) async =>
-              "${tempDir.path}${Platform.pathSeparator}core-$id.db",
+          statePath: (id) async =>
+              "${tempDir.path}${Platform.pathSeparator}core-$id",
         );
         addTearDown(stream.close);
 
@@ -205,8 +205,8 @@ void main() {
       final stream = CoreStream(
         core: FreizoneCore(libraryPath: _corePath),
         state: _stateFor('http://${server.address.host}:${server.port}'),
-        databasePath: (id) async =>
-            "${tempDir.path}${Platform.pathSeparator}core-$id.db",
+        statePath: (id) async =>
+            "${tempDir.path}${Platform.pathSeparator}core-$id",
       );
       addTearDown(stream.close);
 
@@ -249,8 +249,8 @@ void main() {
       final stream = CoreStream(
         core: FreizoneCore(libraryPath: _corePath),
         state: _stateFor('http://${server.address.host}:${server.port}'),
-        databasePath: (id) async =>
-            "${tempDir.path}${Platform.pathSeparator}core-$id.db",
+        statePath: (id) async =>
+            "${tempDir.path}${Platform.pathSeparator}core-$id",
       );
 
       final loop = stream.connect(
