@@ -68,8 +68,17 @@ android {
     //
     // 64-bit-only is ordinary now: Play has required 64-bit support since 2019,
     // and with minSdk 24 this leaves out 32-bit-only hardware from around 2016.
-    // Revisit before any public launch, with real install numbers from the Play
-    // console rather than a guess.
+    //
+    // Worth revisiting before any public launch -- but note what to revisit it
+    // WITH. Install numbers cannot answer it: excluding the ABI means Play stops
+    // offering the app to those devices, so the installs are zero by
+    // construction and would merely confirm the decision that caused them. They
+    // were never informative here anyway, since the app crashed on launch on
+    // that ABI, so any install it did have measured curiosity, not usage.
+    //
+    // The Play console's device catalogue is what answers it: it counts
+    // *eligible devices* rather than installs, and reports how many are excluded
+    // and why. That number keeps working precisely because of this exclusion.
     packaging {
         jniLibs {
             excludes += "lib/armeabi-v7a/**"
