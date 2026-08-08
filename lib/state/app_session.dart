@@ -25,6 +25,7 @@ import '../net/core_stream.dart';
 import '../push/push_manager.dart';
 import '../util/address_format.dart';
 import '../util/errors.dart';
+import '../util/log.dart';
 import '../util/freizone_address.dart';
 import '../util/gallery.dart';
 import '../util/server_url.dart';
@@ -265,8 +266,7 @@ Future<IncomingMessageResult?> processIncomingMessage(
           parsed.rekey ?? (RekeySignal.tryDecode(dec.plaintext) != null);
       // Otherwise it is a race, and the tie-break is the ordering rule
       // re-keying already uses: the lower account id's session wins.
-      final peerWins =
-          msg.senderAccountId.compareTo(state.accountId) < 0;
+      final peerWins = msg.senderAccountId.compareTo(state.accountId) < 0;
 
       if (deliberateRekey || peerWins) {
         session = fresh;
@@ -415,7 +415,8 @@ Future<IncomingMessageResult?> processIncomingMessage(
     );
     return IncomingMessageResult(
       peerAccountId: msg.senderAccountId,
-      shouldNotify: outcome.invited && openConversationPeerId != outcome.groupId,
+      shouldNotify:
+          outcome.invited && openConversationPeerId != outcome.groupId,
       groupInvite: outcome.invited,
       groupId: outcome.groupId,
       peerGroupStateHash: outcome.peerStateHash,
@@ -849,7 +850,7 @@ class AppSession extends ChangeNotifier {
   /// a decrypt given up on -- is surfaced: those do not fix themselves.
   void _noteFailure(String what, Object error) {
     final described = '$what: ${describeError(error)}';
-    developer.log(described, name: 'freizone');
+    logDiagnostic(described, name: 'freizone');
     if (isServerUnreachable(error)) return;
     lastError = described;
   }
@@ -1025,7 +1026,7 @@ class AppSession extends ChangeNotifier {
       _batchLimits[key] = limit;
       return limit;
     } catch (e) {
-      developer.log(
+      logDiagnostic(
         'batch capability of $key unknown: ${describeError(e)}',
         name: 'groups',
       );
@@ -1813,10 +1814,7 @@ class AppSession extends ChangeNotifier {
   }) async {
     if (state.recordDecryptFailure(msg.messageId)) {
       if (isDesyncEvidence) {
-        state.recordDesyncEvidence(
-          msg.senderAccountId,
-          DateTime.now().toUtc(),
-        );
+        state.recordDesyncEvidence(msg.senderAccountId, DateTime.now().toUtc());
       }
       unawaited(api.deleteMessage(msg.messageId, state.credentials));
     }
@@ -2174,7 +2172,10 @@ class AppSession extends ChangeNotifier {
           if (m.hasAttachments) live.add(m.id);
         }
       }
-      await media.sweepOrphans(accountId: state.accountId, liveMessageIds: live);
+      await media.sweepOrphans(
+        accountId: state.accountId,
+        liveMessageIds: live,
+      );
     } catch (_) {
       // Housekeeping only -- never worth surfacing or retrying.
     }
@@ -2230,7 +2231,10 @@ class AppSession extends ChangeNotifier {
 
   /// Founds a group. Local only: nobody else knows about it until somebody is
   /// invited.
-  Future<GroupConversation> createGroup({String name = '', String topic = ''}) async {
+  Future<GroupConversation> createGroup({
+    String name = '',
+    String topic = '',
+  }) async {
     final result = core.groupCreate(
       identity: _groupIdentity,
       server: state.server,
@@ -2408,7 +2412,7 @@ class AppSession extends ChangeNotifier {
         ),
       );
     } catch (e) {
-      developer.log(
+      logDiagnostic(
         'group sync request to ${target.accountId} failed: ${describeError(e)}',
         name: 'groups',
       );
@@ -2452,7 +2456,9 @@ class AppSession extends ChangeNotifier {
   ) async {
     try {
       if (!(await AppSettings.load()).readReceiptsEnabled) return;
-      final member = _groupStates[groupId]?.resolved.memberById(authorAccountId);
+      final member = _groupStates[groupId]?.resolved.memberById(
+        authorAccountId,
+      );
       if (member == null) return;
       await _sendGroupReceipt(
         groupId,
@@ -2462,7 +2468,7 @@ class AppSession extends ChangeNotifier {
         upTo,
       );
     } catch (e) {
-      developer.log(
+      logDiagnostic(
         'sending group delivered receipt to $authorAccountId failed: $e',
         name: 'receipts',
       );
@@ -2517,7 +2523,7 @@ class AppSession extends ChangeNotifier {
         chat.sentReceiptUpTo[entry.key] = entry.value;
         changed = true;
       } catch (e) {
-        developer.log(
+        logDiagnostic(
           'sending group read receipt to ${entry.key} failed: $e',
           name: 'receipts',
         );
@@ -2711,7 +2717,9 @@ class AppSession extends ChangeNotifier {
     final me = _groupStates[groupId]?.resolved.memberById(state.accountId);
     if (me == null) throw StateError('You are not in this group.');
     if (me.joined) {
-      throw StateError('You have already joined this group -- leave it instead.');
+      throw StateError(
+        'You have already joined this group -- leave it instead.',
+      );
     }
     await _groupAction(groupId, type: 'leave', subject: state.accountId);
     await deleteGroup(groupId);
@@ -2739,7 +2747,11 @@ class AppSession extends ChangeNotifier {
 
   /// Sets the name and topic. One last-writer-wins record, so an unchanged
   /// field is carried over rather than cleared.
-  Future<void> setGroupMeta(String groupId, {String? name, String? topic}) async {
+  Future<void> setGroupMeta(
+    String groupId, {
+    String? name,
+    String? topic,
+  }) async {
     final resolved = _groupStates[groupId]?.resolved;
     if (resolved == null) return;
     await _groupAction(
@@ -3112,7 +3124,9 @@ class AppSession extends ChangeNotifier {
         }
         final peer = _endpointFor(member.accountId, member.server);
         await _ensurePeerDeviceResolved(peer);
-        targets.add(_GroupTarget(delivery: delivery, member: member, peer: peer));
+        targets.add(
+          _GroupTarget(delivery: delivery, member: member, peer: peer),
+        );
       } catch (e) {
         delivery.state = MessageSendState.failed;
         delivery.error = describeError(e);
@@ -3192,7 +3206,7 @@ class AppSession extends ChangeNotifier {
           } catch (e) {
             // The message itself still goes out; the facts are owed instead.
             _oweGroupSnapshot(chat.groupId, member.accountId);
-            developer.log(
+            logDiagnostic(
               'proactive snapshot to ${member.accountId} failed: '
               '${describeError(e)}',
               name: 'groups',
@@ -3294,7 +3308,7 @@ class AppSession extends ChangeNotifier {
             result.failed[target.member.accountId] = describeError(e);
           }
         }
-        developer.log(
+        logDiagnostic(
           'group picture for ${entry.key ?? 'this server'} '
           '${permanent ? 'refused' : 'failed, will retry'}: '
           '${describeError(e)}',
@@ -3305,7 +3319,6 @@ class AppSession extends ChangeNotifier {
     }
     return result;
   }
-
 
   /// The per-server half of [_uploadGroupAttachment], filling [references] for
   /// the members it manages to upload for.
@@ -3413,7 +3426,8 @@ class AppSession extends ChangeNotifier {
   }) async {
     final now = DateTime.now().toUtc();
     final last = _lastGroupSyncRequest[groupId];
-    if (last != null && now.difference(last) < _groupSyncRequestCooldown) return;
+    if (last != null && now.difference(last) < _groupSyncRequestCooldown)
+      return;
     _lastGroupSyncRequest[groupId] = now;
 
     try {
@@ -3428,7 +3442,7 @@ class AppSession extends ChangeNotifier {
         GroupControl(kind: GroupControlKind.syncRequest, groupId: groupId),
       );
     } catch (e) {
-      developer.log(
+      logDiagnostic(
         'asking $peerAccountId for group $groupId failed: ${describeError(e)}',
         name: 'groups',
       );
@@ -3457,11 +3471,7 @@ class AppSession extends ChangeNotifier {
       // Without asking outright, this state ends only if some member happens to
       // send a snapshot unprompted. So ask the one member we know exists,
       // because they just wrote to us.
-      await _askForGroupFacts(
-        groupId,
-        peerAccountId,
-        peerServer: peerServer,
-      );
+      await _askForGroupFacts(groupId, peerAccountId, peerServer: peerServer);
       return;
     }
     if (!snapshotRequested) {
@@ -3511,7 +3521,10 @@ class AppSession extends ChangeNotifier {
     await _encryptAndSend(peer, control.encode());
   }
 
-  Future<void> _storeGroupState(GroupStateResult result, {String? groupId}) async {
+  Future<void> _storeGroupState(
+    GroupStateResult result, {
+    String? groupId,
+  }) async {
     final id = groupId ?? result.groupId;
     if (id.isEmpty) return;
     _groupStates[id] = result;
@@ -3774,9 +3787,7 @@ class AppSession extends ChangeNotifier {
       // purpose: free the quota now rather than waiting for the retention
       // sweep. Best effort -- if it fails, the TTL cleanup gets it later.
       unawaited(
-        api
-            .deleteBlob(attachment.blobId, state.credentials)
-            .catchError((_) {}),
+        api.deleteBlob(attachment.blobId, state.credentials).catchError((_) {}),
       );
       return target;
     } catch (e) {
@@ -3864,7 +3875,7 @@ class AppSession extends ChangeNotifier {
       );
       await LocalStateStore.saveProfile(state);
     } catch (e) {
-      developer.log(
+      logDiagnostic(
         'sending re-key signal to ${convo.peerAccountId} failed: $e',
         name: 'session-recovery',
       );
@@ -3902,7 +3913,7 @@ class AppSession extends ChangeNotifier {
       // must still hold, or every reconnect would retry immediately and burn a
       // one-time prekey each time.
       state.recordAutoRekey(peerAccountId, now);
-      developer.log(
+      logDiagnostic(
         're-establishing the secure session with $peerAccountId',
         name: 'session-recovery',
       );
@@ -3953,7 +3964,7 @@ class AppSession extends ChangeNotifier {
     // it should. Logged rather than thrown -- a working conversation is worth
     // more than the first message's forward secrecy -- but not swallowed.
     if (bundle.wasClaimedUnauthenticated) {
-      developer.log(
+      logDiagnostic(
         'server refused our prekey-bundle claim credentials for '
         '${peer.accountId}; session starts without a one-time prekey',
         name: 'prekeys',
@@ -4236,7 +4247,8 @@ class AppSession extends ChangeNotifier {
       // doesn't exist yet. Skipped when a previous attempt already got a
       // blob id and only the POST failed, so a retry can't leak a second
       // copy of the same picture onto the recipient's server.
-      final uploaded = message.attachments.isNotEmpty &&
+      final uploaded =
+          message.attachments.isNotEmpty &&
           message.attachments.first.blobId.isNotEmpty;
       if (attachment != null && !uploaded) {
         message.attachments = [await _uploadAttachment(convo, attachment)];
@@ -4266,7 +4278,11 @@ class AppSession extends ChangeNotifier {
         sentAt: message.timestamp,
       );
 
-      await _encryptAndSend(convo.peer, content.encode(), messageId: message.id);
+      await _encryptAndSend(
+        convo.peer,
+        content.encode(),
+        messageId: message.id,
+      );
     } catch (e) {
       message.sendState = MessageSendState.failed;
       message.sendError = describeError(e);
@@ -4352,7 +4368,7 @@ class AppSession extends ChangeNotifier {
     if (verified.deviceId == stale) return false;
     peer.deviceId = verified.deviceId;
     peer.devicePubKey = verified.devicePubKey;
-    developer.log(
+    logDiagnostic(
       '${peer.accountId} replaced device $stale with ${verified.deviceId}; '
       'adopting it',
       name: 'session-recovery',
@@ -4368,7 +4384,7 @@ class AppSession extends ChangeNotifier {
   /// re-resolves and re-keys in one step via [_getOrCreateCryptoSession]'s
   /// claim-path healing.
   Future<void> _noteStaleRecipientDevice(PeerEndpoint peer) async {
-    developer.log(
+    logDiagnostic(
       'server no longer knows device ${peer.deviceId} of ${peer.accountId}; '
       'discarding it and its session',
       name: 'session-recovery',
@@ -4629,7 +4645,7 @@ class AppSession extends ChangeNotifier {
           }
         }
       } catch (e) {
-        developer.log(
+        logDiagnostic(
           'batch send to ${server ?? 'our own server'} failed, posting '
           'individually: ${describeError(e)}',
           name: 'groups',
@@ -4643,11 +4659,7 @@ class AppSession extends ChangeNotifier {
 
   Future<void> _postGroupCopy(_GroupCopy copy) async {
     try {
-      await _postEnvelope(
-        copy.peer,
-        copy.delivery.wireMessageId,
-        copy.payload,
-      );
+      await _postEnvelope(copy.peer, copy.delivery.wireMessageId, copy.payload);
       copy.delivery.state = MessageSendState.sent;
       copy.delivery.error = null;
     } catch (e) {
@@ -4668,7 +4680,10 @@ class AppSession extends ChangeNotifier {
   /// the old one would throw that work away and desync the pair -- far worse than
   /// the single-message gap the rollback exists to avoid.
   void _rollBackGroupCopy(_GroupCopy copy) {
-    if (!identical(state.sessions[copy.peer.accountId], copy.committedSession)) {
+    if (!identical(
+      state.sessions[copy.peer.accountId],
+      copy.committedSession,
+    )) {
       return;
     }
     _rollBackSession(copy.peer.accountId, copy.previousSession);
@@ -4740,7 +4755,7 @@ class AppSession extends ChangeNotifier {
       }
       await LocalStateStore.saveProfile(state);
     } catch (e) {
-      developer.log('sending $status receipt failed: $e', name: 'receipts');
+      logDiagnostic('sending $status receipt failed: $e', name: 'receipts');
     }
   }
 
