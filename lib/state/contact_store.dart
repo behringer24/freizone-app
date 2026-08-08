@@ -12,6 +12,7 @@
 // and every screen falls back to the short address, with no chat touched.
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -110,16 +111,15 @@ class ContactNameCollision {
 /// and picking one without saying so would quietly discard a name they chose.
 @immutable
 class ContactImportReport {
-  const ContactImportReport({
-    required this.imported,
-    required this.collisions,
-  });
+  const ContactImportReport({required this.imported, required this.collisions});
 
   factory ContactImportReport.fromJson(Map<String, dynamic> j) =>
       ContactImportReport(
         imported: j['imported'] as int? ?? 0,
         collisions: ((j['collisions'] as List<dynamic>?) ?? const [])
-            .map((c) => ContactNameCollision.fromJson(c as Map<String, dynamic>))
+            .map(
+              (c) => ContactNameCollision.fromJson(c as Map<String, dynamic>),
+            )
             .toList(),
       );
 
@@ -161,10 +161,31 @@ class ContactStore extends ChangeNotifier {
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
   }
 
+  /// Loads the contacts, keeping a file that cannot be read rather than
+  /// starting over on top of it.
+  ///
+  /// Unlike the settings, losing this loses something the user cannot simply
+  /// set again -- names they chose for people. So a damaged file is renamed
+  /// aside instead of being overwritten: the app comes up with no names, which
+  /// is visible and recoverable, and whatever was in there is still on disk to
+  /// recover from. Throwing instead, as this used to, takes down whatever
+  /// happened to be reading (see AppSettings.load for how that surfaced).
   static Future<ContactStore> load() async {
     final file = await _file();
     if (!file.existsSync()) return ContactStore._({}, false, null);
-    final j = json.decode(await file.readAsString()) as Map<String, dynamic>;
+
+    final Map<String, dynamic> j;
+    try {
+      j = json.decode(await file.readAsString()) as Map<String, dynamic>;
+    } catch (_) {
+      try {
+        await file.rename('${file.path}.damaged');
+      } catch (_) {
+        // Nothing more to do: starting empty still beats not starting.
+      }
+      return ContactStore._({}, false, null);
+    }
+
     final contacts = <String, Contact>{};
     for (final entry in (j['contacts'] as List<dynamic>?) ?? const []) {
       final contact = Contact.fromJson(entry as Map<String, dynamic>);
@@ -181,15 +202,24 @@ class ContactStore extends ChangeNotifier {
     );
   }
 
+  /// Writes via a uniquely-named temp file and an atomic rename, the same way
+  /// local_state.dart and group_store.dart already do.
+  ///
+  /// writeAsString truncates before it writes, leaving a window in which the
+  /// file is empty -- and this app has several readers that can land in it, one
+  /// per account plus a background push isolate. A rename is atomic, so a
+  /// reader sees the old file or the new one and never a half of either.
   Future<void> _save() async {
     final file = await _file();
-    await file.writeAsString(
+    final tmp = File('${file.path}.${Random().nextInt(1 << 32)}.tmp');
+    await tmp.writeAsString(
       const JsonEncoder.withIndent('  ').convert({
         'contacts': [for (final c in _contacts.values) c.toJson()],
         'imported': _imported,
         if (_report != null) 'import_report': _report!.toJson(),
       }),
     );
+    await tmp.rename(file.path);
   }
 
   /// Every contact, by name -- the order the contacts list shows them in.
@@ -326,10 +356,9 @@ class ContactStore extends ChangeNotifier {
   static ContactStore inMemory({
     List<Contact> contacts = const [],
     bool imported = false,
-  }) => _InMemoryContactStore(
-    {for (final c in contacts) c.accountId: c},
-    imported,
-  );
+  }) => _InMemoryContactStore({
+    for (final c in contacts) c.accountId: c,
+  }, imported);
 }
 
 /// A [ContactStore] whose save is a no-op -- for tests, and for widget tests
