@@ -5,6 +5,7 @@
 // local_state.dart.
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -162,23 +163,44 @@ class AppSettings extends ChangeNotifier {
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
   }
 
+  static AppSettings _defaults() => AppSettings._(
+    themeMode: ThemeMode.system,
+    accentPreset: AccentPreset.teal,
+    copyIdShort: false,
+    notificationSound: true,
+    notificationVibration: true,
+    pushPreference: PushPreference.automatic,
+    readReceiptsEnabled: true,
+    enterSendsMessage: false,
+    directShareEnabled: false,
+    autoSavePicturesToGallery: false,
+  );
+
+  /// Loads the settings, falling back to defaults for a file that cannot be
+  /// read as one.
+  ///
+  /// The fallback is not defensive decoration. Settings are read from several
+  /// places -- one per account on every stream reconnect, plus a background
+  /// push wake -- so a reader genuinely can arrive while a write is in progress
+  /// and see a truncated file. The write below is atomic now, which closes that
+  /// window; this closes what an install from before it, or a damaged file from
+  /// anywhere else, would otherwise do: throw a raw FormatException out of
+  /// whatever happened to ask, which is how "Unexpected end of input" ended up
+  /// surfacing as "push registration failed".
+  ///
+  /// Losing settings costs a theme choice and a few switches, all of which the
+  /// user can see and set again. Refusing to start costs everything.
   static Future<AppSettings> load() async {
     final file = await _file();
     if (!file.existsSync()) {
-      return AppSettings._(
-        themeMode: ThemeMode.system,
-        accentPreset: AccentPreset.teal,
-        copyIdShort: false,
-        notificationSound: true,
-        notificationVibration: true,
-        pushPreference: PushPreference.automatic,
-        readReceiptsEnabled: true,
-        enterSendsMessage: false,
-        directShareEnabled: false,
-        autoSavePicturesToGallery: false,
-      );
+      return _defaults();
     }
-    final j = json.decode(await file.readAsString()) as Map<String, dynamic>;
+    final Map<String, dynamic> j;
+    try {
+      j = json.decode(await file.readAsString()) as Map<String, dynamic>;
+    } catch (_) {
+      return _defaults();
+    }
     return AppSettings._(
       themeMode: ThemeMode.values.firstWhere(
         (m) => m.name == j['theme_mode'],
@@ -204,9 +226,21 @@ class AppSettings extends ChangeNotifier {
     );
   }
 
+  /// Writes via a uniquely-named temp file and an atomic rename, the same way
+  /// local_state.dart and group_store.dart already do.
+  ///
+  /// writeAsString truncates the file before it writes, so there is a window in
+  /// which it is empty -- and this app has several readers (one per account,
+  /// plus a background push isolate) that can land in it. That is not a
+  /// theoretical race: it produced a "FormatException: Unexpected end of input"
+  /// reported from a real device, surfacing as a failed push registration
+  /// because that is what happened to be reading at the time. A rename is
+  /// atomic, so a reader sees the old file or the new one and never a half of
+  /// either.
   Future<void> _save() async {
     final file = await _file();
-    await file.writeAsString(
+    final tmp = File('${file.path}.${Random().nextInt(1 << 32)}.tmp');
+    await tmp.writeAsString(
       const JsonEncoder.withIndent('  ').convert({
         'theme_mode': _themeMode.name,
         'accent_preset': _accentPreset.name,
@@ -222,6 +256,7 @@ class AppSettings extends ChangeNotifier {
           'last_active_account_id': _lastActiveAccountId,
       }),
     );
+    await tmp.rename(file.path);
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
