@@ -252,3 +252,84 @@ func GroupResolveState(cReq *C.char) *C.char {
 }
 
 func main() {}
+
+// The account API (SRV-23 stage 6). Everything a screen asks for, in the shape
+// it asks for it -- see api.go for why this is coarser than the library it
+// wraps, and why attachment bytes travel as paths rather than through here.
+
+//export CoreChats
+func CoreChats(cReq *C.char) *C.char { return jsonCall(cReq, doCoreChats) }
+
+//export CoreMessages
+func CoreMessages(cReq *C.char) *C.char { return jsonCall(cReq, doCoreMessages) }
+
+// CoreSend touches the network. Dart must call it from an isolate.
+//
+//export CoreSend
+func CoreSend(cReq *C.char) *C.char { return jsonCall(cReq, doCoreSend) }
+
+//export CoreRetryMessage
+func CoreRetryMessage(cReq *C.char) *C.char { return jsonCall(cReq, doCoreRetry) }
+
+//export CoreSetOpenChat
+func CoreSetOpenChat(cReq *C.char) *C.char { return jsonCall(cReq, doCoreSetOpenChat) }
+
+//export CoreMarkRead
+func CoreMarkRead(cReq *C.char) *C.char { return jsonCall(cReq, doCoreMarkRead) }
+
+//export CoreStartConversation
+func CoreStartConversation(cReq *C.char) *C.char { return jsonCall(cReq, doCoreStartConversation) }
+
+//export CoreBlockPeer
+func CoreBlockPeer(cReq *C.char) *C.char { return jsonCall(cReq, doCoreBlockPeer) }
+
+//export CoreUnblockPeer
+func CoreUnblockPeer(cReq *C.char) *C.char { return jsonCall(cReq, doCoreUnblockPeer) }
+
+//export CoreAcceptRequest
+func CoreAcceptRequest(cReq *C.char) *C.char { return jsonCall(cReq, doCoreAcceptRequest) }
+
+//export CoreDeleteChat
+func CoreDeleteChat(cReq *C.char) *C.char { return jsonCall(cReq, doCoreDeleteChat) }
+
+// CoreAttachmentPath downloads on demand, so it blocks and belongs in an
+// isolate. It returns where the file is, never the bytes.
+//
+//export CoreAttachmentPath
+func CoreAttachmentPath(cReq *C.char) *C.char { return jsonCall(cReq, doCoreAttachmentPath) }
+
+//export CoreGroupCreate
+func CoreGroupCreate(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupCreate) }
+
+//export CoreGroupInvite
+func CoreGroupInvite(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupInvite) }
+
+//export CoreGroupAccept
+func CoreGroupAccept(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupAccept) }
+
+//export CoreGroupSetRole
+func CoreGroupSetRole(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupSetRole) }
+
+//export CoreGroupRemove
+func CoreGroupRemove(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupRemove) }
+
+//export CoreGroupLeave
+func CoreGroupLeave(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupLeave) }
+
+//export CoreGroupSetMeta
+func CoreGroupSetMeta(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupSetMeta) }
+
+//export CoreGroupDissolve
+func CoreGroupDissolve(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupDissolve) }
+
+//export CoreGroupInfo
+func CoreGroupInfo(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupInfo) }
+
+// CoreMaintain is the housekeeping a fresh connection should do: top up the
+// prekey pool, settle group facts owed, re-establish broken sessions. Blocking.
+//
+//export CoreMaintain
+func CoreMaintain(cReq *C.char) *C.char { return jsonCall(cReq, doCoreMaintain) }
+
+//export CoreResetSession
+func CoreResetSession(cReq *C.char) *C.char { return jsonCall(cReq, doCoreResetSession) }

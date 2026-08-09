@@ -16,7 +16,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -33,6 +33,12 @@ type coreHandle struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	events <-chan client.StreamEvent
+
+	// openChatID is the chat on screen, the one thing that suppresses a
+	// notification. Held here rather than passed per envelope, because the
+	// receive loop runs in its own isolate and cannot know what the user is
+	// looking at.
+	openChatID string
 }
 
 var (
@@ -233,12 +239,35 @@ type pollEvent struct {
 	Error string `json:"error,omitempty"`
 }
 
+// pollMessage is what became of one envelope, not the envelope itself.
+//
+// The core opens it, files it and decides what follows; the shell is told the
+// outcome. That is the point of the swap -- an envelope has to be handled by
+// whoever decrypts it, because the ratchet has advanced and the id is marked by
+// the time anybody looks at the payload, so handing one up unprocessed risks
+// losing it for good.
 type pollMessage struct {
-	MessageID       string          `json:"message_id"`
-	SenderAccountID string          `json:"sender_account_id"`
-	SenderDeviceID  string          `json:"sender_device_id"`
-	SentAt          string          `json:"sent_at"`
-	Payload         json.RawMessage `json:"payload"`
+	// ChatID is where it belongs: a peer account id, or a group id.
+	ChatID          string `json:"chat_id"`
+	SenderAccountID string `json:"sender_account_id"`
+
+	// MessageID is the stored transcript line, empty for everything that is
+	// never shown -- a receipt, a re-key, group membership, a blocked sender.
+	MessageID string `json:"message_id,omitempty"`
+
+	// Notify: the user should be told. Already accounts for the chat on screen.
+	Notify bool `json:"notify,omitempty"`
+
+	// Invitation marks the one group event worth interrupting somebody for.
+	Invitation bool `json:"invitation,omitempty"`
+
+	// Group is true when ChatID names a group, so the shell can open the right
+	// screen without parsing an id.
+	Group bool `json:"group,omitempty"`
+
+	// Preview is the text a notification shows, empty when there is nothing to
+	// show for it.
+	Preview string `json:"preview,omitempty"`
 }
 
 type corePollResponse struct {
@@ -284,7 +313,7 @@ func doCorePoll(req corePollRequest) (any, error) {
 		if !ok {
 			return &corePollResponse{Events: out, Streaming: false}, nil
 		}
-		out = append(out, convertEvent(ev))
+		out = append(out, entry.convertEvent(ev))
 	case <-timer.C:
 		return &corePollResponse{Events: out, Streaming: true}, nil
 	}
@@ -296,25 +325,19 @@ func doCorePoll(req corePollRequest) (any, error) {
 			if !ok {
 				return &corePollResponse{Events: out, Streaming: false}, nil
 			}
-			out = append(out, convertEvent(ev))
+			out = append(out, entry.convertEvent(ev))
 		default:
 			return &corePollResponse{Events: out, Streaming: true}, nil
 		}
 	}
 }
 
-func convertEvent(ev client.StreamEvent) pollEvent {
+func (e *coreHandle) convertEvent(ev client.StreamEvent) pollEvent {
 	switch ev.Kind {
 	case client.StreamConnected:
 		return pollEvent{Kind: "connected"}
 	case client.StreamMessage:
-		return pollEvent{Kind: "message", Message: &pollMessage{
-			MessageID:       ev.Message.MessageID,
-			SenderAccountID: ev.Message.SenderAccountID,
-			SenderDeviceID:  ev.Message.SenderDeviceID,
-			SentAt:          ev.Message.SentAt.UTC().Format(time.RFC3339Nano),
-			Payload:         ev.Message.Payload,
-		}}
+		return e.handleIncoming(ev.Message)
 	case client.StreamDisconnected:
 		// Deliberately carries no error text even when one is set. A stream
 		// that came up and then ended is a resume from background or a blip,
@@ -329,5 +352,84 @@ func convertEvent(ev client.StreamEvent) pollEvent {
 		return out
 	default:
 		return pollEvent{Kind: "unknown"}
+	}
+}
+
+// handleIncoming opens one envelope, files it, and reports what came of it.
+//
+// Everything that follows from an envelope happens here rather than above the
+// boundary: decrypt, store, reconcile a group's facts, acknowledge it away.
+// A caller that merely forwarded it would have to be trusted to finish the job,
+// and the one caller that cannot be -- a background wake with no screen -- is
+// exactly the one that must.
+//
+// A failure never stops the loop. A poison envelope is given up on after enough
+// attempts and acknowledged away by the core; anything else is reported as a
+// failed event and the next envelope is tried.
+func (e *coreHandle) handleIncoming(msg client.IncomingMessage) pollEvent {
+	e.mu.Lock()
+	openChat := e.openChatID
+	e.mu.Unlock()
+
+	res, err := e.client.HandleIncoming(msg, client.ReceiveOptions{OpenChatID: openChat})
+	if err != nil {
+		var fail *client.DecryptError
+		if errors.As(err, &fail) && fail.GaveUp {
+			// Retried enough times to be certain it will never open: drop it
+			// from the queue rather than let it block everything behind it.
+			e.ack(msg.MessageID)
+		}
+		return pollEvent{Kind: "failed", Error: err.Error()}
+	}
+	e.ack(msg.MessageID)
+
+	out := pollMessage{ChatID: res.PeerAccountID, SenderAccountID: res.PeerAccountID}
+	if res.Group != nil && res.Group.GroupID != "" {
+		out.ChatID, out.Group = res.Group.GroupID, true
+		out.Invitation = res.Group.Invited
+		// Reconciling is a send, so it belongs to the loop rather than to the
+		// decrypt: the facts we hold may be behind the sender's, or they may
+		// be asking for ours.
+		ctx, cancel := callContext()
+		if rerr := e.client.ReconcileGroup(ctx, *res.Group, res.PeerAccountID); rerr != nil {
+			cancel()
+			return pollEvent{Kind: "message", Message: &out, Error: rerr.Error()}
+		}
+		cancel()
+	}
+	out.MessageID = res.StoredMessageID
+	out.Notify = res.ShouldNotify
+	if res.StoredMessageID != "" {
+		out.Preview = res.Content.Text
+	}
+	e.confirmDelivery(res)
+	return pollEvent{Kind: "message", Message: &out}
+}
+
+// ack drops an envelope from the server queue, which is the only thing that
+// drains it. Best effort: a lost acknowledgement means redelivery, which the
+// duplicate check is there to absorb.
+func (e *coreHandle) ack(messageID string) {
+	ctx, cancel := callContext()
+	defer cancel()
+	_ = e.client.AckMessage(ctx, messageID)
+}
+
+// confirmDelivery tells the sender their message arrived.
+//
+// Delivered, never read: reading is something a person does, and the shell
+// reports it when a chat is actually on screen. Best effort -- a receipt that
+// does not go out costs a tick, never the message.
+func (e *coreHandle) confirmDelivery(res client.ReceiveResult) {
+	ctx, cancel := callContext()
+	defer cancel()
+
+	if res.Group != nil && res.Group.DeliveredUpTo != nil {
+		_ = e.client.SendGroupReceipt(ctx, res.Group.GroupID, res.PeerAccountID,
+			client.ReceiptDelivered, *res.Group.DeliveredUpTo)
+		return
+	}
+	if res.DeliveredUpTo != nil {
+		_ = e.client.SendReceipt(ctx, res.PeerAccountID, client.ReceiptDelivered, *res.DeliveredUpTo)
 	}
 }

@@ -81,9 +81,9 @@ func TestBlobDecryptRejectsTruncatedAndMalformedInput(t *testing.T) {
 	enc := encryptForTest(t, []byte("secret picture"))
 
 	for name, ciphertext := range map[string][]byte{
-		"empty":           {},
+		"empty":              {},
 		"shorter than nonce": enc.Ciphertext[:5],
-		"nonce only":      enc.Ciphertext[:12],
+		"nonce only":         enc.Ciphertext[:12],
 	} {
 		if _, err := doDecryptBlob(decryptBlobRequest{Key: enc.Key, Ciphertext: ciphertext}); err == nil {
 			t.Errorf("expected %s ciphertext to be rejected", name)
