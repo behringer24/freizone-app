@@ -174,25 +174,21 @@ func TestPollReturnsABatch(t *testing.T) {
 		t.Fatalf("doCoreStreamStart: %v", err)
 	}
 
-	// Collect until every frame has been accounted for, however the batches
-	// fall. What comes back is no longer the envelope: the core opens each one
-	// and reports what became of it, so these payloads -- which are not real
-	// envelopes and belong to no session -- come back as failures. That is the
-	// right outcome and still proves the property this test is about, which is
-	// that one crossing returns the whole backlog rather than one event.
-	var handled int
+	// Collect until every frame has arrived, however the batches fall.
+	seen := map[string]bool{}
 	deadline := time.Now().Add(10 * time.Second)
-	for handled < frames && time.Now().Before(deadline) {
-		batch := poll(t, handle, 500).Events
-		for _, ev := range batch {
-			switch ev.Kind {
-			case "message", "failed":
-				handled++
+	for len(seen) < frames && time.Now().Before(deadline) {
+		for _, ev := range poll(t, handle, 500).Events {
+			if ev.Kind == "message" {
+				if ev.Message == nil {
+					t.Fatal("a message event arrived without a message")
+				}
+				seen[ev.Message.MessageID] = true
 			}
 		}
 	}
-	if handled != frames {
-		t.Errorf("want all %d frames accounted for, got %d", frames, handled)
+	if len(seen) != frames {
+		t.Errorf("want all %d messages, got %d: %v", frames, len(seen), seen)
 	}
 }
 

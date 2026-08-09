@@ -8,6 +8,7 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
+import 'core_models.dart';
 import 'freizone_core_bindings.dart';
 import 'freizone_core_exception.dart';
 import 'models.dart';
@@ -525,6 +526,120 @@ class FreizoneCore {
       return (env['data'] as Map<String, dynamic>?) ?? const {};
     } finally {
       _bindings.free(resultPtr);
+    }
+  }
+
+  // --- the account API (SRV-23 stage 6) -------------------------------------
+  //
+  // Local reads first, then the raw pass-throughs for everything that blocks.
+  // The raw ones take and return maps on purpose: they are what an isolate
+  // entry point calls, and an isolate cannot be handed anything richer than
+  // plain values (see state/core_account.dart).
+
+  /// The chat list, peers and groups in one list ordered by one clock.
+  List<ChatSummary> coreChats(int handle) =>
+      _callList(_bindings.coreChats, {'handle': handle})
+          .map((e) => ChatSummary.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false);
+
+  /// One chat's whole transcript, in arrival order.
+  List<CoreMessage> coreMessages(int handle, String chatId) =>
+      _callList(_bindings.coreMessages, {'handle': handle, 'chat_id': chatId})
+          .map((e) => CoreMessage.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false);
+
+  GroupInfo coreGroupInfo(int handle, String groupId) => GroupInfo.fromJson(
+    _call(_bindings.coreGroupInfo, {'handle': handle, 'group_id': groupId}),
+  );
+
+  void coreSetOpenChat(int handle, String chatId) =>
+      _call(_bindings.coreSetOpenChat, {'handle': handle, 'chat_id': chatId});
+
+  void coreBlockPeer(int handle, String accountId, String server) => _call(
+    _bindings.coreBlockPeer,
+    {'handle': handle, 'account_id': accountId, 'server': server},
+  );
+
+  void coreUnblockPeer(int handle, String accountId) => _call(
+    _bindings.coreUnblockPeer,
+    {'handle': handle, 'account_id': accountId},
+  );
+
+  void coreAcceptRequest(int handle, String accountId) => _call(
+    _bindings.coreAcceptRequest,
+    {'handle': handle, 'account_id': accountId},
+  );
+
+  void coreDeleteChat(int handle, String chatId) =>
+      _call(_bindings.coreDeleteChat, {'handle': handle, 'chat_id': chatId});
+
+  /// Blocking. Isolate only -- see state/core_account.dart.
+  Map<String, dynamic> coreSendRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreSend, req);
+  Map<String, dynamic> coreRetryRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreRetryMessage, req);
+  Map<String, dynamic> coreMarkReadRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreMarkRead, req);
+  Map<String, dynamic> coreStartConversationRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreStartConversation, req);
+  Map<String, dynamic> coreAttachmentPathRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreAttachmentPath, req);
+  Map<String, dynamic> coreMaintainRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreMaintain, req);
+  Map<String, dynamic> coreResetSessionRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreResetSession, req);
+  Map<String, dynamic> coreGroupCreateRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupCreate, req);
+  Map<String, dynamic> coreGroupInviteRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupInvite, req);
+  Map<String, dynamic> coreGroupAcceptRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupAccept, req);
+  Map<String, dynamic> coreGroupSetRoleRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupSetRole, req);
+  Map<String, dynamic> coreGroupRemoveRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupRemove, req);
+  Map<String, dynamic> coreGroupLeaveRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupLeave, req);
+  Map<String, dynamic> coreGroupSetMetaRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupSetMeta, req);
+  Map<String, dynamic> coreGroupDissolveRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupDissolve, req);
+
+  /// Like [_call] for the calls that answer with a JSON array rather than an
+  /// object -- a list of chats, a transcript.
+  ///
+  /// Its own decode rather than a looser [_decodeEnvelope], so the failure mode
+  /// stays sharp: a call answering the wrong shape says so here instead of
+  /// silently producing an empty list.
+  List<dynamic> _callList(
+    Pointer<Utf8> Function(Pointer<Utf8>) fn,
+    Map<String, dynamic> request,
+  ) {
+    final reqPtr = json.encode(request).toNativeUtf8();
+    try {
+      final resultPtr = fn(reqPtr);
+      try {
+        final env =
+            json.decode(resultPtr.toDartString()) as Map<String, dynamic>;
+        if (env['ok'] != true) {
+          throw FreizoneCoreException(
+            env['error'] as String? ?? 'unknown native core error',
+            code: env['code'] as String?,
+          );
+        }
+        final data = env['data'];
+        if (data == null) return const [];
+        if (data is! List) {
+          throw FreizoneCoreException(
+            'expected a list from the core, got ${data.runtimeType}',
+          );
+        }
+        return data;
+      } finally {
+        _bindings.free(resultPtr);
+      }
+    } finally {
+      malloc.free(reqPtr);
     }
   }
 }
