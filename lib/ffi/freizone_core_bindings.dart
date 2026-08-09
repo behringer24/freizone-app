@@ -66,7 +66,30 @@ class FreizoneCoreBindings {
       coreSetIdentity = _lookupWithReq(lib, 'CoreSetIdentity'),
       coreStreamStart = _lookupWithReq(lib, 'CoreStreamStart'),
       coreStreamStop = _lookupWithReq(lib, 'CoreStreamStop'),
-      corePoll = _lookupWithReq(lib, 'CorePoll');
+      corePoll = _lookupWithReq(lib, 'CorePoll'),
+      coreChats = _lookupWithReq(lib, 'CoreChats'),
+      coreMessages = _lookupWithReq(lib, 'CoreMessages'),
+      coreSend = _lookupWithReq(lib, 'CoreSend'),
+      coreRetryMessage = _lookupWithReq(lib, 'CoreRetryMessage'),
+      coreSetOpenChat = _lookupWithReq(lib, 'CoreSetOpenChat'),
+      coreMarkRead = _lookupWithReq(lib, 'CoreMarkRead'),
+      coreStartConversation = _lookupWithReq(lib, 'CoreStartConversation'),
+      coreBlockPeer = _lookupWithReq(lib, 'CoreBlockPeer'),
+      coreUnblockPeer = _lookupWithReq(lib, 'CoreUnblockPeer'),
+      coreAcceptRequest = _lookupWithReq(lib, 'CoreAcceptRequest'),
+      coreDeleteChat = _lookupWithReq(lib, 'CoreDeleteChat'),
+      coreAttachmentPath = _lookupWithReq(lib, 'CoreAttachmentPath'),
+      coreGroupCreate = _lookupWithReq(lib, 'CoreGroupCreate'),
+      coreGroupInvite = _lookupWithReq(lib, 'CoreGroupInvite'),
+      coreGroupAccept = _lookupWithReq(lib, 'CoreGroupAccept'),
+      coreGroupSetRole = _lookupWithReq(lib, 'CoreGroupSetRole'),
+      coreGroupRemove = _lookupWithReq(lib, 'CoreGroupRemove'),
+      coreGroupLeave = _lookupWithReq(lib, 'CoreGroupLeave'),
+      coreGroupSetMeta = _lookupWithReq(lib, 'CoreGroupSetMeta'),
+      coreGroupDissolve = _lookupWithReq(lib, 'CoreGroupDissolve'),
+      coreGroupInfo = _lookupWithReq(lib, 'CoreGroupInfo'),
+      coreMaintain = _lookupWithReq(lib, 'CoreMaintain'),
+      coreResetSession = _lookupWithReq(lib, 'CoreResetSession');
 
   /// [path] is a host-test escape hatch and nothing else: a `flutter test`
   /// process has no core linked into it, so [DynamicLibrary.process] finds
@@ -135,4 +158,41 @@ class FreizoneCoreBindings {
   /// **Must be called from an isolate** -- on the UI thread it freezes the app
   /// for the whole wait.
   final WithReqFn corePoll;
+
+  /// The account API (SRV-23 stage 6).
+  ///
+  /// Split by what each one costs, because the split decides where Dart may
+  /// call it from. A read is local file work and answers immediately; anything
+  /// that touches the network blocks for as long as the network takes, and on
+  /// the UI thread that is a frozen app.
+
+  /// Local. Safe to call while drawing.
+  final WithReqFn coreChats;
+  final WithReqFn coreMessages;
+  final WithReqFn coreSetOpenChat;
+  final WithReqFn coreBlockPeer;
+  final WithReqFn coreUnblockPeer;
+  final WithReqFn coreAcceptRequest;
+  final WithReqFn coreDeleteChat;
+  final WithReqFn coreGroupInfo;
+
+  /// Network. Isolate only.
+  final WithReqFn coreSend;
+  final WithReqFn coreRetryMessage;
+  final WithReqFn coreMarkRead;
+  final WithReqFn coreStartConversation;
+  final WithReqFn coreAttachmentPath;
+  final WithReqFn coreMaintain;
+  final WithReqFn coreResetSession;
+
+  /// Group actions. Every one of these tells the other members, so every one
+  /// of them sends: isolate only, without exception.
+  final WithReqFn coreGroupCreate;
+  final WithReqFn coreGroupInvite;
+  final WithReqFn coreGroupAccept;
+  final WithReqFn coreGroupSetRole;
+  final WithReqFn coreGroupRemove;
+  final WithReqFn coreGroupLeave;
+  final WithReqFn coreGroupSetMeta;
+  final WithReqFn coreGroupDissolve;
 }
