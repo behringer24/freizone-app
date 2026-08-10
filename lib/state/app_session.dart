@@ -1801,18 +1801,23 @@ class AppSession extends ChangeNotifier {
   /// with peerAddress -- a full Freizone address (`id*server`, `id*local`,
   /// or just a bare id/prefix, see lib/util/freizone_address.dart), so a
   /// dash-grouped or phone-dictated id ("k5x9 p2qa n7f3...") resolves the
-  /// same as the canonical form, and may be just the first
-  /// [accountIdPrefixLength] characters (unique per server, see
-  /// docs/PROTOCOL.md), in which case an already-known conversation
-  /// resolves purely locally, with no network round trip. An explicit
-  /// `*server` that isn't this session's own (or `local`) is a federated
-  /// address (docs/PROTOCOL.md §9): resolved and messaged directly
-  /// against that server, not this session's own.
+  /// same as the canonical form. An explicit `*server` that isn't this
+  /// session's own (or `local`) is a federated address (docs/PROTOCOL.md §9):
+  /// resolved and messaged directly against that server, not this session's
+  /// own.
   ///
-  /// Naming the peer is a separate act on the contact store (APP-19), not a
-  /// parameter here: it returns the conversation, whose `peerAccountId` is the
-  /// resolved id the contact has to be keyed by -- which is the only moment that
-  /// id is known for an address typed as a prefix.
+  /// Through the core now (SRV-23, the cut) -- CoreAccount.startConversation,
+  /// not a Dart-side resolve-and-mint. This one was not optional the way the
+  /// rest of this pass's "deferred" list is: pkg/client.touchConversation
+  /// deliberately never creates a Conversation record for a peer nobody
+  /// called StartConversation for first (see its own doc comment -- "the
+  /// caller is the one that knows whether creating it is right"), so a first
+  /// message sent without this ever having run leaves that chat with no
+  /// record in the core at all, forever -- Conversations() never lists it,
+  /// applyCoreChat reads that as "gone" and removes the local entry on the
+  /// very next refresh, and the screen still holding a reference crashes on
+  /// the null the moment it rebuilds. Found by actually sending one on a
+  /// device, not by review.
   Future<Conversation> startConversation(String peerAddress) async {
     final parsed = parseFreizoneAddress(peerAddress);
     if (parsed == null) throw StateError('Not a valid Freizone address');
@@ -1850,56 +1855,18 @@ class AppSession extends ChangeNotifier {
       );
     }
 
-    final existing = state.conversations[normalized];
-    if (existing != null &&
-        existing.peerDeviceId != null &&
-        _samePeerServer(existing.peerServer, parsed.server)) {
-      await _markKnown(existing);
-      return existing;
-    }
-
-    if (normalized.length == accountIdPrefixLength) {
-      for (final convo in state.conversations.values) {
-        if (convo.peerDeviceId != null &&
-            convo.peerAccountId.startsWith(normalized) &&
-            _samePeerServer(convo.peerServer, parsed.server)) {
-          await _markKnown(convo);
-          return convo;
-        }
-      }
-    }
-
-    final peerApi = _clientFor(parsed.server);
-    final (resolvedId, verified) = await _resolvePeerDevice(
+    // CoreAccount.startConversation resolves the address itself (server-side
+    // prefix resolution, same as the old _resolvePeerDevice), marks the peer
+    // known and lifts any pending-approval flag -- pkg/client.StartConversation
+    // does all three, which is exactly what the old Dart-side _markKnown
+    // existed for.
+    final chat = await coreAccount.startConversation(
       normalized,
-      peerApi,
+      server: ownServer ? '' : parsed.server!,
     );
-
-    final convo = state.conversations.putIfAbsent(
-      resolvedId,
-      // Seeded from AppState.blockedPeers, the block's authoritative home
-      // (see setBlocked): a block deliberately outlives deleteConversation,
-      // so re-starting a chat with a blocked peer must surface as a blocked
-      // conversation rather than quietly minting an unblocked mirror. That
-      // divergence is not cosmetic -- the group receive path reads the map
-      // and drops, while the 1:1 path and the profile screen read the
-      // mirror, so a stale mirror shows a working chat whose group messages
-      // silently vanish.
-      () => Conversation(
-        peerAccountId: resolvedId,
-        blocked: state.blockedPeers.containsKey(resolvedId),
-      ),
-    );
-    convo.peerServer = sameServer(parsed.server ?? state.server, state.server)
-        ? null
-        : parsed.server;
-    convo.peerDeviceId = verified.deviceId;
-    convo.peerDevicePubKey = verified.devicePubKey;
-    convo.pendingApproval = false;
-    state.knownPeerIds.add(resolvedId);
-    await LocalStateStore.saveProfile(state);
+    applyCoreChat(state, coreAccount, chat.chatId);
     notifyListeners();
-    return convo;
+    return state.conversations[chat.chatId]!;
   }
 
   /// Reaching out to (or back to) a peer yourself is an implicit accept
