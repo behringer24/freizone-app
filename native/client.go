@@ -272,6 +272,26 @@ type pollOutcome struct {
 	// way (state.groups.containsKey), but the background wake (push_manager
 	// .dart's doCoreSync caller) has no such map to check against.
 	IsGroup bool `json:"is_group,omitempty"`
+
+	// Failure is why this envelope was not handled, for the shell to log.
+	// Empty on success and on a duplicate, which is not a failure.
+	//
+	// Carried across rather than swallowed because swallowing it cost real
+	// time three separate times in one afternoon: a message that fails to
+	// decrypt is invisible from the app -- no error, no log, just a message
+	// that never appears -- and every diagnosis started by rebuilding the
+	// core with a throwaway log statement in this function. HandleIncoming
+	// already returns a well-classified error (including, since the fix in
+	// pkg/client/receive.go, the prekey-block failure that a fallback to the
+	// existing session would otherwise mask); there is no reason for it to
+	// stop here. Diagnostic only: nothing branches on it, and an envelope
+	// that failed is still acknowledged or retried by exactly the rule above.
+	Failure string `json:"failure,omitempty"`
+
+	// SenderAccountID names who the failed envelope came from, since ChatID
+	// is deliberately empty for one and a bare error text says nothing about
+	// which conversation is broken.
+	SenderAccountID string `json:"sender_account_id,omitempty"`
 }
 
 type corePollResponse struct {
@@ -391,7 +411,10 @@ func handleAndAck(ctx context.Context, c *client.Client, msg client.IncomingMess
 		// which the duplicate check on the next attempt absorbs.
 		_ = c.AckMessage(ctx, msg.MessageID)
 	}
-	if err != nil || res.Duplicate {
+	if err != nil {
+		return pollOutcome{Failure: err.Error(), SenderAccountID: msg.SenderAccountID}
+	}
+	if res.Duplicate {
 		return pollOutcome{}
 	}
 

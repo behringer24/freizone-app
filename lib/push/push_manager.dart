@@ -523,10 +523,19 @@ Future<_WakeNotice?> _syncAccount(String accountId) async {
       // handled, and did not.
       _log('wake sync $accountId: housekeeping problem: $problem');
     }
-    final outcomes = ((raw['outcomes'] as List<dynamic>?) ?? const [])
+    final all = ((raw['outcomes'] as List<dynamic>?) ?? const [])
         .map((o) => PollOutcome.fromJson(o as Map<String, dynamic>))
-        .where((o) => o.chatId.isNotEmpty)
         .toList();
+    // Same reasoning as AppSession._handleIncoming: an envelope that could not
+    // be handled is invisible without this, and a wake is the one path where
+    // nobody is watching a screen to notice (see PollOutcome.failure).
+    for (final failed in all.where((o) => o.failed)) {
+      _log(
+        'wake sync $accountId: envelope from ${failed.senderAccountId} '
+        'not handled: ${failed.failure}',
+      );
+    }
+    final outcomes = all.where((o) => o.chatId.isNotEmpty).toList();
     _log('wake sync $accountId: ${outcomes.length} outcome(s)');
 
     _WakeNotice? notice;
