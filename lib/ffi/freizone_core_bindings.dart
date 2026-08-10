@@ -89,7 +89,8 @@ class FreizoneCoreBindings {
       coreGroupDissolve = _lookupWithReq(lib, 'CoreGroupDissolve'),
       coreGroupInfo = _lookupWithReq(lib, 'CoreGroupInfo'),
       coreMaintain = _lookupWithReq(lib, 'CoreMaintain'),
-      coreResetSession = _lookupWithReq(lib, 'CoreResetSession');
+      coreResetSession = _lookupWithReq(lib, 'CoreResetSession'),
+      coreSync = _lookupWithReq(lib, 'CoreSync');
 
   /// [path] is a host-test escape hatch and nothing else: a `flutter test`
   /// process has no core linked into it, so [DynamicLibrary.process] finds
@@ -184,6 +185,11 @@ class FreizoneCoreBindings {
   final WithReqFn coreAttachmentPath;
   final WithReqFn coreMaintain;
   final WithReqFn coreResetSession;
+
+  /// Drains this device's queued messages the same way the live poll loop
+  /// handles a stream message -- for a caller with no stream open at all, the
+  /// background push wake. Isolate only.
+  final WithReqFn coreSync;
 
   /// Group actions. Every one of these tells the other members, so every one
   /// of them sends: isolate only, without exception.

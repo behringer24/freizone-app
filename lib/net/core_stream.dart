@@ -2,18 +2,22 @@
 //
 // Replaces sse_client.dart, and deliberately keeps its shape: connect() with
 // onMessage/onError/onConnected, and close(). AppSession's use of it is
-// unchanged, which is the point -- the reconnection policy moved into
-// freizone-server's pkg/client, not the app's idea of what a stream is.
+// unchanged in spirit, which is the point -- the reconnection policy moved
+// into freizone-server's pkg/client, not the app's idea of what a stream is.
 //
 // What the core now owns: opening the stream, the SSE line parsing, the two
 // reconnect regimes (quick retry with the backoff reset after a stream that had
 // come up and dropped, exponential backoff with jitter for one that never came
-// up), and bounding a connect attempt so a routed-but-dead host surfaces in
-// seconds. All of that is tested there, in Go, against a real server -- which is
-// something the Dart version never had.
+// up), bounding a connect attempt so a routed-but-dead host surfaces in
+// seconds -- and, since the cut (docs/design/23-shared-client-core.md), the
+// receive path itself: decrypting, folding a group envelope, acknowledging,
+// receipting. All of that is tested there, in Go, against a real server --
+// which is something the Dart version never had.
 //
-// What is left here: the isolate the blocking poll must run on, and the mapping
-// from the core's events back onto the three callbacks.
+// What is left here: the isolate the blocking poll must run on, and the
+// mapping from the core's events back onto the three callbacks. [onMessage]
+// gets [PollOutcome] -- what the core decided -- never the envelope itself;
+// there is nothing left here to decrypt.
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
@@ -21,15 +25,9 @@ import 'dart:isolate';
 import 'package:path_provider/path_provider.dart';
 
 import '../ffi/freizone_core.dart';
-import '../state/local_state.dart';
 import 'api_client.dart';
-import 'dto.dart';
 
 /// What one blocking `CorePoll` returned.
-///
-/// Typed here rather than in lib/ffi/models.dart because it carries a
-/// [MessageResponse], and models.dart is deliberately the leaf of the
-/// dependency order that lib/net/ builds on top of.
 class CorePollResult {
   const CorePollResult({required this.events, required this.streaming});
 
@@ -51,13 +49,13 @@ class CorePollResult {
 
 /// One thing that happened on the stream.
 class CoreStreamEvent {
-  const CoreStreamEvent({required this.kind, this.message, this.error});
+  const CoreStreamEvent({required this.kind, this.outcome, this.error});
 
   factory CoreStreamEvent.fromJson(Map<String, dynamic> j) => CoreStreamEvent(
     kind: j['kind'] as String? ?? 'unknown',
-    message: j['message'] == null
+    outcome: j['outcome'] == null
         ? null
-        : MessageResponse.fromJson(j['message'] as Map<String, dynamic>),
+        : PollOutcome.fromJson(j['outcome'] as Map<String, dynamic>),
     error: j['error'] as String?,
   );
 
@@ -69,11 +67,51 @@ class CoreStreamEvent {
   final String kind;
 
   /// Present for "message".
-  final MessageResponse? message;
+  final PollOutcome? outcome;
 
   /// Present for "failed", and deliberately absent for "disconnected" even
   /// though the core knows why -- see [CoreStream.connect].
   final String? error;
+}
+
+/// What one handled envelope turned into. The core has already decrypted it
+/// (or folded it, if it was a group fact), acknowledged it, and sent back
+/// whatever receipt it called for -- this is only what is left for the shell
+/// to act on: somewhere to refresh, and sometimes someone to tell.
+class PollOutcome {
+  const PollOutcome({
+    required this.chatId,
+    required this.notify,
+    required this.invitation,
+    required this.isGroup,
+  });
+
+  factory PollOutcome.fromJson(Map<String, dynamic> j) => PollOutcome(
+    chatId: j['chat_id'] as String? ?? '',
+    notify: j['notify'] as bool? ?? false,
+    invitation: j['invitation'] as bool? ?? false,
+    isGroup: j['is_group'] as bool? ?? false,
+  );
+
+  /// Which chat changed -- a peer account id or a group id, the one namespace
+  /// both share. Empty for a duplicate or a failed attempt: nothing changed,
+  /// so there is nothing to refresh.
+  final String chatId;
+
+  /// Whether this is worth interrupting the user for. False for the ordinary
+  /// "something changed, redraw the chat" case -- a receipt, a non-invite
+  /// group fact, a message into the chat already on screen.
+  final bool notify;
+
+  /// [notify] is true because this was an invitation into a group new to this
+  /// account, not a message. Changes only the wording.
+  final bool invitation;
+
+  /// [chatId] names a group rather than a peer -- settled on the Go side
+  /// (client.IsGroupID), not re-derived here, so a caller with no live
+  /// AppState.groups to check against (the background wake, see
+  /// push_manager.dart) still knows which kind of chat this is.
+  final bool isGroup;
 }
 
 /// How long one poll waits before coming back empty-handed. Long, because an
@@ -82,18 +120,17 @@ class CoreStreamEvent {
 const _pollTimeout = Duration(seconds: 20);
 
 class CoreStream {
-  CoreStream({required this.core, required this.state, this.statePath});
+  /// [handle] is an already-open core handle -- its identity already set, its
+  /// lifetime owned by whoever opened it (AppSession's own [CoreAccount]), not
+  /// by this stream. That is deliberate: the same handle also serves sends and
+  /// reads, so a stream that closed it from underneath them on every
+  /// disconnect would be a much worse defect than the one this class fixes.
+  CoreStream({required this.core, required this.handle});
 
   final FreizoneCore core;
-  final AppState state;
-
-  /// Where to put the core's state directory, given an account id. Null uses
-  /// [coreStatePath], which resolves through path_provider -- correct in the
-  /// app and unavailable in a plain `flutter test`, which is why this is here.
-  final Future<String> Function(String accountId)? statePath;
+  final int handle;
 
   bool _closed = false;
-  int? _handle;
 
   /// Opens the stream and calls [onMessage] for every message, [onConnected]
   /// once per successful (re)connect, and [onError] for a connect attempt that
@@ -105,24 +142,11 @@ class CoreStream {
   /// attempt did. Passing it on would light up the offline badge every time the
   /// app came back to the foreground.
   Future<void> connect({
-    required void Function(MessageResponse message) onMessage,
+    required void Function(PollOutcome outcome) onMessage,
     void Function(Object error)? onError,
     void Function()? onConnected,
   }) async {
     _closed = false;
-
-    final int handle;
-    try {
-      handle = await _openCore();
-    } catch (e) {
-      if (!_closed) onError?.call(e);
-      return;
-    }
-    if (_closed) {
-      core.coreClose(handle);
-      return;
-    }
-    _handle = handle;
 
     // Captured before the loop because the isolate cannot be handed `core`
     // itself -- it holds native pointers -- so it has to open the library the
@@ -157,7 +181,7 @@ class CoreStream {
             case 'connected':
               onConnected?.call();
             case 'message':
-              if (event.message != null) onMessage(event.message!);
+              if (event.outcome != null) onMessage(event.outcome!);
             case 'failed':
               onError?.call(
                 ApiException(0, null, event.error ?? 'stream attempt failed'),
@@ -169,7 +193,11 @@ class CoreStream {
         if (!result.streaming) break;
       }
     } finally {
-      _teardown();
+      // Stops the stream, never the handle: [handle] outlives this call, so
+      // whatever ended the loop above -- a clean [close], a poll that threw,
+      // the core giving up -- only has to release the subscriber slot, not
+      // tear down sends and reads that may still be using the same handle.
+      core.coreStreamStop(handle);
     }
   }
 
@@ -187,42 +215,7 @@ class CoreStream {
   /// straight away rather than sitting out the rest of [_pollTimeout].
   void close() {
     _closed = true;
-    final handle = _handle;
-    if (handle != null) core.coreStreamStop(handle);
-  }
-
-  void _teardown() {
-    final handle = _handle;
-    _handle = null;
-    if (handle != null) core.coreClose(handle);
-  }
-
-  /// Opens the core's own database for this account and hands it the identity.
-  ///
-  /// The handle lives exactly as long as the stream, which is a deliberately
-  /// temporary arrangement: while local_state.dart still owns the app's state,
-  /// the core needs nothing but the identity, and tying the handle to the stream
-  /// avoids threading a second lifecycle through AppSession for no gain. When
-  /// the state migrates, the handle moves up to AppSession and this goes away.
-  Future<int> _openCore() async {
-    final resolve = statePath ?? coreStatePath;
-    final handle = core.coreOpen(await resolve(state.accountId));
-    try {
-      core.coreSetIdentity(
-        handle: handle,
-        accountId: state.accountId,
-        server: state.server,
-        rootPub: state.rootPub,
-        rootPriv: state.rootPriv,
-        deviceId: state.deviceId,
-        devicePub: state.devicePub,
-        devicePriv: state.devicePriv,
-      );
-    } catch (_) {
-      core.coreClose(handle);
-      rethrow;
-    }
-    return handle;
+    core.coreStreamStop(handle);
   }
 }
 

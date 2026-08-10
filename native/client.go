@@ -263,6 +263,15 @@ type pollOutcome struct {
 	// new to this account, not a message. Changes only the wording; the shell
 	// still opens the group, not a message.
 	Invitation bool `json:"invitation,omitempty"`
+
+	// IsGroup: ChatID names a group rather than a peer -- res.Group != nil,
+	// which is already known here and would otherwise have to be re-derived
+	// on the Dart side by checking ChatID's version marker (see
+	// client.IsGroupID), duplicating a protocol detail this side already
+	// settled. A caller with a live AppState can tell the two apart another
+	// way (state.groups.containsKey), but the background wake (push_manager
+	// .dart's doCoreSync caller) has no such map to check against.
+	IsGroup bool `json:"is_group,omitempty"`
 }
 
 type corePollResponse struct {
@@ -400,6 +409,7 @@ func handleAndAck(ctx context.Context, c *client.Client, msg client.IncomingMess
 	if res.Group != nil {
 		out.ChatID = res.Group.GroupID
 		out.Invitation = res.Group.Invited
+		out.IsGroup = true
 	} else {
 		out.ChatID = res.PeerAccountID
 	}

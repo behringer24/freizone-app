@@ -448,6 +448,13 @@ class FreizoneCore {
   /// Hands this account's key material to the core, which is what lets it sign
   /// its own requests and hold its own stream before the app's state layer has
   /// migrated into it.
+  /// Hands the core everything it needs to decrypt, not only to sign requests
+  /// with: [dhIdentityPriv] and [signedPrekeyPriv] are what [sessionDecrypt]'s
+  /// Go-side counterpart (HandleIncoming) opens a first-contact envelope with,
+  /// so leaving them out is not "less identity handed over", it is a core that
+  /// fails every decrypt with "reading own identity key" the moment a real
+  /// envelope arrives -- which is silent right up until it is not, since a
+  /// stream-only handle never touched them before this call carried them.
   void coreSetIdentity({
     required int handle,
     required String accountId,
@@ -457,6 +464,15 @@ class FreizoneCore {
     required String deviceId,
     required Uint8List devicePub,
     required Uint8List devicePriv,
+    Uint8List? dhIdentityPub,
+    Uint8List? dhIdentityPriv,
+    int signedPrekeyId = 0,
+    Uint8List? signedPrekeyPub,
+    Uint8List? signedPrekeyPriv,
+    int nextSignedPrekeyId = 0,
+    int nextOtpkKeyId = 0,
+    bool recoveryBackupDone = false,
+    String? pushMechanism,
   }) => _call(_bindings.coreSetIdentity, {
     'handle': handle,
     'account_id': accountId,
@@ -466,6 +482,21 @@ class FreizoneCore {
     'device_id': deviceId,
     'device_pub': encodeB64(devicePub),
     'device_priv': encodeB64(devicePriv),
+    'dh_identity_pub': ?(dhIdentityPub == null ? null : encodeB64(dhIdentityPub)),
+    'dh_identity_priv': ?(dhIdentityPriv == null
+        ? null
+        : encodeB64(dhIdentityPriv)),
+    if (signedPrekeyId != 0) 'signed_prekey_id': signedPrekeyId,
+    'signed_prekey_pub': ?(signedPrekeyPub == null
+        ? null
+        : encodeB64(signedPrekeyPub)),
+    'signed_prekey_priv': ?(signedPrekeyPriv == null
+        ? null
+        : encodeB64(signedPrekeyPriv)),
+    if (nextSignedPrekeyId != 0) 'next_signed_prekey_id': nextSignedPrekeyId,
+    if (nextOtpkKeyId != 0) 'next_otpk_key_id': nextOtpkKeyId,
+    if (recoveryBackupDone) 'recovery_backup_done': true,
+    'push_mechanism': ?pushMechanism,
   });
 
   /// Opens the message stream. Starting one already running is a no-op: a
@@ -588,6 +619,9 @@ class FreizoneCore {
       _call(_bindings.coreMaintain, req);
   Map<String, dynamic> coreResetSessionRaw(Map<String, dynamic> req) =>
       _call(_bindings.coreResetSession, req);
+  /// Blocking. Isolate only -- see state/core_account.dart.
+  Map<String, dynamic> coreSyncRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreSync, req);
   Map<String, dynamic> coreGroupCreateRaw(Map<String, dynamic> req) =>
       _call(_bindings.coreGroupCreate, req);
   Map<String, dynamic> coreGroupInviteRaw(Map<String, dynamic> req) =>

@@ -6,6 +6,17 @@
 // and it exists because everything it covers used to be unreachable: the core
 // only built for Android, so no Dart test could load it at all.
 //
+// [handle] is opened once per test and set to a real identity -- since the cut
+// (docs/design/23-shared-client-core.md), the core decrypts every message
+// itself, so a handle whose identity cannot open anything is no longer enough
+// to prove the crossing works. The one test that needs a message to actually
+// decrypt builds a real X3DH handshake with the same stateless FFI crypto
+// calls the old send path used (generateX25519KeyPair, initiateSession,
+// sessionEncrypt, buildEnvelope) rather than a fixture -- self-contained, and
+// it needs no one-time prekey: the responder core was never told one, and a
+// bundle without one is exactly the sender-predates-the-field / pool-ran-dry
+// path X3DH already has to support.
+//
 // Needs the host core:
 //
 //     ./native/build_desktop.ps1
@@ -19,9 +30,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:freizone/net/core_stream.dart';
-import 'package:freizone/net/dto.dart';
-import 'package:freizone/state/local_state.dart';
 import 'package:freizone/ffi/freizone_core.dart';
+import 'package:freizone/ffi/models.dart';
+import 'package:freizone/state/core_account.dart';
+import 'package:freizone/state/message_content.dart';
 
 String get _corePath {
   final name = Platform.isWindows
@@ -31,18 +43,6 @@ String get _corePath {
       : 'libfreizonecore.so';
   return File('native/$name').absolute.path;
 }
-
-/// A minimal account, enough for the core to sign and stream. The keys are never
-/// verified by the test server, only used.
-AppState _stateFor(String server) => AppState(
-  server: server,
-  accountId: 'fz1conformanceaccount',
-  rootPub: Uint8List(32),
-  rootPriv: Uint8List(64),
-  deviceId: 'device-1',
-  devicePub: Uint8List(32),
-  devicePriv: Uint8List(64),
-);
 
 /// Serves the SSE stream, handing each connection to [onConnect] so a test can
 /// decide what to write and when to end it.
@@ -74,18 +74,16 @@ void main() {
 
   group('CoreStream', () {
     late Directory tempDir;
-    late Directory previousCwd;
+    late FreizoneCore core;
 
     setUp(() {
-      // The core's database path is resolved through path_provider, which has no
-      // implementation in a plain test. Running from a temp directory keeps the
-      // file it does create out of the repo.
+      // The core's database path is resolved through path_provider, which has
+      // no implementation in a plain test -- a temp directory stands in.
       tempDir = Directory.systemTemp.createTempSync('freizone-core-stream');
-      previousCwd = Directory.current;
+      core = FreizoneCore(libraryPath: _corePath);
     });
 
     tearDown(() {
-      Directory.current = previousCwd;
       try {
         tempDir.deleteSync(recursive: true);
       } catch (_) {
@@ -94,58 +92,160 @@ void main() {
       }
     });
 
-    test('carries a message from the wire to onMessage', () async {
-      final received = Completer<MessageResponse>();
-      final connected = Completer<void>();
-
-      final server = await _serveStream((response) {
-        _writeFrame(response, {
-          'message_id': 'm1',
-          'sender_account_id': 'fz1sender',
-          'sender_device_id': 'device-2',
-          'sent_at': '2026-08-07T09:00:00.000Z',
-          'payload': {'v': 1, 'id': 'x', 'text': 'hello', 'attachments': []},
-        });
-        response.flush();
-      });
-      addTearDown(() => server.close(force: true));
-
-      final stream = CoreStream(
-        core: FreizoneCore(libraryPath: _corePath),
-        state: _stateFor('http://${server.address.host}:${server.port}'),
-        statePath: (id) async =>
-            "${tempDir.path}${Platform.pathSeparator}core-$id",
+    /// Opens a handle against [server] with a minimal identity -- enough to
+    /// sign requests and hold a stream. Real decrypt material is opt-in via
+    /// [dhIdentityPriv]/[signedPrekeyId]/[signedPrekeyPriv], since most of
+    /// these tests are about the connection lifecycle, not about what arrives
+    /// on it.
+    int openHandle(
+      String server, {
+      String accountId = 'fz1conformanceaccount',
+      Uint8List? dhIdentityPriv,
+      int signedPrekeyId = 0,
+      Uint8List? signedPrekeyPriv,
+    }) {
+      final handle = core.coreOpen(
+        '${tempDir.path}${Platform.pathSeparator}core-$accountId',
       );
-      addTearDown(stream.close);
+      core.coreSetIdentity(
+        handle: handle,
+        accountId: accountId,
+        server: server,
+        rootPub: Uint8List(32),
+        rootPriv: Uint8List(64),
+        deviceId: 'device-1',
+        devicePub: Uint8List(32),
+        devicePriv: Uint8List(64),
+        dhIdentityPriv: dhIdentityPriv,
+        signedPrekeyId: signedPrekeyId,
+        signedPrekeyPriv: signedPrekeyPriv,
+      );
+      return handle;
+    }
 
-      unawaited(
-        stream.connect(
-          onMessage: (m) {
-            if (!received.isCompleted) received.complete(m);
+    /// Starts [stream] and registers the one teardown order that is actually
+    /// safe: stop the stream, wait for its `connect()` loop to really finish
+    /// (its own `finally` still touches [handle] once), only then close the
+    /// handle. `connect()` keeps running in the background after `close()`
+    /// returns -- a plain `addTearDown(stream.close)` next to a separate
+    /// `addTearDown(() => core.coreClose(handle))` races the two, and the
+    /// loop's own cleanup then finds a handle a sibling teardown already
+    /// closed.
+    Future<void> startAndTeardown(
+      CoreStream stream,
+      int handle, {
+      required void Function(PollOutcome) onMessage,
+      void Function(Object)? onError,
+      void Function()? onConnected,
+    }) {
+      final loop = stream.connect(
+        onMessage: onMessage,
+        onError: onError,
+        onConnected: onConnected,
+      );
+      unawaited(loop);
+      addTearDown(() async {
+        stream.close();
+        await loop.timeout(const Duration(seconds: 5), onTimeout: () {});
+        core.coreClose(handle);
+      });
+      return loop;
+    }
+
+    test(
+      'a real envelope decrypts and crosses as an outcome, not a payload',
+      () async {
+        const senderAccountId = 'fz1zzzzsyntheticsenderaccountid00000';
+
+        // A real X3DH first contact, built with the same stateless crypto
+        // calls the send path uses -- the "sender" here is nothing but a
+        // throwaway keypair, since the protocol's decrypt path never checks
+        // the DH identity against senderAccountId (that binding is the
+        // account-level signature scheme HTTP requests use, not this one).
+        final receiverDh = core.generateX25519KeyPair();
+        final receiverSpk = core.generateX25519KeyPair();
+        final senderDh = core.generateX25519KeyPair();
+        final initiated = core.initiateSession(
+          localDhIdentityPriv: senderDh.priv,
+          remote: RemoteBundle(
+            dhIdentityPub: receiverDh.pub,
+            signedPrekeyId: 1,
+            signedPrekeyPub: receiverSpk.pub,
+          ),
+        );
+        final content = const MessageContent(id: 'x', text: 'hello').encode();
+        final encrypted = core.sessionEncrypt(
+          session: initiated.session,
+          plaintext: content,
+        );
+        final payload = core.buildEnvelope(
+          initial: initiated.initial,
+          header: encrypted.header,
+          ciphertext: encrypted.ciphertext,
+          rekey: false,
+        );
+
+        final outcome = Completer<PollOutcome>();
+        final connected = Completer<void>();
+
+        final server = await _serveStream((response) {
+          _writeFrame(response, {
+            'message_id': 'm1',
+            'sender_account_id': senderAccountId,
+            'sender_device_id': 'device-2',
+            'sent_at': '2026-08-07T09:00:00.000Z',
+            'payload': payload,
+          });
+          response.flush();
+        });
+        addTearDown(() => server.close(force: true));
+
+        final handle = openHandle(
+          'http://${server.address.host}:${server.port}',
+          dhIdentityPriv: receiverDh.priv,
+          signedPrekeyId: 1,
+          signedPrekeyPriv: receiverSpk.priv,
+        );
+        final stream = CoreStream(core: core, handle: handle);
+        startAndTeardown(
+          stream,
+          handle,
+          onMessage: (o) {
+            if (!outcome.isCompleted) outcome.complete(o);
           },
           onConnected: () {
             if (!connected.isCompleted) connected.complete();
           },
-          // Not decoration: without it a failed attempt is dropped and the test
-          // fails as a bare timeout with nothing to go on.
+          // Not decoration: without it a failed attempt is dropped and the
+          // test fails as a bare timeout with nothing to go on.
           onError: (e) {
             if (!connected.isCompleted) connected.completeError(e);
-            if (!received.isCompleted) received.completeError(e);
+            if (!outcome.isCompleted) outcome.completeError(e);
           },
-        ),
-      );
+        );
 
-      await connected.future.timeout(const Duration(seconds: 20));
-      final message = await received.future.timeout(
-        const Duration(seconds: 20),
-      );
+        await connected.future.timeout(const Duration(seconds: 20));
+        final got = await outcome.future.timeout(const Duration(seconds: 20));
 
-      expect(message.messageId, 'm1');
-      expect(message.senderAccountId, 'fz1sender');
-      // The payload stays opaque all the way across: only the crypto layer
-      // opens it.
-      expect(message.payload['text'], 'hello');
-    }, skip: coreMissing);
+        // The shell gets an outcome, never the envelope: no payload, no
+        // plaintext -- just what changed and whether to say something.
+        expect(got.chatId, senderAccountId);
+        expect(
+          got.notify,
+          isTrue,
+          reason: 'a first message from a stranger is a new message request',
+        );
+        expect(got.invitation, isFalse);
+
+        // And the core actually decrypted it: read back through the account
+        // API rather than trusting the outcome alone.
+        final account = CoreAccount(core: core, handle: handle);
+        final messages = account.messages(senderAccountId);
+        expect(messages, isNotEmpty);
+        expect(messages.last.text, 'hello');
+      },
+      skip: coreMissing,
+    );
 
     test(
       'reports a connect that never came up, and keeps retrying',
@@ -162,25 +262,21 @@ void main() {
         });
         addTearDown(() => server.close(force: true));
 
-        final stream = CoreStream(
-          core: FreizoneCore(libraryPath: _corePath),
-          state: _stateFor('http://${server.address.host}:${server.port}'),
-          statePath: (id) async =>
-              "${tempDir.path}${Platform.pathSeparator}core-$id",
+        final handle = openHandle(
+          'http://${server.address.host}:${server.port}',
         );
-        addTearDown(stream.close);
-
-        unawaited(
-          stream.connect(
-            onMessage: (_) {},
-            onError: (e) {
-              failures.add(e);
-              // Two is what shows it is a retry loop rather than one attempt.
-              if (failures.length >= 2 && !twoFailures.isCompleted) {
-                twoFailures.complete();
-              }
-            },
-          ),
+        final stream = CoreStream(core: core, handle: handle);
+        startAndTeardown(
+          stream,
+          handle,
+          onMessage: (_) {},
+          onError: (e) {
+            failures.add(e);
+            // Two is what shows it is a retry loop rather than one attempt.
+            if (failures.length >= 2 && !twoFailures.isCompleted) {
+              twoFailures.complete();
+            }
+          },
         );
 
         await twoFailures.future.timeout(const Duration(seconds: 30));
@@ -202,25 +298,21 @@ void main() {
       });
       addTearDown(() => server.close(force: true));
 
-      final stream = CoreStream(
-        core: FreizoneCore(libraryPath: _corePath),
-        state: _stateFor('http://${server.address.host}:${server.port}'),
-        statePath: (id) async =>
-            "${tempDir.path}${Platform.pathSeparator}core-$id",
+      final handle = openHandle(
+        'http://${server.address.host}:${server.port}',
       );
-      addTearDown(stream.close);
-
-      unawaited(
-        stream.connect(
-          onMessage: (_) {},
-          onError: errors.add,
-          onConnected: () {
-            connects++;
-            if (connects >= 2 && !reconnected.isCompleted) {
-              reconnected.complete();
-            }
-          },
-        ),
+      final stream = CoreStream(core: core, handle: handle);
+      startAndTeardown(
+        stream,
+        handle,
+        onMessage: (_) {},
+        onError: errors.add,
+        onConnected: () {
+          connects++;
+          if (connects >= 2 && !reconnected.isCompleted) {
+            reconnected.complete();
+          }
+        },
       );
 
       await reconnected.future.timeout(const Duration(seconds: 30));
@@ -246,14 +338,13 @@ void main() {
       });
       addTearDown(() => server.close(force: true));
 
-      final stream = CoreStream(
-        core: FreizoneCore(libraryPath: _corePath),
-        state: _stateFor('http://${server.address.host}:${server.port}'),
-        statePath: (id) async =>
-            "${tempDir.path}${Platform.pathSeparator}core-$id",
+      final handle = openHandle(
+        'http://${server.address.host}:${server.port}',
       );
-
-      final loop = stream.connect(
+      final stream = CoreStream(core: core, handle: handle);
+      final loop = startAndTeardown(
+        stream,
+        handle,
         onMessage: (_) {},
         onError: errors.add,
         onConnected: () {
@@ -267,13 +358,20 @@ void main() {
       // And promptly: well inside one poll timeout, because stopping closes the
       // channel the poll is waiting on rather than leaving it to expire. The
       // tight bound is the assertion -- a generous one would pass just as
-      // happily if close() had gone back to costing a full 20 seconds.
+      // happily if close() had gone back to costing a full 20 seconds. The
+      // teardown will call close() and await the loop again -- harmless, both
+      // are idempotent -- but the tight bound has to be checked here, inline,
+      // to mean anything.
       await loop.timeout(const Duration(seconds: 5));
       expect(
         errors,
         isEmpty,
         reason: 'a deliberate close is a clean disconnect',
       );
+
+      // The handle itself must still be open: closing the stream must not have
+      // closed the handle sends and reads still depend on.
+      expect(() => core.coreChats(handle), returnsNormally);
     }, skip: coreMissing);
   });
 }
