@@ -7,14 +7,19 @@
 // registerForPush. The wake payload the server/gateway sends carries no
 // content or metadata whatsoever (see docs/PROTOCOL.md in
 // freizone-server) -- not even which of several reasons triggered it --
-// so every wake reacts identically: a silent background sync (fetch +
-// decrypt any queued messages, top up the one-time-prekey pool if it's
-// running low, see _syncAndMaybeNotify) that only shows a system
-// notification if a genuine new message actually turned up. This is what
-// lets the exact same wake also serve a purely-housekeeping reason (the
-// prekey pool running low on a rarely-opened device, see
-// app_session.dart's topUpOneTimePrekeysIfNeeded) without ever showing a
-// misleading "New message(s)" for nothing.
+// so every wake reacts identically: a silent background sync through the
+// shared client core (fetch, decrypt/fold and acknowledge whatever is
+// queued, top up the one-time-prekey pool and settle other housekeeping if
+// it's running low -- see _syncAccount, native/client.go's doCoreSync) that
+// only shows a system notification if a genuine new message actually turned
+// up. This is what lets the exact same wake also serve a purely-housekeeping
+// reason (the prekey pool running low on a rarely-opened device) without
+// ever showing a misleading "New message(s)" for nothing.
+//
+// _syncAccount deliberately shares its receive path with the live stream's
+// poll loop (SRV-23, the cut) rather than running a second implementation --
+// see doCoreSync's own doc comment for why that used to be a real desync
+// risk, not just duplicated code.
 //
 // Both mechanisms can relaunch this app's Dart entrypoint in a
 // background isolate to deliver a wake while the app isn't otherwise
@@ -34,10 +39,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
 import '../ffi/freizone_core.dart';
-import '../ffi/freizone_core_exception.dart';
 import '../net/api_client.dart';
-import '../net/dto.dart';
-import '../state/app_session.dart';
+import '../net/core_stream.dart';
 import '../state/app_settings.dart';
 import '../state/local_state.dart';
 import '../util/address_format.dart';
@@ -454,16 +457,7 @@ Future<void> _syncAndMaybeNotify(String? instance) async {
 
   _log('wake received (${instance ?? 'fcm/all'}): ${accountIds.length} profile(s)');
   for (final accountId in accountIds) {
-    // Load, decrypt and save as one locked unit, per account. Loading up
-    // front and saving much later is what let the foreground isolate slip in
-    // between and revert the ratchet -- and with several accounts, each
-    // profile's snapshot aged through every preceding account's network sync
-    // before finally being written back over whatever had changed since.
-    final notice = await LocalStateStore.withProfileLock(accountId, () async {
-      final state = await LocalStateStore.loadProfile(accountId);
-      if (state == null) return null;
-      return _syncProfile(state);
-    });
+    final notice = await _syncAccount(accountId);
     if (notice != null) {
       await showMessageNotification(
         accountId,
@@ -479,45 +473,6 @@ Future<void> _syncAndMaybeNotify(String? instance) async {
   }
 }
 
-/// Runs the same decrypt-and-store logic as AppSession._handleIncoming,
-/// via the shared processIncomingMessage (app_session.dart), for a
-/// profile that has no live AppSession -- fetches every message
-/// currently queued for [state]'s device, processes each, and tops up
-/// the one-time-prekey pool if it's running low (topUpOneTimePrekeysIfNeeded).
-/// A single malformed/undecryptable message is logged and skipped rather
-/// than aborting the rest of the sync. Returns what the last genuinely
-/// notify-worthy envelope was (see [_WakeNotice]), or null if none turned
-/// up -- the caller's cue for whether to notify at all.
-///
-/// Deliberately does NOT send "delivered" receipts (see receipt_signal
-/// .dart) for what it processes here -- that needs AppSession's sending
-/// machinery (_encryptAndSend, _resolvePeerDevice, ...), none of which
-/// exists as a standalone function callable without a live AppSession.
-/// A message that arrives while the app is fully closed only starts
-/// showing delivery/read checkmarks to its sender once the app is next
-/// opened (AppSession._handleIncoming/enterConversation send both).
-/// Counts one failed attempt at [msg] and reports whether it should now be
-/// dropped from the server queue -- the wake-side twin of
-/// AppSession._giveUpOnEnvelope, minus the recovery it can't perform.
-///
-/// A wake can *detect* a desynced session but not repair one: re-keying means
-/// sending, and none of AppSession's send machinery exists without a live
-/// session (see this function's caller). So the evidence is recorded into the
-/// profile and left there; the next AppSession to come up acts on it
-/// (AppSession._recoverDesyncedSessions, on stream connect). This is exactly why
-/// PeerSessionHealth is persisted rather than held in memory.
-bool _giveUpOnEnvelope(
-  AppState state,
-  MessageResponse msg, {
-  required bool isDesyncEvidence,
-}) {
-  if (!state.recordDecryptFailure(msg.messageId)) return false;
-  if (isDesyncEvidence) {
-    state.recordDesyncEvidence(msg.senderAccountId, DateTime.now().toUtc());
-  }
-  return true;
-}
-
 /// What a wake found worth telling the user about: null when nothing was, and
 /// otherwise which chat to jump to on tap -- either a one-to-one
 /// [peerAccountId] or a [groupId], never both, since the two open different
@@ -530,82 +485,81 @@ typedef _WakeNotice = ({
   bool invitation,
 });
 
-Future<_WakeNotice?> _syncProfile(AppState state) async {
-  final core = FreizoneCore();
-  final api = ApiClient(baseUrl: state.server, core: core);
-  _WakeNotice? notice;
-  try {
-    final messages = await api.listMessages(state.credentials);
-    _log('wake sync ${state.accountId}: ${messages.length} queued');
-    var changed = false;
-    // Collected and awaited together below rather than fired off and
-    // forgotten: a delete that silently failed left the message queued, to be
-    // fetched and decrypted again on the next wake.
-    final deletions = <Future<void>>[];
-    for (final msg in messages) {
-      try {
-        final result = await processIncomingMessage(state, msg, core);
-        if (result == null) {
-          // Can't be processed: no session for this sender and no X3DH
-          // initial to start one (see processIncomingMessage). Count it --
-          // once it has failed enough times it is dropped, since it will
-          // never become decryptable and would otherwise be re-fetched on
-          // every wake for as long as the server keeps it.
-          changed = true;
-          if (_giveUpOnEnvelope(state, msg, isDesyncEvidence: true)) {
-            _log('wake sync ${state.accountId}: giving up on a message');
-            deletions.add(api.deleteMessage(msg.messageId, state.credentials));
-          } else {
-            _log('wake sync ${state.accountId}: unprocessable, will retry');
-          }
-          continue;
-        }
-        changed = true;
-        if (result.shouldNotify) {
-          notice = (
-            // A group envelope points at the group, never at a one-to-one chat
-            // with whoever happened to send it.
-            peerAccountId: result.groupId == null ? result.peerAccountId : null,
-            groupId: result.groupId,
-            invitation: result.groupInvite,
-          );
-        }
-        deletions.add(api.deleteMessage(msg.messageId, state.credentials));
-      } catch (e) {
-        _log('background message decrypt failed: $e');
-        changed = true;
-        if (_giveUpOnEnvelope(
-          state,
-          msg,
-          isDesyncEvidence: e is FreizoneCoreException && e.suggestsDesync,
-        )) {
-          _log('wake sync ${state.accountId}: giving up after repeated failures');
-          deletions.add(api.deleteMessage(msg.messageId, state.credentials));
-        }
-      }
-    }
-    // Before saving, so a delete that fails leaves the failure count on disk
-    // and the message is retried rather than silently forgotten.
-    for (final deletion in deletions) {
-      try {
-        await deletion;
-      } catch (e) {
-        _log('deleting a processed message failed: $e');
-      }
-    }
-    if (changed) await LocalStateStore.saveProfile(state);
+/// Opens [accountId]'s handle into the shared client core and drains
+/// whatever is queued for it the same way the live stream's poll loop does
+/// (SRV-23, the cut) -- see native/client.go's doCoreSync, which shares its
+/// HandleIncoming-then-ack-then-receipt path with the live poll loop
+/// (handleAndAck) rather than running a second implementation. That sharing
+/// is the point: a message decrypted by a *different* pipeline while the app
+/// was backgrounded used to be able to advance a session the live path's own
+/// core never saw, a real desync waiting to happen every time a push arrived
+/// while the app was closed.
+///
+/// [LocalStateStore.loadProfile] is only an identity bootstrap now -- server,
+/// device keys, the signed prekey this device has published -- the same
+/// fields AppSession.init hands the core, and the only ones this file still
+/// reads, since nothing writes conversation or session state to that file
+/// any more. Returns the last genuinely notify-worthy outcome, or null --
+/// the caller's cue for whether to notify at all.
+Future<_WakeNotice?> _syncAccount(String accountId) async {
+  final identity = await LocalStateStore.loadProfile(accountId);
+  if (identity == null) return null;
 
-    try {
-      await topUpOneTimePrekeysIfNeeded(state, core, api);
-    } catch (e) {
-      _log('background prekey top-up failed: $e');
+  final core = FreizoneCore();
+  final handle = core.coreOpen(await coreStatePath(accountId));
+  try {
+    core.coreSetIdentity(
+      handle: handle,
+      accountId: identity.accountId,
+      server: identity.server,
+      rootPub: identity.rootPub,
+      rootPriv: identity.rootPriv,
+      deviceId: identity.deviceId,
+      devicePub: identity.devicePub,
+      devicePriv: identity.devicePriv,
+      dhIdentityPub: identity.dhIdentityPub,
+      dhIdentityPriv: identity.dhIdentityPriv,
+      signedPrekeyId: identity.signedPrekeyId,
+      signedPrekeyPub: identity.signedPrekeyPub,
+      signedPrekeyPriv: identity.signedPrekeyPriv,
+      nextSignedPrekeyId: identity.nextSignedPrekeyId,
+      nextOtpkKeyId: identity.nextOtpkKeyId,
+      recoveryBackupDone: identity.recoveryBackupDone,
+      pushMechanism: identity.pushMechanism,
+    );
+
+    final raw = core.coreSyncRaw({'handle': handle});
+    for (final problem in (raw['problems'] as List<dynamic>? ?? const [])) {
+      // Best-effort housekeeping (prekey top-up, group snapshot debts,
+      // session recovery -- see doCoreMaintain) that did not work; one part
+      // failing must not stop the messages that were fetched from being
+      // handled, and did not.
+      _log('wake sync $accountId: housekeeping problem: $problem');
     }
+    final outcomes = ((raw['outcomes'] as List<dynamic>?) ?? const [])
+        .map((o) => PollOutcome.fromJson(o as Map<String, dynamic>))
+        .where((o) => o.chatId.isNotEmpty)
+        .toList();
+    _log('wake sync $accountId: ${outcomes.length} outcome(s)');
+
+    _WakeNotice? notice;
+    for (final outcome in outcomes) {
+      if (!outcome.notify) continue;
+      // A group envelope points at the group, never at a one-to-one chat
+      // with whoever happened to send it.
+      notice = (
+        peerAccountId: outcome.isGroup ? null : outcome.chatId,
+        groupId: outcome.isGroup ? outcome.chatId : null,
+        invitation: outcome.invitation,
+      );
+    }
+    return notice;
   } catch (e) {
-    _log('background sync failed: $e');
+    _log('background sync failed for $accountId: $e');
+    return null;
   } finally {
-    api.close();
+    core.coreClose(handle);
   }
-  return notice;
 }
 
 /// FCM tokens rotate occasionally; re-push the fresh one to every

@@ -11,11 +11,12 @@
 // used everywhere else in this codebase.
 import 'dart:async';
 import 'dart:io';
-import 'dart:developer' as developer;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
+import '../ffi/core_models.dart' show GroupInfo;
 import '../ffi/freizone_core.dart';
 import '../ffi/freizone_core_exception.dart';
 import '../ffi/models.dart';
@@ -32,6 +33,8 @@ import '../util/server_url.dart';
 import 'app_settings.dart';
 import 'chat_target.dart';
 import 'conversation.dart';
+import 'core_account.dart';
+import 'core_bridge.dart';
 import 'group_control.dart';
 import 'group_conversation.dart';
 import 'group_receive.dart';
@@ -47,10 +50,6 @@ import 'rekey_signal.dart';
 import 'session_recovery.dart';
 import 'stale_device.dart';
 
-/// How many one-time prekeys to generate and upload at once, mirroring
-/// cmd/devclient's defaultOneTimePrekeyBatch.
-const _oneTimePrekeyBatch = 10;
-
 /// The transcript marker for a secure session the user reset themselves --
 /// shown on both sides (the resetting device writes it in
 /// [AppSession.resetSecureSession], the peer when it accepts the re-key in
@@ -62,14 +61,6 @@ const String sessionResetMarker = 'Secure session was reset';
 /// didn't do this, and shouldn't be left wondering what they pressed.
 const String automaticRekeyMarker =
     'Secure session was re-established automatically';
-
-/// How low this device lets its own one-time-prekey pool get before
-/// [topUpOneTimePrekeysIfNeeded] tops it back up -- comfortably above the
-/// server's own lowOneTimePrekeyThreshold (internal/api/prekeys.go),
-/// which only exists as a fallback wake for a device that isn't checking
-/// on its own; a device that's actually in regular use should top up
-/// here, well before the server ever needs to nudge it.
-const _oneTimePrekeyLowWaterMark = 3;
 
 /// Which peer a decrypted message came from, and whether it clears the
 /// bar for a user-visible notification -- distinct from whether it was
@@ -656,15 +647,14 @@ Future<void> _writeAttachmentThumbs(
   }
 }
 
-/// Re-asserts [state]'s DH identity + signed-prekey certificates (using
-/// its already-held key material, unchanged -- never rotates anything)
-/// and tops up the one-time-prekey pool if the server reports it's
-/// running low. Called from [AppSession.init], on every SSE reconnect,
-/// and from a background push-wake sync (push_manager.dart, no live
-/// AppSession there), so it must not assume anything beyond [state]/
-/// [core]/[api]. No-ops before the very first prekey upload (AppSession
-/// .init handles that separately, unconditionally, the one time it's
-/// actually needed).
+/// Re-asserts [state]'s DH identity + signed-prekey certificates, using its
+/// already-held key material, unchanged -- never rotates anything, and no
+/// longer tops up the one-time-prekey pool itself (SRV-23: that raced
+/// coreAccount.maintain()'s own top-up, see the call site). Called from
+/// [AppSession.init] only now, so it must not assume anything beyond
+/// [state]/[core]/[api] -- but no-ops before the very first prekey upload
+/// (AppSession.init handles that separately, unconditionally, the one time
+/// it's actually needed).
 ///
 /// Re-sending the DH identity cert on every call, not just once at
 /// registration, is deliberately defensive, not redundant: found in
@@ -678,7 +668,7 @@ Future<void> _writeAttachmentThumbs(
 /// and re-uploading the SAME key material on every reconnect is cheap
 /// (one GET plus one small POST) and self-heals that class of drift the
 /// moment it happens, rather than needing a live incident to notice it.
-Future<void> topUpOneTimePrekeysIfNeeded(
+Future<void> reassertPrekeyCertificates(
   AppState state,
   FreizoneCore core,
   ApiClient api,
@@ -707,21 +697,21 @@ Future<void> topUpOneTimePrekeysIfNeeded(
     devicePriv: state.devicePriv,
   );
 
-  final remaining = await api.getPrekeyStatus(state.credentials);
-  final otpkDtos = <OneTimePrekeyDTO>[];
-  if (remaining < _oneTimePrekeyLowWaterMark) {
-    for (var i = remaining; i < _oneTimePrekeyBatch; i++) {
-      final kp = core.generateX25519KeyPair();
-      final keyId = state.nextOtpkKeyId;
-      state.nextOtpkKeyId++;
-      state.oneTimePrekeys[keyId] = OneTimePrekeyState(
-        pub: kp.pub,
-        priv: kp.priv,
-      );
-      otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
-    }
-  }
-
+  // One-time prekeys are no longer minted here (SRV-23, closing a gap the
+  // cut left open): this ran on every reconnect right alongside
+  // coreAccount.maintain(), which tops the pool up through
+  // pkg/client.TopUpOneTimePrekeys -- two independent minters racing the
+  // same server-side pool, each holding the private half of only the ones
+  // it minted itself. Whichever key a new contact's claim happened to land
+  // on, if it was one of *this* function's, the core had no private key for
+  // it and every first message to this device failed outright
+  // ("ratchet: initial message references one-time prekey N but no
+  // matching private key was provided") -- deterministically, for as long
+  // as this kept re-topping-up a pool the core already considered healthy.
+  // Always pass an empty list: the upload endpoint accepts one (see the
+  // no-op branch this replaces, which already sent one whenever the pool
+  // wasn't low), and the DH-identity/signed-prekey re-assertion below is
+  // this function's entire remaining job.
   await api.uploadPrekeys(
     creds: state.credentials,
     dhIdentityCert: DHIdentityCertDTO(
@@ -736,14 +726,8 @@ Future<void> topUpOneTimePrekeysIfNeeded(
       issuedAt: spkCert.issuedAt,
       signature: spkCert.signature,
     ),
-    oneTimePrekeys: otpkDtos,
+    oneTimePrekeys: const <OneTimePrekeyDTO>[],
   );
-  // Only when this actually minted keys. Saving unconditionally meant every
-  // reconnect and every push wake wrote the whole profile back -- including,
-  // from a stale in-memory copy, ratchet state another isolate had advanced
-  // in the meantime. Nothing to persist when no new prekey was generated: the
-  // upload above merely re-asserts existing material.
-  if (otpkDtos.isNotEmpty) await LocalStateStore.saveProfile(state);
 }
 
 /// Whether this session's own home server is currently reachable. Drives
@@ -762,6 +746,18 @@ class AppSession extends ChangeNotifier {
   final FreizoneCore core = FreizoneCore();
   late final ApiClient api;
   CoreStream? _sse;
+
+  /// The shared client core's handle for this account (SRV-23, the cut) --
+  /// opened once in [init], right after this account's identity is settled
+  /// (a first run mints one during [_uploadPrekeys]), and closed in
+  /// [dispose]. Everything the core owns -- state, persistence, the stream,
+  /// every protocol decision -- lives behind this handle now: [_startStream]
+  /// no longer opens one of its own, and every send, receive and group action
+  /// below goes through it rather than through Dart's own crypto and
+  /// [LocalStateStore]. Late because opening it needs this account's prekey
+  /// material, which the very first run has not generated yet when this
+  /// constructor runs.
+  late final CoreAccount coreAccount;
 
   /// Additional ApiClients for federated peers, keyed by their (already
   /// normalized) server url -- lazily created and reused, since a
@@ -1281,6 +1277,13 @@ class AppSession extends ChangeNotifier {
       // and flash the account grey. Reachability is re-evaluated on resume.
       _reachabilityGraceTimer?.cancel();
       _reachabilityGraceTimer = null;
+      // The core has no notion of foreground/background (see
+      // docs/design/23-shared-client-core.md), only "which chat is open" -- so
+      // going to the background has to clear that itself, or a message into
+      // the chat that was on screen would stay silently suppressed for as
+      // long as the app is backgrounded, which is exactly the opposite of
+      // what a background notification is for.
+      coreAccount.setOpenChat(null);
       // Tear down the live SSE stream. Holding it open in the background keeps
       // this device registered as a live subscriber on the server, and the
       // server only sends a push wake when NO subscriber is connected (see
@@ -1291,7 +1294,11 @@ class AppSession extends ChangeNotifier {
       _stopStream();
       return;
     }
-    await _reloadVolatileStateFromDisk();
+    // Whatever the background push wake (push_manager.dart) received while
+    // this session was frozen -- it opens the same core handle's on-disk
+    // state, see doCoreSync -- rather than re-reading a Dart-side profile the
+    // wake no longer writes.
+    applyCoreState(state, coreAccount);
     // Reopen the live stream that backgrounding closed, so the foregrounded
     // app is back on the fast path (and the server stops pushing to it).
     _startStream();
@@ -1356,31 +1363,18 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Call when a ChatScreen for peerAccountId opens: clears its unread
-  /// flag and remembers it as "currently open" for _handleIncoming.
+  /// Call when a ChatScreen for peerAccountId opens: clears its unread flag,
+  /// confirms it read to the peer, and tells the core which chat is on
+  /// screen -- the one thing that suppresses a notification for it (see
+  /// [CoreAccount.setOpenChat]).
   Future<void> enterConversation(String peerAccountId) async {
     _openConversationPeerId = peerAccountId;
+    coreAccount.setOpenChat(peerAccountId);
     final convo = state.conversations[peerAccountId];
     if (convo == null || !convo.hasUnread) return;
-    convo.hasUnread = false;
 
-    // "Read up to" the peer's own last message, not simply the
-    // conversation's last message overall -- a trailing message of mine
-    // shouldn't be part of what I'm confirming I've read.
-    DateTime? theirLastTimestamp;
-    for (final m in convo.messages.reversed) {
-      if (!m.mine) {
-        theirLastTimestamp = m.receiptAnchor;
-        break;
-      }
-    }
-    if (theirLastTimestamp != null &&
-        (convo.sentReadReceiptUpTo == null ||
-            theirLastTimestamp.isAfter(convo.sentReadReceiptUpTo!))) {
-      unawaited(_sendReceipt(convo, ReceiptStatus.read, theirLastTimestamp));
-    }
-
-    await LocalStateStore.saveProfile(state);
+    await coreAccount.markRead(peerAccountId);
+    applyCoreChat(state, coreAccount, peerAccountId);
     // If that was the last unread conversation, clear this account's
     // "new message(s)" notification too, so its launcher-icon badge
     // (which Android derives from active notifications) goes away
@@ -1391,26 +1385,39 @@ class AppSession extends ChangeNotifier {
 
   /// Call when that ChatScreen closes.
   void leaveConversation(String peerAccountId) {
-    if (_openConversationPeerId == peerAccountId)
+    if (_openConversationPeerId == peerAccountId) {
       _openConversationPeerId = null;
+      coreAccount.setOpenChat(null);
+    }
   }
 
-  /// Uploads prekeys if this is the first run, tops up the one-time
-  /// prekey pool if it's already running low, then opens the live
+  /// Uploads prekeys if this is the first run, re-asserts the DH
+  /// identity/signed-prekey certs otherwise, opens this account's handle
+  /// into the shared client core (SRV-23, the cut), then opens the live
   /// message stream. Call once, right after construction.
   Future<void> init() async {
-    // The prekey upload/top-up is network I/O against this account's home
-    // server and may fail if that server is down. It must NOT gate the
+    // The prekey upload/re-assertion is network I/O against this account's
+    // home server and may fail if that server is down. It must NOT gate the
     // rest of init: the SSE reconnect loop below is what tracks
     // reachability and recovers when the server returns, so it has to
     // start even on a dead server -- otherwise the account would be stuck
     // "connecting" forever with nothing ever retrying. onConnected re-runs
-    // the top-up, so a recovered server still gets its prekeys refreshed.
+    // it, so a recovered server still gets its certs refreshed.
+    //
+    // Still Dart-side, deliberately: minting the very first signed prekey
+    // stays here rather than moving to RotatePrekeys for this pass -- see
+    // docs/design/23-shared-client-core.md. The one-time-prekey pool is not
+    // -- that's coreAccount.maintain's job exclusively (run on every
+    // reconnect below, via pkg/client.TopUpOneTimePrekeys) now that this
+    // function no longer races it for the same pool with a private half
+    // only Dart held (SRV-23: found live, every first message from a new
+    // contact whose claim landed on one of this side's own kept failing to
+    // decrypt).
     try {
       if (state.signedPrekeyPub == null) {
         await _uploadPrekeys();
       } else {
-        await topUpOneTimePrekeysIfNeeded(state, core, api);
+        await reassertPrekeyCertificates(state, core, api);
       }
       prekeysReady = true;
     } catch (e) {
@@ -1419,6 +1426,44 @@ class AppSession extends ChangeNotifier {
       // prekey upload that failed for a reason waiting will not fix.
       _noteFailure('prekey upload failed', e);
     }
+
+    // Opened regardless of whether the prekey step above succeeded: a first
+    // run that could not reach the server yet still has an account id and
+    // (if _uploadPrekeys got far enough) a device identity worth handing
+    // over, and the core needs nothing more to exist. dhIdentityPriv and
+    // signedPrekeyPriv are what let it decrypt at all -- see
+    // FreizoneCore.coreSetIdentity's own doc comment -- so this is not
+    // optional the way it was while this handle only ever held a stream.
+    final handle = core.coreOpen(await coreStatePath(state.accountId));
+    core.coreSetIdentity(
+      handle: handle,
+      accountId: state.accountId,
+      server: state.server,
+      rootPub: state.rootPub,
+      rootPriv: state.rootPriv,
+      deviceId: state.deviceId,
+      devicePub: state.devicePub,
+      devicePriv: state.devicePriv,
+      dhIdentityPub: state.dhIdentityPub,
+      dhIdentityPriv: state.dhIdentityPriv,
+      signedPrekeyId: state.signedPrekeyId,
+      signedPrekeyPub: state.signedPrekeyPub,
+      signedPrekeyPriv: state.signedPrekeyPriv,
+      nextSignedPrekeyId: state.nextSignedPrekeyId,
+      nextOtpkKeyId: state.nextOtpkKeyId,
+      recoveryBackupDone: state.recoveryBackupDone,
+      pushMechanism: state.pushMechanism,
+    );
+    coreAccount = CoreAccount(
+      core: core,
+      handle: handle,
+      libraryPath: core.libraryPath,
+    );
+    // Whatever the core already holds from a previous run, before the first
+    // paint -- the same rebuild-whole read _handleIncoming and every send
+    // below trigger on their own, just run once up front here.
+    applyCoreState(state, coreAccount);
+
     notifyListeners();
     _startStream();
     unawaited(refreshMyRole());
@@ -1426,10 +1471,6 @@ class AppSession extends ChangeNotifier {
     // message points at any more, so nothing depends on it finishing.
     unawaited(sweepOrphanedMedia());
     unawaited(refreshRegistrationPolicy());
-    // Group fact sets live in their own files, so they are read separately
-    // from the profile. Not awaited: a group that fails to load costs a
-    // re-sync, never a startup.
-    unawaited(loadGroupStates());
     unawaited(_registerPush());
     // Anything composed but never sent -- in this run or a previous one --
     // gets its first automatic attempt here (APP-08 step 2). Not awaited:
@@ -1508,18 +1549,17 @@ class AppSession extends ChangeNotifier {
     state.signedPrekeyPub = spk.pub;
     state.signedPrekeyPriv = spk.priv;
 
-    final otpkDtos = <OneTimePrekeyDTO>[];
-    for (var i = 0; i < _oneTimePrekeyBatch; i++) {
-      final kp = core.generateX25519KeyPair();
-      final keyId = state.nextOtpkKeyId;
-      state.nextOtpkKeyId++;
-      state.oneTimePrekeys[keyId] = OneTimePrekeyState(
-        pub: kp.pub,
-        priv: kp.priv,
-      );
-      otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
-    }
-
+    // No one-time prekeys minted here (SRV-23, closing a gap the cut left
+    // open): the very first thing that opens this account's core handle,
+    // right below, is coreSetIdentity -- and the first reconnect after that
+    // runs coreAccount.maintain(), which tops the pool up itself through
+    // pkg/client.TopUpOneTimePrekeys. Minting a batch here too meant two
+    // independent minters claiming ids from the same server-side pool,
+    // each holding the private half of only the ones it minted -- so a
+    // contact whose claim landed on one of *these* had no private key
+    // waiting for it on the core's side, and their first message failed
+    // outright. Identity plus the signed prekey above is enough for the
+    // core to exist; it mints its own one-time prekeys from there.
     await api.uploadPrekeys(
       creds: state.credentials,
       dhIdentityCert: dhCertDto,
@@ -1530,7 +1570,7 @@ class AppSession extends ChangeNotifier {
         issuedAt: spkCert.issuedAt,
         signature: spkCert.signature,
       ),
-      oneTimePrekeys: otpkDtos,
+      oneTimePrekeys: const <OneTimePrekeyDTO>[],
     );
     await LocalStateStore.saveProfile(state);
   }
@@ -1589,7 +1629,7 @@ class AppSession extends ChangeNotifier {
 
   void _startStream() {
     if (_sse != null) return; // already streaming (or restarted before stop)
-    _sse = CoreStream(core: core, state: state);
+    _sse = CoreStream(core: core, handle: coreAccount.handle);
     unawaited(
       _sse!.connect(
         onMessage: _handleIncoming,
@@ -1602,7 +1642,13 @@ class AppSession extends ChangeNotifier {
         },
         onConnected: () {
           _markStreamConnected();
-          unawaited(topUpOneTimePrekeysIfNeeded(state, core, api));
+          // Everything a fresh connection should settle, in one call: top up
+          // the prekey pool, pay any group snapshot debts, re-establish
+          // sessions the evidence says are broken (see CoreAccount.maintain).
+          // Replaces three separate Dart-side calls (topUpOneTimePrekeysIfNeeded,
+          // an implicit snapshot-debt sweep, _recoverDesyncedSessions) that each
+          // read and wrote state the core owns exclusively now.
+          unawaited(coreAccount.maintain());
           // Re-register push on every (re)connect: a server that was down at
           // startup (or when the endpoint first arrived) never got this
           // account's push target otherwise, and would stay push-less until
@@ -1611,16 +1657,6 @@ class AppSession extends ChangeNotifier {
           // Pick up a server-status change (e.g. federation toggled) on every
           // (re)connect -- covers long-lived sessions and network changes.
           unawaited(refreshRegistrationPolicy());
-          _retryPendingReceipts();
-          // Heal any conversation whose desync was noticed while this session
-          // couldn't act on it -- a background push wake detects but cannot
-          // send (see push_manager.dart's _syncProfile), and the higher-id side
-          // of a desync deliberately waits before re-keying
-          // (autoRekeyResponderGrace), which needs *something* to come back and
-          // re-check. Mirrors _retryPendingReceipts' own "every (re)connect"
-          // trigger, for the same reason: it is the one moment this app
-          // reliably revisits every conversation.
-          unawaited(_recoverDesyncedSessions());
         },
       ),
     );
@@ -1632,165 +1668,41 @@ class AppSession extends ChangeNotifier {
   /// (see [setForeground]). Closing is a clean disconnect -- CoreStream.close
   /// marks itself closed before tearing down, so its reconnect loop exits
   /// without reporting an error, and reachability is left untouched. Safe to
-  /// call when no stream is open.
+  /// call when no stream is open. Leaves this account's core handle open --
+  /// [coreAccount] outlives the stream, see its own doc comment.
   void _stopStream() {
     _sse?.close();
     _sse = null;
   }
 
-  Future<void> _handleIncoming(MessageResponse msg) async {
-    try {
-      // Serialized against any in-flight send to this same peer (see
-      // _withPeerSessionLock) -- decrypting also reads-modifies-writes
-      // state.sessions[msg.senderAccountId], the same resource
-      // _encryptAndSend touches.
-      final result = await _withPeerSessionLock(
-        msg.senderAccountId,
-        () => processIncomingMessage(
-          state,
-          msg,
-          core,
-          openConversationPeerId: _readableConversation,
+  /// One envelope, already decided by the core: decrypted (or folded, if it
+  /// was a group fact), acknowledged, receipted. Nothing left to do here but
+  /// refresh whatever chat changed and, sometimes, say something about it --
+  /// see [PollOutcome].
+  void _handleIncoming(PollOutcome outcome) {
+    if (outcome.chatId.isEmpty) return; // a duplicate or a failed attempt
+    applyCoreChat(state, coreAccount, outcome.chatId);
+
+    if (outcome.notify) {
+      // Without this call, the launcher icon's badge (which Android derives
+      // from active notifications, not anything drawn in-app) would never
+      // appear for a message that happened to arrive while the app was in
+      // the foreground.
+      unawaited(
+        showMessageNotification(
+          state.accountId,
+          // A group envelope points at the group, not at a one-to-one chat
+          // with whoever happened to send it (main.dart's _openChatFor opens
+          // exactly that for a peer id).
+          peerAccountId: outcome.isGroup ? null : outcome.chatId,
+          groupId: outcome.isGroup ? outcome.chatId : null,
+          invitation: outcome.invitation,
         ),
       );
-      // Nothing to decrypt with: no session for this sender and no X3DH initial
-      // to start one (see processIncomingMessage). This is the one desync shape
-      // that produces no crypto error at all -- our own session is simply gone,
-      // while the peer keeps sending into the one they still hold -- so it has
-      // to be counted here or automatic recovery would never see the case it
-      // exists for.
-      if (result == null) {
-        await _giveUpOnEnvelope(msg, isDesyncEvidence: true);
-        return;
-      }
-
-      // A group envelope changed the fact set on disk, so the folded view
-      // this session caches is stale -- and it is what the chat list and the
-      // group screen read.
-      final groupId = result.groupId;
-      if (groupId != null) {
-        await _refreshGroupFromDisk(groupId);
-        await _reconcileGroup(
-          groupId,
-          result.peerAccountId,
-          result.peerGroupStateHash,
-          snapshotRequested: result.groupSnapshotRequested,
-          // Carried through so a group we hold no facts about can be asked
-          // about even when the only member who has written is federated and
-          // has never messaged us one-to-one.
-          peerServer: result.peerServer,
-        );
-      }
-
-      // A picture starts downloading the moment its message lands, not when a
-      // bubble is first drawn. The lazy fetch in ImageAttachment stays -- it is
-      // what covers history, a failed attempt and the background push isolate
-      // (which deliberately writes only the inline thumbnail, see
-      // processIncomingMessage) -- but relying on it alone meant the download
-      // began exactly when the user opened the chat and was waiting for it.
-      // Unawaited and best-effort: nothing here may delay a receipt or a
-      // notification, and ensureAttachmentDownloaded is idempotent, so the UI
-      // asking again a moment later simply finds the file or joins the attempt.
-      final attachmentMessageId = result.attachmentMessageId;
-      if (attachmentMessageId != null) {
-        unawaited(
-          _prefetchAttachment(
-            chatId: groupId ?? result.peerAccountId,
-            messageId: attachmentMessageId,
-          ),
-        );
-      }
-
-      if (result.shouldNotify) {
-        // Without this call, the launcher icon's badge (which Android
-        // derives from active notifications, not anything drawn in-app)
-        // would never appear for a message that happened to arrive while
-        // the app was in the foreground.
-        unawaited(
-          showMessageNotification(
-            state.accountId,
-            // A group envelope points at the group, not at a one-to-one chat
-            // with whoever happened to send it (main.dart's _openChatFor opens
-            // exactly that for a peer id).
-            peerAccountId: groupId == null ? result.peerAccountId : null,
-            groupId: groupId,
-            invitation: result.groupInvite,
-          ),
-        );
-      }
-
-      // Only the live path sends a "delivered" receipt right away -- a
-      // message processed by the background push-wake sync
-      // (push_manager.dart's _syncProfile, no live AppSession there)
-      // doesn't currently trigger one, so a fully-closed app only starts
-      // showing delivered/read checkmarks to the sender once it's next
-      // opened (which sends both anyway, see enterConversation) --
-      // deliberate scope-narrowing to avoid needing every one of
-      // AppSession's send-path helpers (_resolvePeerDevice,
-      // _getOrCreateCryptoSession, _clientFor) to become standalone,
-      // isolate-safe functions just for this.
-      // The group counterpart, addressed to the author of that one message
-      // rather than to the group (see _sendGroupReceipt). Read is confirmed on
-      // top when the user is actually looking at this group -- the same rule the
-      // one-to-one path uses below, and the reason enterGroup claims the open-
-      // chat slot.
-      final groupUpTo = result.groupDeliveredUpTo;
-      if (groupUpTo != null && groupId != null) {
-        unawaited(
-          _sendGroupDeliveredReceipt(groupId, result.peerAccountId, groupUpTo),
-        );
-        if (groupId == _readableConversation) {
-          unawaited(sendGroupReadReceipts(groupId));
-        }
-      }
-
-      final upTo = result.deliveredUpTo;
-      if (upTo != null) {
-        final convo = state.conversations[result.peerAccountId];
-        if (convo != null &&
-            (convo.sentDeliveredReceiptUpTo == null ||
-                upTo.isAfter(convo.sentDeliveredReceiptUpTo!))) {
-          unawaited(_sendReceipt(convo, ReceiptStatus.delivered, upTo));
-        }
-        // A message that lands in the conversation the user is actually
-        // reading right now (chat open AND app in the foreground, see
-        // _readableConversation) is read the moment it arrives. Without
-        // this, no read receipt would ever fire for it: enterConversation
-        // only sends one when it finds the conversation unread on open,
-        // and a message arriving into the open chat never marks it unread
-        // (same behavior as WhatsApp/Signal: blue ticks appear immediately
-        // while the chat is open). Gated on _readableConversation, not the
-        // raw open-chat id, so a chat left open but sent to the background
-        // (Home button doesn't dispose the ChatScreen) does NOT falsely
-        // confirm "read" -- that message stays unread + notified until the
-        // user actually returns (setForeground re-runs the read logic then).
-        if (convo != null &&
-            result.peerAccountId == _readableConversation &&
-            (convo.sentReadReceiptUpTo == null ||
-                upTo.isAfter(convo.sentReadReceiptUpTo!))) {
-          unawaited(_sendReceipt(convo, ReceiptStatus.read, upTo));
-        }
-      }
-
-      await LocalStateStore.saveProfile(state);
-      unawaited(api.deleteMessage(msg.messageId, state.credentials));
-
-      lastError = null;
-      notifyListeners();
-    } catch (e) {
-      await _giveUpOnEnvelope(
-        msg,
-        // Only a failure whose code means diverged keys counts towards
-        // recovering the session. A redelivery is already handled inside
-        // processIncomingMessage; an undiagnosed error (bad JSON, a storage
-        // failure -- this catch covers the whole of the processing above, not
-        // just the decrypt) says nothing about the ratchet, and discarding a
-        // working session over one would lose messages for no reason.
-        isDesyncEvidence: e is FreizoneCoreException && e.suggestsDesync,
-      );
-      lastError = 'decrypt error: $e';
-      notifyListeners();
     }
+
+    lastError = null;
+    notifyListeners();
   }
 
   /// Counts one failed attempt at [msg] and, once it has failed enough times,
@@ -1874,18 +1786,23 @@ class AppSession extends ChangeNotifier {
   /// with peerAddress -- a full Freizone address (`id*server`, `id*local`,
   /// or just a bare id/prefix, see lib/util/freizone_address.dart), so a
   /// dash-grouped or phone-dictated id ("k5x9 p2qa n7f3...") resolves the
-  /// same as the canonical form, and may be just the first
-  /// [accountIdPrefixLength] characters (unique per server, see
-  /// docs/PROTOCOL.md), in which case an already-known conversation
-  /// resolves purely locally, with no network round trip. An explicit
-  /// `*server` that isn't this session's own (or `local`) is a federated
-  /// address (docs/PROTOCOL.md §9): resolved and messaged directly
-  /// against that server, not this session's own.
+  /// same as the canonical form. An explicit `*server` that isn't this
+  /// session's own (or `local`) is a federated address (docs/PROTOCOL.md §9):
+  /// resolved and messaged directly against that server, not this session's
+  /// own.
   ///
-  /// Naming the peer is a separate act on the contact store (APP-19), not a
-  /// parameter here: it returns the conversation, whose `peerAccountId` is the
-  /// resolved id the contact has to be keyed by -- which is the only moment that
-  /// id is known for an address typed as a prefix.
+  /// Through the core now (SRV-23, the cut) -- CoreAccount.startConversation,
+  /// not a Dart-side resolve-and-mint. This one was not optional the way the
+  /// rest of this pass's "deferred" list is: pkg/client.touchConversation
+  /// deliberately never creates a Conversation record for a peer nobody
+  /// called StartConversation for first (see its own doc comment -- "the
+  /// caller is the one that knows whether creating it is right"), so a first
+  /// message sent without this ever having run leaves that chat with no
+  /// record in the core at all, forever -- Conversations() never lists it,
+  /// applyCoreChat reads that as "gone" and removes the local entry on the
+  /// very next refresh, and the screen still holding a reference crashes on
+  /// the null the moment it rebuilds. Found by actually sending one on a
+  /// device, not by review.
   Future<Conversation> startConversation(String peerAddress) async {
     final parsed = parseFreizoneAddress(peerAddress);
     if (parsed == null) throw StateError('Not a valid Freizone address');
@@ -1923,56 +1840,18 @@ class AppSession extends ChangeNotifier {
       );
     }
 
-    final existing = state.conversations[normalized];
-    if (existing != null &&
-        existing.peerDeviceId != null &&
-        _samePeerServer(existing.peerServer, parsed.server)) {
-      await _markKnown(existing);
-      return existing;
-    }
-
-    if (normalized.length == accountIdPrefixLength) {
-      for (final convo in state.conversations.values) {
-        if (convo.peerDeviceId != null &&
-            convo.peerAccountId.startsWith(normalized) &&
-            _samePeerServer(convo.peerServer, parsed.server)) {
-          await _markKnown(convo);
-          return convo;
-        }
-      }
-    }
-
-    final peerApi = _clientFor(parsed.server);
-    final (resolvedId, verified) = await _resolvePeerDevice(
+    // CoreAccount.startConversation resolves the address itself (server-side
+    // prefix resolution, same as the old _resolvePeerDevice), marks the peer
+    // known and lifts any pending-approval flag -- pkg/client.StartConversation
+    // does all three, which is exactly what the old Dart-side _markKnown
+    // existed for.
+    final chat = await coreAccount.startConversation(
       normalized,
-      peerApi,
+      server: ownServer ? '' : parsed.server!,
     );
-
-    final convo = state.conversations.putIfAbsent(
-      resolvedId,
-      // Seeded from AppState.blockedPeers, the block's authoritative home
-      // (see setBlocked): a block deliberately outlives deleteConversation,
-      // so re-starting a chat with a blocked peer must surface as a blocked
-      // conversation rather than quietly minting an unblocked mirror. That
-      // divergence is not cosmetic -- the group receive path reads the map
-      // and drops, while the 1:1 path and the profile screen read the
-      // mirror, so a stale mirror shows a working chat whose group messages
-      // silently vanish.
-      () => Conversation(
-        peerAccountId: resolvedId,
-        blocked: state.blockedPeers.containsKey(resolvedId),
-      ),
-    );
-    convo.peerServer = sameServer(parsed.server ?? state.server, state.server)
-        ? null
-        : parsed.server;
-    convo.peerDeviceId = verified.deviceId;
-    convo.peerDevicePubKey = verified.devicePubKey;
-    convo.pendingApproval = false;
-    state.knownPeerIds.add(resolvedId);
-    await LocalStateStore.saveProfile(state);
+    applyCoreChat(state, coreAccount, chat.chatId);
     notifyListeners();
-    return convo;
+    return state.conversations[chat.chatId]!;
   }
 
   /// Reaching out to (or back to) a peer yourself is an implicit accept
@@ -2018,50 +1897,53 @@ class AppSession extends ChangeNotifier {
   /// _handleIncoming. Sending is disabled in the UI while blocked. The
   /// peer is never told either way.
   ///
-  /// The block itself lives in [AppState.blockedPeers], not on the
-  /// [Conversation] -- deliberately outliving [deleteConversation] (see
-  /// its own doc comment), so deleting a blocked peer's chat can never
-  /// silently un-block them, and there's always a way to unblock them
-  /// again (the "Blocked contacts" screen) even with no conversation left.
-  /// [convo], if one currently exists, is kept as an in-sync mirror so
-  /// existing chat/profile UI can keep reading `convo.blocked` directly.
+  /// The block itself is now enforced by the core (SRV-23, the cut) --
+  /// coreAccount.blockPeer/unblockPeer is what the receive path's
+  /// IsPeerBlocked actually reads, without which blocking would decrypt
+  /// (correctly) and then stop nowhere, since the core had never been told.
+  /// [AppState.blockedPeers] stays alongside it, display-only: the "Blocked
+  /// contacts" screen has to list someone with no conversation left, and the
+  /// native account API has no call yet to list blocked accounts back -- see
+  /// the follow-up filed for it. Deliberately outliving [deleteConversation]
+  /// (see its own doc comment), so deleting a blocked peer's chat can never
+  /// silently un-block them.
   Future<void> setBlocked(String peerAccountId, bool blocked) async {
     final convo = state.conversations[peerAccountId];
     if (blocked) {
+      coreAccount.blockPeer(peerAccountId, server: convo?.peerServer ?? '');
       state.blockedPeers[peerAccountId] = BlockedPeer(
         peerAccountId: peerAccountId,
         peerServer: convo?.peerServer,
       );
-      if (convo != null) {
-        convo.blocked = true;
-        // Blocking is itself a decision about a pending request --
-        // nothing left to approve.
-        convo.pendingApproval = false;
-      }
     } else {
+      coreAccount.unblockPeer(peerAccountId);
       state.blockedPeers.remove(peerAccountId);
       // Unblocking is itself a decision to hear from them normally again
       // -- they shouldn't reappear as an unactioned "message request" the
       // next time they write.
       state.knownPeerIds.add(peerAccountId);
-      if (convo != null) convo.blocked = false;
     }
     await LocalStateStore.saveProfile(state);
+    applyCoreChat(state, coreAccount, peerAccountId);
     notifyListeners();
   }
 
-  /// Accepts a pending "message request" (see Conversation.pendingApproval)
-  /// -- purely local, just lifts the UI gate so the chat screen shows the
-  /// normal composer instead of the Accept/Block bar. Nothing is sent to
-  /// the peer or the server; they have no way to know either way. Records
-  /// them in [AppState.knownPeerIds] so a later [deleteConversation]
-  /// doesn't regress them back to "unactioned request" if they write again.
+  /// Accepts a pending "message request" (see Conversation.pendingApproval).
+  /// Nothing is sent to the peer or the server; they have no way to know
+  /// either way. Tells the core too (SRV-23, the cut): the receive path's own
+  /// notify rule reads *its* PendingApproval, not this session's copy, so a
+  /// contact accepted only here would keep being treated as unaccepted --
+  /// their follow-up messages arriving unread but silently, never notified,
+  /// since the app's own rule for an accepted contact is the opposite of the
+  /// one for an unactioned request.
   Future<void> acceptConversation(String peerAccountId) async {
     final convo = state.conversations[peerAccountId];
     if (convo == null) return;
+    coreAccount.acceptRequest(peerAccountId);
     convo.pendingApproval = false;
     state.knownPeerIds.add(peerAccountId);
     await LocalStateStore.saveProfile(state);
+    applyCoreChat(state, coreAccount, peerAccountId);
     notifyListeners();
   }
 
@@ -2188,14 +2070,57 @@ class AppSession extends ChangeNotifier {
   // it, hands it back, and keeps the transcript beside it. Sending and
   // receiving come next -- everything below is local.
 
-  /// Folded views, keyed by group id, kept in step with the files on disk.
-  ///
-  /// Cached because folding is not free and the chat list asks constantly, and
-  /// safe to cache because it is refreshed on the one path that can change a
-  /// group: [_storeGroupState].
+  /// Folded views, keyed by group id -- dead since the cut moved group facts
+  /// into the core (see [groupState]); kept only because [loadGroupStates],
+  /// [createGroup] and friends below still reference it, unreachable from any
+  /// live path now.
   final Map<String, GroupStateResult> _groupStates = {};
 
-  GroupStateResult? groupState(String groupId) => _groupStates[groupId];
+  /// The screens' one window into a group's membership: name, topic, roles,
+  /// who has joined. They ask for `.resolved`, the shape the old Dart-side
+  /// fold produced -- kept exactly, so this is the one place that shape is
+  /// still assembled, now from [CoreAccount.groupInfo] instead of from
+  /// [_groupStates]. Null for a group this device holds no facts about yet
+  /// (an invitation whose snapshot has not arrived, or none at all), which is
+  /// the same "nothing to show" the screens already handle.
+  GroupStateResult? groupState(String groupId) {
+    GroupInfo info;
+    try {
+      info = coreAccount.groupInfo(groupId);
+    } catch (_) {
+      return null;
+    }
+    return GroupStateResult(
+      groupId: info.groupId,
+      // Opaque and unread by any screen -- see the grep that justified this
+      // adapter's shape in the commit that added it.
+      state: const {},
+      stateHash: info.stateHash,
+      resolved: GroupResolved(
+        groupId: info.groupId,
+        founder: info.founder,
+        name: info.name,
+        topic: info.topic,
+        dissolved: info.dissolved,
+        members: info.members
+            .map(
+              (m) => GroupMember(
+                accountId: m.accountId,
+                server: m.server,
+                role: m.role,
+                joined: m.joined,
+                // Not carried by the core's API, and no screen reads it (only
+                // its own factory does) -- see GroupMember.addedAt.
+                addedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+              ),
+            )
+            .toList(),
+      ),
+      applied: const [],
+      known: const [],
+      rejected: const [],
+    );
+  }
 
   GroupConversation? group(String groupId) => state.groups[groupId];
 
@@ -2235,19 +2160,16 @@ class AppSession extends ChangeNotifier {
     String name = '',
     String topic = '',
   }) async {
-    final result = core.groupCreate(
-      identity: _groupIdentity,
-      server: state.server,
-      name: name,
-      topic: topic,
-    );
-
-    final conversation = GroupConversation(groupId: result.groupId);
-    state.groups[result.groupId] = conversation;
-    await _storeGroupState(result);
-    await LocalStateStore.saveProfile(state);
+    final groupId = await coreAccount.createGroup(name);
+    // The core's own call has no topic parameter (see CoreAccount.createGroup)
+    // -- name and topic are one record either way (see setGroupMeta), so a
+    // topic given here is simply the record's second write.
+    if (topic.isNotEmpty) {
+      await coreAccount.setGroupMeta(groupId, name, topic);
+    }
+    applyCoreState(state, coreAccount);
     notifyListeners();
-    return conversation;
+    return state.groups[groupId]!;
   }
 
   /// Signs one group event with this account's identity, ready to be applied
@@ -2540,34 +2462,30 @@ class AppSession extends ChangeNotifier {
   /// Named for the screen, not the membership: [leaveGroup] is the signed act of
   /// leaving the group itself, and the two must never be confused.
   void exitGroup(String groupId) {
-    if (_openConversationPeerId == groupId) _openConversationPeerId = null;
+    if (_openConversationPeerId == groupId) {
+      _openConversationPeerId = null;
+      coreAccount.setOpenChat(null);
+    }
   }
 
-  /// Call when a group's screen opens: clears its unread flag, tells each author
-  /// how far their messages have been read, and asks one member for their facts
-  /// in case this device is the one that is behind.
+  /// Call when a group's screen opens: tells the core which chat is on screen,
+  /// clears its unread flag, and confirms read to every author who is owed it
+  /// (see [CoreAccount.markRead]) -- and settles this account's own group
+  /// housekeeping (snapshot debts owed, sessions the evidence says are broken)
+  /// the same [coreAccount.maintain] a stream reconnect runs, since opening a
+  /// group screen is exactly the kind of moment worth re-checking it.
   Future<void> enterGroup(String groupId) async {
-    // Before the unread check, deliberately: whether the group has unread
-    // messages says nothing about whether its member list is current, and the
-    // membership divergence is exactly the thing nobody would otherwise notice.
-    // Both directions at once -- ask for what we may be missing, and hand over
-    // what somebody else never got.
-    unawaited(_requestGroupSync(groupId));
-    unawaited(_payGroupSnapshotDebts());
     // Shares the one open-chat slot with conversations, so a group message
-    // arriving while its screen is on top is not marked unread (see
-    // storeGroupMessage's openChatId) and confirms itself read right away.
+    // arriving while its screen is on top is not marked unread and confirms
+    // itself read right away.
     _openConversationPeerId = groupId;
-    // Regardless of the unread flag: the flag says "something arrived since you
-    // last looked", while a read receipt is owed for anything an author has not
-    // been told about yet -- including messages read on a previous run that
-    // could not be told at the time.
-    unawaited(sendGroupReadReceipts(groupId));
+    coreAccount.setOpenChat(groupId);
+    unawaited(coreAccount.maintain());
 
     final chat = state.groups[groupId];
     if (chat == null || !chat.hasUnread) return;
-    chat.hasUnread = false;
-    await LocalStateStore.saveProfile(state);
+    await coreAccount.markRead(groupId);
+    applyCoreChat(state, coreAccount, groupId);
     // Exactly as enterConversation does it: if that was the last unread chat in
     // this account, the notification goes with it -- otherwise Android's
     // launcher badge (derived from active notifications, not from anything drawn
@@ -2578,25 +2496,13 @@ class AppSession extends ChangeNotifier {
 
   /// Invites an account, and tells everyone else.
   ///
-  /// The invitee gets the whole fact set -- they have nothing to merge it
-  /// into -- while everyone else gets just the new one, with the chain that
-  /// authorizes it riding along inside the event itself.
-  ///
   /// [address] is a full Freizone address (`id*server`, `id*local`, or just a
   /// bare id/prefix -- see lib/util/freizone_address.dart), exactly what
-  /// [startConversation] accepts: a dash-grouped id pasted from "copy my
-  /// address" and a short id-prefix both work.
-  ///
-  /// The address is resolved *before* anything is signed, and that ordering is
-  /// the point. A member_add records the invitee's canonical full id because
-  /// that string is what their whole key chain is signed over (see
-  /// [_getOrCreateCryptoSession]'s certificate checks) and what their pairwise
-  /// ratchet is keyed by -- so a member folded in under a cosmetic spelling of
-  /// it, or under a prefix, is a phantom: shown in the member list, invited as
-  /// far as the group is concerned, but impossible to establish a session with
-  /// ("invalid dh identity certificate" on the very first send). Resolving
-  /// first also means an address that resolves to nothing adds no member at
-  /// all, instead of one nobody can ever deliver to.
+  /// [startConversation] accepts. Parsed and guarded here for the friendly
+  /// errors (bad address, federation off, inviting yourself) before anything
+  /// reaches the network; [CoreAccount.invite] does the resolution, the
+  /// signing, the invitee's snapshot and the broadcast to everyone else in one
+  /// call -- see freizone-server's pkg/client.InviteToGroup.
   Future<void> inviteToGroup(String groupId, String address) async {
     final parsed = parseFreizoneAddress(address);
     if (parsed == null) throw StateError('Not a valid Freizone address');
@@ -2627,123 +2533,58 @@ class AppSession extends ChangeNotifier {
       throw StateError("That's your own address -- you're already in here.");
     }
 
-    final (resolvedId, verified) = await _resolvePeerDevice(
+    await coreAccount.invite(
+      groupId,
       parsed.idOrPrefix,
-      _clientFor(onOwnServer ? null : memberServer),
+      server: onOwnServer ? '' : memberServer,
     );
-
-    // The lookup above already produced (and verified) the device every send
-    // below has to go to, so seed the endpoint cache rather than making
-    // _sendGroupControl repeat the same GET.
-    final peer = _endpointFor(resolvedId, memberServer);
-    peer.deviceId ??= verified.deviceId;
-    peer.devicePubKey ??= verified.devicePubKey;
-
-    final existing = _groupStates[groupId]?.resolved.memberById(resolvedId);
-    if (existing != null) {
-      if (existing.joined) throw StateError('They are already in this group.');
-      // Their invitation is still outstanding, so this is a re-send, not a
-      // second member_add: the whole fact set again, to the same member row.
-      // The repair path for an invitation whose delivery failed first time --
-      // until the snapshot arrives the invitee has nothing at all, and nobody
-      // else re-sends it for them (a snapshot is otherwise only offered in
-      // answer to a state_hash mismatch, which needs them to send first).
-      await _sendGroupSnapshotTo(groupId, resolvedId, memberServer);
-      return;
-    }
-
-    final event = signGroupEvent(
-      groupId: groupId,
-      type: 'member_add',
-      subject: resolvedId,
-      server: memberServer,
-    );
-    await applyGroupEvents(groupId, [event]);
-
-    // Signed and now part of this group's history: every other member has to
-    // learn it even if the invitee themselves turns out to be unreachable
-    // right now, or the group would disagree about its own membership. The
-    // invitee's own failure is still reported -- it's the one the user asked
-    // for -- just not at the cost of everyone else's copy.
-    Object? snapshotError;
-    try {
-      await _sendGroupSnapshotTo(groupId, resolvedId, memberServer);
-    } catch (e) {
-      // Retried on the next working connection, so an invitation is not lost to
-      // a moment without a network -- the invitee has nothing at all until the
-      // snapshot arrives, and nobody re-sends it for them.
-      _oweGroupSnapshot(groupId, resolvedId);
-      snapshotError = e;
-    }
-    await _broadcastGroupEvents(groupId, [event], skip: {resolvedId});
-    if (snapshotError != null) {
-      // Persisted before the throw, or the debt recorded above would be lost
-      // exactly when it matters: the invitation is signed and the group knows
-      // about it, only the invitee doesn't.
-      await LocalStateStore.saveProfile(state);
-      throw snapshotError;
-    }
+    applyCoreChat(state, coreAccount, groupId);
+    notifyListeners();
   }
 
   /// Accepts an invitation addressed to this account.
-  ///
-  /// Announcing it is as much the invitee's job as the inviter's: they have
-  /// the strongest interest in every member knowing to send to them.
   Future<void> acceptGroupInvite(String groupId) async {
-    final event = signGroupEvent(
-      groupId: groupId,
-      type: 'join_accept',
-      subject: state.accountId,
-    );
-    await applyGroupEvents(groupId, [event]);
-    await _broadcastGroupEvents(groupId, [event]);
+    await coreAccount.acceptInvitation(groupId);
+    applyCoreChat(state, coreAccount, groupId);
+    notifyListeners();
   }
 
-  /// Declines an invitation addressed to this account, and forgets the group.
+  /// Declines an invitation addressed to this account.
   ///
-  /// A decline is a `leave`, not a new kind of fact: the fold deletes the member
-  /// row for either one, so "I was invited and said no" and "I was in and left"
-  /// are the same statement about the same person -- and the group needs exactly
-  /// that. Saying nothing would leave the invitation outstanding in every
-  /// member's list forever, which is the one outcome that serves nobody: the
-  /// moderator can't tell a refusal from an unread invitation.
+  /// A decline is a `leave`, not a new kind of fact -- see
+  /// freizone-server's pkg/client.LeaveGroup, which the fold treats
+  /// identically for an invitee and a joined member.
   ///
-  /// Told to the group *before* the local copy goes, since signing and
-  /// broadcasting both need the fact set. The local group is then forgotten
-  /// completely (transcript and pictures included, see [deleteGroup]) -- having
-  /// declined, there is nothing left to keep, and leaving it in the chat list
-  /// would be a second invitation nobody sent.
+  /// **Known limitation**: unlike the Dart-only implementation this replaces,
+  /// there is not yet a way to make the core forget a group's facts entirely
+  /// (see CoreAccount/native's doCoreDeleteChat, which clears a group's
+  /// transcript and media but deliberately leaves its fact-set directory
+  /// alone). The group may still show up in the chat list until that exists.
   Future<void> declineGroupInvite(String groupId) async {
-    final me = _groupStates[groupId]?.resolved.memberById(state.accountId);
-    if (me == null) throw StateError('You are not in this group.');
-    if (me.joined) {
-      throw StateError(
-        'You have already joined this group -- leave it instead.',
-      );
-    }
-    await _groupAction(groupId, type: 'leave', subject: state.accountId);
-    await deleteGroup(groupId);
+    await coreAccount.leaveGroup(groupId);
+    coreAccount.deleteChat(groupId);
+    applyCoreState(state, coreAccount);
+    notifyListeners();
   }
 
-  /// Grants or revokes a role. Which key signs it is the core's decision --
-  /// admin needs the group root key, moderator an ordinary device signature --
-  /// and an act the fold will not authorize simply has no effect anywhere.
+  /// Grants or revokes a role.
   Future<void> setGroupRole(
     String groupId,
     String accountId,
     String role, {
     required bool grant,
-  }) => _groupAction(
-    groupId,
-    type: grant ? 'role_grant' : 'role_revoke',
-    subject: accountId,
-    role: role,
-  );
+  }) async {
+    await coreAccount.setRole(groupId, accountId, role, grant: grant);
+    applyCoreChat(state, coreAccount, groupId);
+    notifyListeners();
+  }
 
-  /// Removes a member. They are told too: as far as their own copy of the
-  /// state is concerned they are still in the group until this reaches them.
-  Future<void> removeFromGroup(String groupId, String accountId) =>
-      _groupAction(groupId, type: 'member_remove', subject: accountId);
+  /// Removes a member.
+  Future<void> removeFromGroup(String groupId, String accountId) async {
+    await coreAccount.removeMember(groupId, accountId);
+    applyCoreChat(state, coreAccount, groupId);
+    notifyListeners();
+  }
 
   /// Sets the name and topic. One last-writer-wins record, so an unchanged
   /// field is carried over rather than cleared.
@@ -2752,87 +2593,39 @@ class AppSession extends ChangeNotifier {
     String? name,
     String? topic,
   }) async {
-    final resolved = _groupStates[groupId]?.resolved;
+    final resolved = groupState(groupId)?.resolved;
     if (resolved == null) return;
-    await _groupAction(
+    await coreAccount.setGroupMeta(
       groupId,
-      type: 'meta',
-      name: name ?? resolved.name,
-      topic: topic ?? resolved.topic,
+      name ?? resolved.name,
+      topic ?? resolved.topic,
     );
+    applyCoreChat(state, coreAccount, groupId);
+    notifyListeners();
   }
 
-  Future<void> leaveGroup(String groupId) =>
-      _groupAction(groupId, type: 'leave', subject: state.accountId);
+  Future<void> leaveGroup(String groupId) async {
+    await coreAccount.leaveGroup(groupId);
+    applyCoreChat(state, coreAccount, groupId);
+    notifyListeners();
+  }
 
   /// Leaves a group and forgets it locally, as one action.
   ///
-  /// The pair belongs together, because forgetting a group this account is still
-  /// a member of does not work on its own: the fact set goes, but the *others*
-  /// keep sending -- and an arriving message re-creates the transcript for a
-  /// group whose facts are gone, leaving a chat with no name, no member list, no
-  /// way to open its info screen, and a composer whose send fails with "no
-  /// group". Removing while still a member therefore means leaving first; this
-  /// is that, in one step, so it cannot be half-done.
-  ///
-  /// Same order as [declineGroupInvite], and for the same reason: signing and
-  /// broadcasting both need the fact set that the second half deletes.
+  /// See [declineGroupInvite]'s known limitation -- the same gap applies here.
   Future<void> leaveAndDeleteGroup(String groupId) async {
-    await leaveGroup(groupId);
-    await deleteGroup(groupId);
+    await coreAccount.leaveGroup(groupId);
+    coreAccount.deleteChat(groupId);
+    applyCoreState(state, coreAccount);
+    notifyListeners();
   }
 
   /// Ends the group, for the founder. They cannot leave one -- that would
   /// leave an authority behind that is not in the member list.
-  Future<void> dissolveGroup(String groupId) =>
-      _groupAction(groupId, type: 'dissolve');
-
-  /// The shape every moderation action shares: sign it, apply it here, tell
-  /// everyone.
-  Future<void> _groupAction(
-    String groupId, {
-    required String type,
-    String subject = '',
-    String role = '',
-    String name = '',
-    String topic = '',
-  }) async {
-    final event = signGroupEvent(
-      groupId: groupId,
-      type: type,
-      subject: subject,
-      role: role,
-      name: name,
-      topic: topic,
-    );
-    // Captured before applying: a removal takes its subject out of the member
-    // list, and they are the one person who most needs to hear about it.
-    final removed = type == 'member_remove'
-        ? _groupStates[groupId]?.resolved.memberById(subject)
-        : null;
-
-    await applyGroupEvents(groupId, [event]);
-    await _broadcastGroupEvents(groupId, [event]);
-
-    if (removed != null) {
-      try {
-        await _sendGroupControl(
-          groupId,
-          removed.accountId,
-          removed.server,
-          GroupControl(
-            kind: GroupControlKind.events,
-            groupId: groupId,
-            stateHash: _groupStates[groupId]?.stateHash ?? '',
-            events: [event],
-          ),
-        );
-      } catch (e) {
-        lastError =
-            'telling ${removed.accountId} they were removed: '
-            '${describeError(e)}';
-      }
-    }
+  Future<void> dissolveGroup(String groupId) async {
+    await coreAccount.dissolveGroup(groupId);
+    applyCoreChat(state, coreAccount, groupId);
+    notifyListeners();
   }
 
   /// Sends a few new facts to every member except this account and any in
@@ -2989,11 +2782,23 @@ class AppSession extends ChangeNotifier {
     );
   }
 
-  /// Sends a message into a group: one separately encrypted copy per member.
+  /// Sends a message into a group: one separately encrypted copy per member,
+  /// through the core (SRV-23, the cut) -- CoreAccount.send dispatches on the
+  /// chat id, the one namespace a peer and a group id share, so this is the
+  /// same call [sendMessage] makes.
   ///
   /// There is no group key. Every copy rides that member's own pairwise
   /// ratchet, which is what makes removing somebody take effect immediately
   /// and need no re-key anywhere (see the design document).
+  ///
+  /// **Known gap**: the reply preview's author is not carried on the wire for
+  /// an outgoing group reply -- freizone-server's pkg/client.SendOptions has
+  /// no field for it (only content decoded from an *incoming* envelope ever
+  /// populates ReplyPreviewAuthorID). Quoting a message that is not your own
+  /// in a group therefore reaches the recipient without saying whose it was.
+  /// The placeholder below still shows it correctly for the sender's own
+  /// screen, since that renders from local data before the real send has
+  /// even started.
   Future<void> sendGroupMessage(
     String groupId,
     String text, {
@@ -3001,7 +2806,7 @@ class AppSession extends ChangeNotifier {
     OutgoingAttachment? attachment,
   }) async {
     final chat = state.groups[groupId];
-    final resolved = _groupStates[groupId]?.resolved;
+    final resolved = groupState(groupId)?.resolved;
     if (chat == null) throw StateError('no group $groupId');
     if (resolved == null) {
       // A transcript with no facts behind it: a message overtook the snapshot
@@ -3025,7 +2830,7 @@ class AppSession extends ChangeNotifier {
     final quoted = replyToId == null ? null : chat.messageById(replyToId);
     final now = DateTime.now().toUtc();
 
-    final message = StoredMessage(
+    final placeholder = StoredMessage(
       id: generateMessageId(),
       text: text,
       mine: true,
@@ -3033,25 +2838,16 @@ class AppSession extends ChangeNotifier {
       replyToId: quoted?.id,
       replyPreviewText: quoted?.text,
       replyPreviewMine: quoted?.mine,
-      // Resolved here, while the quoted message is still in hand, rather than
-      // at render time: this is the only moment the author is known for
-      // certain. senderAccountId is null on our own messages, which is not a
-      // missing author but the one author no message needs to carry.
       replyPreviewAuthorId: quoted == null
           ? null
           : (quoted.mine ? state.accountId : quoted.senderAccountId),
       sendState: MessageSendState.pending,
-      // Stands in until each recipient server's upload returns a blob id, so
-      // the pending bubble already renders the picture from our own local copy.
-      // A group cannot store one real reference here anyway: the blob id
-      // differs per recipient server, so the reference is built per copy in
-      // [_fanOut] and only the metadata is shared.
       attachments: attachment == null
           ? const []
           : [_placeholderAttachment(attachment)],
-      // Only members who have accepted. An invitation must not disclose the
-      // invitee's address to the group before they agree to it, and until they
-      // accept there is nothing to send them anyway.
+      // Only members who have accepted, matching who the core will actually
+      // address -- an invitation must not disclose the invitee's address to
+      // the group before they agree to it.
       deliveries: [
         for (final member in resolved.members)
           if (member.joined && member.accountId != state.accountId)
@@ -3061,24 +2857,30 @@ class AppSession extends ChangeNotifier {
             ),
       ],
     );
-
-    if (attachment != null) {
-      // Held for a possible retry, and written to disk before the bubble is
-      // shown: ImageAttachment renders our own picture from this local file,
-      // so it has to exist by the time the transcript first paints it.
-      _outgoingAttachments[message.id] = attachment;
-      await _storeOwnAttachment(groupId, message.id, attachment);
-    }
-
-    chat.messages.add(message);
+    chat.messages.add(placeholder);
     chat.lastActivityAt = now;
     notifyListeners();
-    // Persisted before the network is touched, exactly as a one-to-one send
-    // is (APP-08 step 2) -- and it matters more here, since a fan-out has
-    // many more ways to be interrupted part-way.
-    await LocalStateStore.saveProfile(state);
 
-    await _fanOut(chat, message, attachment);
+    Object? error;
+    try {
+      await _sendViaCore(
+        groupId,
+        text,
+        replyToId: quoted?.id,
+        replyPreviewText: quoted?.text,
+        replyPreviewMine: quoted?.mine,
+        attachment: attachment,
+      );
+    } catch (e) {
+      error = e;
+      lastError = 'send failed: ${describeError(e)}';
+    } finally {
+      chat.messages.remove(placeholder);
+      applyCoreChat(state, coreAccount, groupId);
+    }
+    if (error == null) lastError = null;
+    notifyListeners();
+    if (error != null) throw error;
   }
 
   /// Delivers every outstanding copy of a group message.
@@ -3370,21 +3172,29 @@ class AppSession extends ChangeNotifier {
   }
 
   /// Re-sends only the copies of a group message that never arrived.
+  /// Re-sends into the gap only -- the members whose copy of [messageId]
+  /// never arrived -- via freizone-server's pkg/client.RetryGroupMessage,
+  /// added for exactly this call. Nothing to recover from disk: the core
+  /// keeps the attachment bytes (if any) itself.
   Future<void> retryGroupSend(String groupId, String messageId) async {
     final chat = state.groups[groupId];
     final message = chat?.messageById(messageId);
     if (chat == null || message == null || !message.isGroupSend) return;
 
-    final attachment = await _recoverAttachment(chat.groupId, message);
-    if (message.hasAttachments && attachment == null) {
-      // Re-sending the caption alone would quietly deliver a different message
-      // than the one the user composed, so refuse -- the same rule retrySend
-      // follows for a one-to-one picture.
-      message.sendError = 'The picture is no longer available to resend.';
+    message.sendState = MessageSendState.pending;
+    message.sendError = null;
+    notifyListeners();
+
+    try {
+      await coreAccount.retry(groupId, messageId);
+      lastError = null;
+    } catch (e) {
+      lastError = 'send failed: ${describeError(e)}';
+      rethrow;
+    } finally {
+      applyCoreChat(state, coreAccount, groupId);
       notifyListeners();
-      return;
     }
-    await _fanOut(chat, message, attachment);
   }
 
   /// Re-reads one group's fact set after something else wrote it.
@@ -3805,29 +3615,24 @@ class AppSession extends ChangeNotifier {
   }
 
   /// Discards the ratchet session with [peerAccountId] so a fresh X3DH runs as
-  /// initiator (see [_getOrCreateCryptoSession]), carrying an `initial` the
-  /// peer's receive path accepts in place of their stale session (see
-  /// processIncomingMessage). Recovers a conversation whose Double Ratchet has
-  /// desynced (messages silently fail to decrypt). The conversation, its
-  /// history and the known/blocked status are all kept, and a system marker
-  /// goes into the transcript for transparency.
+  /// initiator, carrying an `initial` the peer's receive path accepts in
+  /// place of their stale session. Recovers a conversation whose Double
+  /// Ratchet has desynced (messages silently fail to decrypt). The
+  /// conversation, its history and the known/blocked status are all kept, and
+  /// a system marker goes into the transcript for transparency.
   ///
-  /// Then sends an invisible re-key signal straight away, rather than leaving
-  /// the fresh `initial` to ride on whatever the user types next: what a desync
-  /// breaks is *receiving*, so the peer is still sending into a session this
-  /// side can no longer read, and until they hear otherwise nothing they do will
-  /// change that. Best-effort -- a failed send leaves the session discarded, so
-  /// the next real message recovers it the old way.
+  /// Through the core now (SRV-23, the cut) -- CoreAccount.resetSession, not
+  /// the Dart-side discard-and-rekey this replaces. That distinction actually
+  /// matters here in a way it does not for send/receive: discarding only the
+  /// Dart-side session while the core goes on sending from *its* untouched
+  /// one would not be a no-op, it would be worse than doing nothing -- the
+  /// peer legitimately adopts the fresh session this call's re-key signal
+  /// carries, while this account's own sends kept coming from the old one,
+  /// diverging on purpose where nothing had actually gone wrong yet.
   Future<void> resetSecureSession(String peerAccountId) async {
-    final convo = state.conversations[peerAccountId];
-    await _discardSessionAndMark(
-      peerAccountId,
-      marker: sessionResetMarker,
-      bumpActivity: true,
-    );
-    if (convo != null) {
-      await _sendRekeySignal(convo, RekeyReason.userRequested);
-    }
+    await coreAccount.resetSession(peerAccountId);
+    applyCoreChat(state, coreAccount, peerAccountId);
+    notifyListeners();
   }
 
   /// Discards the local ratchet session with [peerAccountId] and records it in
@@ -4018,27 +3823,29 @@ class AppSession extends ChangeNotifier {
     return (result.session, result.initial);
   }
 
-  /// Encrypts and sends text to peerAccountId's conversation, appending
-  /// it to the persisted history. If [replyToId] names a message still in
-  /// local history, a self-contained snapshot of it (text + whether it
-  /// was ours) rides along inside the encrypted content -- so the quote
-  /// still renders for the recipient even if that original message is
-  /// later deleted (locally, on either side) or otherwise unavailable.
-  /// [replyToId] is silently dropped if the message can't be found
-  /// locally anymore (e.g. it was deleted in the time it took to compose
-  /// this reply) -- the calling screen only offers "reply" from a message
-  /// that's currently on screen, so that's expected to be rare, not an
-  /// error worth surfacing.
+  /// Encrypts and sends text to peerAccountId's conversation, through the
+  /// core (SRV-23, the cut). If [replyToId] names a message still in local
+  /// history, a self-contained snapshot of it (text + whether it was ours)
+  /// rides along inside the encrypted content -- so the quote still renders
+  /// for the recipient even if that original message is later deleted
+  /// (locally, on either side) or otherwise unavailable. [replyToId] is
+  /// silently dropped if the message can't be found locally anymore (e.g. it
+  /// was deleted in the time it took to compose this reply) -- the calling
+  /// screen only offers "reply" from a message that's currently on screen, so
+  /// that's expected to be rare, not an error worth surfacing.
   ///
-  /// The bubble appears immediately, as [MessageSendState.pending], and only
-  /// then does the network work start (APP-08 step 1) -- so the composer can
-  /// be cleared the instant the user hits send instead of sitting frozen
-  /// through a slow prekey lookup, blob upload or cross-server POST.
+  /// The bubble appears immediately, as [MessageSendState.pending] -- but only
+  /// as a throwaway local placeholder: [CoreAccount.send] is one opaque call
+  /// that returns (or throws) only once the whole send, network included, is
+  /// done, so there is no intermediate "written, now uploading" moment to
+  /// show on this side of the boundary any more. The placeholder is removed
+  /// once that call settles, in favour of the core's own record -- which by
+  /// then already has the message, sent or [MessageSendState.failed], so the
+  /// bubble never actually disappears from the user's point of view.
   ///
-  /// Throws on failure, after marking the message
-  /// [MessageSendState.failed] -- the bubble itself is the durable feedback,
-  /// the throw only lets the calling screen explain *why* (e.g. a SnackBar).
-  /// A failed message stays retryable for this session, see [retrySend].
+  /// Throws on failure -- the calling screen can explain why (e.g. a
+  /// SnackBar) -- but the message is durable and retryable (see [retrySend])
+  /// regardless of whether anything catches it.
   Future<void> sendMessage(
     String peerAccountId,
     String text, {
@@ -4051,17 +3858,8 @@ class AppSession extends ChangeNotifier {
     }
 
     final quoted = replyToId == null ? null : convo.messageById(replyToId);
-
-    // Stamped ONCE, before the send: this exact instant goes out inside
-    // the encrypted content (sentAt) AND becomes the local StoredMessage
-    // .timestamp below -- receipts echo it back verbatim, and the
-    // checkmark comparison (chat_screen.dart) is then an equality within
-    // this one clock reading. Stamping after the await (as this used to)
-    // loses that race locally: the receiver can decrypt and stamp its
-    // receipt before the sender's own post-send stamp is even taken.
     final now = DateTime.now().toUtc();
-
-    final message = StoredMessage(
+    final placeholder = StoredMessage(
       id: generateMessageId(),
       text: text,
       mine: true,
@@ -4069,118 +3867,69 @@ class AppSession extends ChangeNotifier {
       replyToId: quoted?.id,
       replyPreviewText: quoted?.text,
       replyPreviewMine: quoted?.mine,
-      // Stands in until the upload returns a blob id, so the pending bubble
-      // can already render the picture from our own local copy below.
       attachments: attachment == null
           ? const []
           : [_placeholderAttachment(attachment)],
       sendState: MessageSendState.pending,
     );
-
-    if (attachment != null) {
-      // Held for a possible retry, and written to disk before the bubble is
-      // shown: ImageAttachment renders our own picture from this local file,
-      // so it has to exist by the time the transcript first paints it.
-      _outgoingAttachments[message.id] = attachment;
-      await _storeOwnAttachment(peerAccountId, message.id, attachment);
-    }
-
-    convo.messages.add(message);
+    convo.messages.add(placeholder);
     convo.lastActivityAt = now;
     notifyListeners();
 
-    // Persisted BEFORE the network is touched (APP-08 step 2). Anything held
-    // only in memory is lost the moment the app is backgrounded, because
-    // _reloadVolatileStateFromDisk replaces conversations wholesale with the
-    // disk copy on resume -- so a message that exists only in memory while its
-    // send is in flight simply vanishes, which is exactly what happened before
-    // this line existed.
-    await LocalStateStore.saveProfile(state);
-
-    await _deliver(convo, message, attachment);
+    Object? error;
+    try {
+      await _sendViaCore(
+        peerAccountId,
+        text,
+        replyToId: quoted?.id,
+        replyPreviewText: quoted?.text,
+        replyPreviewMine: quoted?.mine,
+        attachment: attachment,
+      );
+    } catch (e) {
+      error = e;
+      lastError = 'send failed: ${describeError(e)}';
+    } finally {
+      convo.messages.remove(placeholder);
+      applyCoreChat(state, coreAccount, peerAccountId);
+    }
+    if (error == null) lastError = null;
+    notifyListeners();
+    if (error != null) throw error;
   }
 
   /// Re-sends a message whose send failed, including one composed in an
-  /// earlier run of the app (APP-08 step 2).
+  /// earlier run of the app. Nothing to recover from disk any more -- the
+  /// core kept the attachment bytes (if any) itself the whole time, see
+  /// freizone-server's pkg/client.RetryMessage.
   Future<void> retrySend(String peerAccountId, String messageId) async {
     final convo = state.conversations[peerAccountId];
     if (convo == null) return;
     final message = convo.messageById(messageId);
     if (message == null || !message.hasFailed) return;
 
-    final attachment = await _recoverAttachment(convo.id, message);
-    if (message.hasAttachments && attachment == null) {
-      // Re-sending the caption alone would quietly deliver a different
-      // message than the one the user composed, so refuse instead.
-      message.sendError = 'The picture is no longer available to resend.';
-      notifyListeners();
-      return;
-    }
-
     message.sendState = MessageSendState.pending;
     message.sendError = null;
     notifyListeners();
-    // Same reason as in sendMessage: in flight is a state that has to survive
-    // being backgrounded, since resuming re-reads conversations from disk.
-    await LocalStateStore.saveProfile(state);
 
-    await _deliver(convo, message, attachment);
-  }
-
-  /// The picture bytes a retry needs, from memory if this run composed the
-  /// message and from disk otherwise.
-  ///
-  /// Reading it back is what makes an unsent message durable at all. The
-  /// sender's own copy is written *before* the pending bubble first paints
-  /// (see [sendMessage]), so by the time anything can fail it is already
-  /// there -- and its metadata rode along in the message's own placeholder
-  /// attachment entry, which is now persisted with it.
-  /// [chatId] is the directory the sender's own copy lives in -- a peer account
-  /// id for a one-to-one conversation, a group id for a group.
-  Future<OutgoingAttachment?> _recoverAttachment(
-    String chatId,
-    StoredMessage message,
-  ) async {
-    if (!message.hasAttachments) return null;
-    final held = _outgoingAttachments[message.id];
-    if (held != null) return held;
-
-    final reference = message.attachments.first;
     try {
-      final media = await MediaStore.instance();
-      final file = media.fileFor(
-        accountId: state.accountId,
-        chatId: chatId,
-        messageId: message.id,
-      );
-      if (!await file.exists()) return null;
-
-      final recovered = OutgoingAttachment(
-        bytes: await file.readAsBytes(),
-        mimeType: reference.mimeType,
-        width: reference.width,
-        height: reference.height,
-        thumb: reference.thumb,
-      );
-      _outgoingAttachments[message.id] = recovered;
-      return recovered;
-    } catch (_) {
-      // Unreadable for any reason is the same as absent: the caller refuses
-      // to send the caption on its own rather than guessing.
-      return null;
+      await coreAccount.retry(peerAccountId, messageId);
+      lastError = null;
+    } catch (e) {
+      lastError = 'send failed: ${describeError(e)}';
+      rethrow;
+    } finally {
+      applyCoreChat(state, coreAccount, peerAccountId);
+      notifyListeners();
     }
   }
 
-  /// Retries everything still unsent, oldest first, one chat at a time
-  /// (APP-08 step 2) -- one-to-one messages, group messages, and the group
-  /// facts somebody was never told (see [_payGroupSnapshotDebts]).
-  ///
-  /// Called after state is loaded and whenever the stream reconnects, which
-  /// are exactly the two moments something that failed for want of a network
-  /// might now succeed. Per chat the order is strictly oldest-first
-  /// and sequential, so a flush cannot deliver a backlog out of order or
-  /// enter the same ratchet twice -- [_encryptAndSend] serializes per peer,
-  /// but only ordering the retries keeps them in the order they were typed.
+  /// Retries everything still unsent, oldest first, one chat at a time --
+  /// one-to-one messages and group messages. Called after state is loaded and
+  /// whenever the stream reconnects, which are exactly the two moments
+  /// something that failed for want of a network might now succeed --
+  /// reconnecting is also what settles any group snapshot debt on its own,
+  /// see [CoreAccount.maintain] in _startStream's onConnected.
   Future<void> flushOutbox() async {
     for (final convo in state.conversations.values.toList()) {
       final unsent = convo.messages
@@ -4192,6 +3941,7 @@ class AppSession extends ChangeNotifier {
         _outboxAttempts[message.id] = attempts + 1;
         try {
           await retrySend(convo.peerAccountId, message.id);
+          _outboxAttempts.remove(message.id);
         } catch (_) {
           // retrySend has already recorded the failure on the message; a
           // flush must keep going so one dead peer cannot hold up the rest.
@@ -4218,97 +3968,78 @@ class AppSession extends ChangeNotifier {
         if (attempts >= _maxOutboxAttempts) continue;
         _outboxAttempts[message.id] = attempts + 1;
         try {
-          // Addresses only the copies that never arrived (see _fanOut), so a
-          // retry cannot deliver a second copy to a member who already has it.
+          // Addresses only the copies that never arrived (see
+          // pkg/client.RetryGroupMessage), so a retry cannot deliver a second
+          // copy to a member who already has it.
           await retryGroupSend(chat.groupId, message.id);
+          _outboxAttempts.remove(message.id);
         } catch (_) {
           // Same reasoning as above: one unreachable member must not hold up
           // the rest of the flush.
         }
       }
     }
-
-    await _payGroupSnapshotDebts();
   }
 
-  /// The network half of a send, shared by [sendMessage] and [retrySend]:
-  /// resolve the peer, upload the picture if it hasn't been uploaded yet,
-  /// then encrypt and post -- resolving [message]'s send state either way.
-  Future<void> _deliver(
-    Conversation convo,
-    StoredMessage message,
+  /// Sends into [chatId] -- a peer account id or a group id, the one
+  /// namespace both share -- through the core. [CoreAccount.send] takes a
+  /// path for an attachment, not bytes, since the native boundary reads the
+  /// file itself; [attachment]'s bytes go to a temporary file first, deleted
+  /// again once this call returns either way. The core makes its own durable
+  /// copy before touching the network (see pkg/client.SendText's own doc
+  /// comment on why), so there is nothing left in the temporary file worth
+  /// keeping once it has been read.
+  Future<void> _sendViaCore(
+    String chatId,
+    String text, {
+    String? replyToId,
+    String? replyPreviewText,
+    bool? replyPreviewMine,
     OutgoingAttachment? attachment,
-  ) async {
-    try {
-      await _ensurePeerDeviceResolved(convo.peer);
-
-      // Uploaded BEFORE the message is sent: the message carries the blob
-      // id, so publishing it first would briefly point at something that
-      // doesn't exist yet. Skipped when a previous attempt already got a
-      // blob id and only the POST failed, so a retry can't leak a second
-      // copy of the same picture onto the recipient's server.
-      final uploaded =
-          message.attachments.isNotEmpty &&
-          message.attachments.first.blobId.isNotEmpty;
-      if (attachment != null && !uploaded) {
-        message.attachments = [await _uploadAttachment(convo, attachment)];
+  }) async {
+    String? mediaPath;
+    String? thumbPath;
+    if (attachment != null) {
+      final dir = await getTemporaryDirectory();
+      final base =
+          '${dir.path}${Platform.pathSeparator}${generateMessageId()}';
+      mediaPath = '$base.img';
+      await File(mediaPath).writeAsBytes(attachment.bytes);
+      final thumb = attachment.thumb;
+      if (thumb != null) {
+        thumbPath = '$base.thumb';
+        await File(thumbPath).writeAsBytes(thumb);
       }
-
-      // Flipped relative to our own `replyPreviewMine`: the recipient reads
-      // this same field as "mine" from *their* perspective, where the roles
-      // are swapped (see message_content.dart).
-      final wirePreview = message.replyToId == null
-          ? null
-          : ReplyPreview(
-              text: message.replyPreviewText ?? '',
-              mine: !(message.replyPreviewMine ?? false),
-            );
-
-      final content = MessageContent(
-        id: message.id,
-        text: message.text,
-        attachments: message.attachments,
-        replyToId: message.replyToId,
-        replyPreview: wirePreview,
-        // Sent on every cross-server message (not just the first), so the
-        // recipient's knowledge of where to reach us for a reply
-        // self-heals even if their local state is ever lost -- see
-        // message_content.dart.
-        senderServer: convo.peerServer != null ? state.server : null,
-        sentAt: message.timestamp,
-      );
-
-      await _encryptAndSend(
-        convo.peer,
-        content.encode(),
-        messageId: message.id,
-      );
-    } catch (e) {
-      message.sendState = MessageSendState.failed;
-      message.sendError = describeError(e);
-      lastError = 'send failed: ${describeError(e)}';
-      notifyListeners();
-      // The failure is persisted too, or the outbox has nothing to retry
-      // from: without this the message is memory-only and the next resume
-      // drops it (see _reloadVolatileStateFromDisk). Saving must not mask
-      // the original error, so it is best-effort and the rethrow stands.
-      try {
-        await LocalStateStore.saveProfile(state);
-      } catch (_) {
-        // Nothing useful to do: the send already failed, and the caller is
-        // about to hear about that.
-      }
-      rethrow;
     }
-
-    message.sendState = MessageSendState.sent;
-    message.sendError = null;
-    _outgoingAttachments.remove(message.id);
-    _outboxAttempts.remove(message.id);
-    await LocalStateStore.saveProfile(state);
-
-    lastError = null;
-    notifyListeners();
+    try {
+      await coreAccount.send(
+        chatId,
+        text,
+        replyToId: replyToId,
+        replyPreviewText: replyPreviewText,
+        replyPreviewMine: replyPreviewMine,
+        mediaPath: mediaPath,
+        thumbPath: thumbPath,
+        mimeType: attachment?.mimeType,
+        width: attachment?.width ?? 0,
+        height: attachment?.height ?? 0,
+      );
+    } finally {
+      if (mediaPath != null) {
+        try {
+          await File(mediaPath).delete();
+        } catch (_) {
+          // A leftover temp file costs disk space, never correctness.
+        }
+      }
+      if (thumbPath != null) {
+        try {
+          await File(thumbPath).delete();
+        } catch (_) {
+          // Same as above.
+        }
+      }
+    }
   }
 
   /// The attachment entry a still-uploading picture carries: everything the
@@ -4762,8 +4493,8 @@ class AppSession extends ChangeNotifier {
   /// Re-checks every conversation's delivered/read markers against its
   /// locally known message history and re-fires any receipt that never
   /// got through -- the self-heal for _sendReceipt's silent failures.
-  /// Called on every SSE (re)connect (see _startStream), mirroring
-  /// topUpOneTimePrekeysIfNeeded's own "init + reconnect" trigger. A read
+  /// Called on every SSE (re)connect (see _startStream), the same
+  /// "init + reconnect" trigger reassertPrekeyCertificates runs on. A read
   /// receipt is only retried once the conversation is confirmed actually
   /// read locally (!convo.hasUnread, set unconditionally by
   /// enterConversation regardless of whether its own send succeeded) --
@@ -4858,6 +4589,7 @@ class AppSession extends ChangeNotifier {
   void dispose() {
     _reachabilityGraceTimer?.cancel();
     _sse?.close();
+    core.coreClose(coreAccount.handle);
     api.close();
     for (final client in _peerApiClients.values) {
       client.close();

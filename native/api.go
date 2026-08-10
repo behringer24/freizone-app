@@ -349,6 +349,9 @@ type coreRetryRequest struct {
 	MessageID string `json:"message_id"`
 }
 
+// doCoreRetry dispatches on the chat id, same as doCoreSend: a group id and a
+// peer account id share one namespace, so which retry applies is exact rather
+// than a guess.
 func doCoreRetry(req coreRetryRequest) (any, error) {
 	entry, err := lookupHandle(req.Handle)
 	if err != nil {
@@ -357,7 +360,12 @@ func doCoreRetry(req coreRetryRequest) (any, error) {
 	ctx, cancel := callContext()
 	defer cancel()
 
-	res, err := entry.client.RetryMessage(ctx, req.ChatID, req.MessageID)
+	var res client.SendResult
+	if client.IsGroupID(req.ChatID) {
+		res, err = entry.client.RetryGroupMessage(ctx, req.ChatID, req.MessageID)
+	} else {
+		res, err = entry.client.RetryMessage(ctx, req.ChatID, req.MessageID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -577,13 +585,18 @@ func doCoreAttachmentPath(req coreAttachmentRequest) (any, error) {
 	ctx, cancel := callContext()
 	defer cancel()
 
-	server := ""
-	if !client.IsGroupID(req.ChatID) {
-		if convo, err := entry.client.Conversation(req.ChatID); err == nil && convo != nil {
-			server = convo.PeerServer
-		}
-	}
-	if _, err := entry.client.EnsureAttachment(ctx, req.ChatID, req.MessageID, server, *attachment); err != nil {
+	// A blob always lives on the RECIPIENT's own server -- the sender
+	// federated-uploads it there, precisely so the recipient never has to
+	// reach the sender's server to read something the sender sent (see
+	// pkg/client/blobs.go's package comment and UploadAttachment, which
+	// uploads to the recipient device's server, not the sender's own).
+	// This side is always the recipient once a message has arrived, so the
+	// fetch below is always local -- convo.PeerServer names where the
+	// *sender* lives, which is a different server than the blob for exactly
+	// the federated case this mattered for, and passing it here misrouted
+	// the download through federated auth to a server that never received
+	// this blob and answered 401 rather than "found nothing".
+	if _, err := entry.client.EnsureAttachment(ctx, req.ChatID, req.MessageID, "", *attachment); err != nil {
 		return nil, err
 	}
 	return attachmentPathResponse{Path: entry.client.AttachmentPath(req.ChatID, req.MessageID)}, nil
