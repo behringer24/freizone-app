@@ -25,6 +25,7 @@ import 'dart:isolate';
 import 'package:path_provider/path_provider.dart';
 
 import '../ffi/freizone_core.dart';
+import '../ffi/freizone_core_exception.dart';
 import 'api_client.dart';
 
 /// What one blocking `CorePoll` returned.
@@ -224,7 +225,18 @@ class CoreStream {
       // whatever ended the loop above -- a clean [close], a poll that threw,
       // the core giving up -- only has to release the subscriber slot, not
       // tear down sends and reads that may still be using the same handle.
-      core.coreStreamStop(handle);
+      //
+      // Unless the handle is already gone, which is not a failure: this loop
+      // keeps running after [close] returns, so a teardown that closes the
+      // handle straight afterwards (AppSession.dispose does, and cannot await
+      // this) races it here -- and by then the handle being closed has already
+      // released the slot this call exists to release. Swallowed rather than
+      // left to surface as an unhandled async error nobody can act on.
+      try {
+        core.coreStreamStop(handle);
+      } on FreizoneCoreException {
+        // Nothing to stop.
+      }
     }
   }
 
