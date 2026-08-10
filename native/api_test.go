@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -250,6 +251,24 @@ func TestChatIdsDistinguishGroupsFromPeers(t *testing.T) {
 	}
 	if !client.IsGroupID(groupIDForTest(t)) {
 		t.Error("a group id was not recognised")
+	}
+}
+
+// A retry dispatches on the chat id, same as a send -- proven here by which
+// error comes back for a message that was never sent (no network needed:
+// each function fails before touching one), since RetryMessage and
+// RetryGroupMessage phrase "no such message" differently.
+func TestDoCoreRetryDispatchesOnChatID(t *testing.T) {
+	handle, _ := offlineHandle(t)
+
+	_, err := doCoreRetry(coreRetryRequest{Handle: handle, ChatID: "qpeeraccountid000000x", MessageID: "m1"})
+	if err == nil || !strings.Contains(err.Error(), "in the chat with") {
+		t.Errorf("a peer id should dispatch to RetryMessage, got: %v", err)
+	}
+
+	_, err = doCoreRetry(coreRetryRequest{Handle: handle, ChatID: groupIDForTest(t), MessageID: "m1"})
+	if err == nil || !strings.Contains(err.Error(), "in group") {
+		t.Errorf("a group id should dispatch to RetryGroupMessage, got: %v", err)
 	}
 }
 

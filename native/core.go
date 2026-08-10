@@ -333,3 +333,10 @@ func CoreMaintain(cReq *C.char) *C.char { return jsonCall(cReq, doCoreMaintain) 
 
 //export CoreResetSession
 func CoreResetSession(cReq *C.char) *C.char { return jsonCall(cReq, doCoreResetSession) }
+
+// CoreSync drains this device's queued messages the same way the live poll
+// loop handles a stream message, for a caller with no stream open at all --
+// the background push wake (see push_manager.dart). Blocking.
+//
+//export CoreSync
+func CoreSync(cReq *C.char) *C.char { return jsonCall(cReq, doCoreSync) }

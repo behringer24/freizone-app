@@ -349,6 +349,9 @@ type coreRetryRequest struct {
 	MessageID string `json:"message_id"`
 }
 
+// doCoreRetry dispatches on the chat id, same as doCoreSend: a group id and a
+// peer account id share one namespace, so which retry applies is exact rather
+// than a guess.
 func doCoreRetry(req coreRetryRequest) (any, error) {
 	entry, err := lookupHandle(req.Handle)
 	if err != nil {
@@ -357,7 +360,12 @@ func doCoreRetry(req coreRetryRequest) (any, error) {
 	ctx, cancel := callContext()
 	defer cancel()
 
-	res, err := entry.client.RetryMessage(ctx, req.ChatID, req.MessageID)
+	var res client.SendResult
+	if client.IsGroupID(req.ChatID) {
+		res, err = entry.client.RetryGroupMessage(ctx, req.ChatID, req.MessageID)
+	} else {
+		res, err = entry.client.RetryMessage(ctx, req.ChatID, req.MessageID)
+	}
 	if err != nil {
 		return nil, err
 	}

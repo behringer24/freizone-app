@@ -16,7 +16,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -235,7 +235,7 @@ type corePollRequest struct {
 type pollEvent struct {
 	Kind string `json:"kind"`
 
-	Message *pollMessage `json:"message,omitempty"`
+	Outcome *pollOutcome `json:"outcome,omitempty"`
 
 	// Error is present for "failed". A Go error cannot cross the boundary, so
 	// this is its text -- for logging and for the app's own failure notice,
@@ -243,12 +243,26 @@ type pollEvent struct {
 	Error string `json:"error,omitempty"`
 }
 
-type pollMessage struct {
-	MessageID       string          `json:"message_id"`
-	SenderAccountID string          `json:"sender_account_id"`
-	SenderDeviceID  string          `json:"sender_device_id"`
-	SentAt          string          `json:"sent_at"`
-	Payload         json.RawMessage `json:"payload"`
+// pollOutcome is what one envelope turned into, after HandleIncoming has
+// already decided everything about it: decrypted, folded if it was a group
+// fact, receipted, acknowledged. Deliberately not the envelope itself -- the
+// shell has nothing left to decide, only somewhere to refresh and (sometimes)
+// someone to tell.
+type pollOutcome struct {
+	// ChatID is which chat changed -- a peer account id or a group id, the one
+	// namespace both share -- so the shell knows what to re-read. Empty for a
+	// duplicate or a failed attempt: nothing changed, nothing to refresh.
+	ChatID string `json:"chat_id,omitempty"`
+
+	// Notify is whether this is worth interrupting the user for. False for the
+	// ordinary "something changed, redraw the chat" case -- a receipt, a
+	// non-invite group fact, a message into the chat already on screen.
+	Notify bool `json:"notify,omitempty"`
+
+	// Invitation: Notify is true because this was an invitation into a group
+	// new to this account, not a message. Changes only the wording; the shell
+	// still opens the group, not a message.
+	Invitation bool `json:"invitation,omitempty"`
 }
 
 type corePollResponse struct {
@@ -294,7 +308,7 @@ func doCorePoll(req corePollRequest) (any, error) {
 		if !ok {
 			return &corePollResponse{Events: out, Streaming: false}, nil
 		}
-		out = append(out, convertEvent(ev))
+		out = append(out, convertEvent(entry, ev))
 	case <-timer.C:
 		return &corePollResponse{Events: out, Streaming: true}, nil
 	}
@@ -306,25 +320,31 @@ func doCorePoll(req corePollRequest) (any, error) {
 			if !ok {
 				return &corePollResponse{Events: out, Streaming: false}, nil
 			}
-			out = append(out, convertEvent(ev))
+			out = append(out, convertEvent(entry, ev))
 		default:
 			return &corePollResponse{Events: out, Streaming: true}, nil
 		}
 	}
 }
 
-func convertEvent(ev client.StreamEvent) pollEvent {
+// receiveNetworkTimeout bounds the ack and the receipt a handled envelope
+// triggers -- both best-effort, so a slow or dead connection delays the next
+// poll iteration rather than the app.
+const receiveNetworkTimeout = 15 * time.Second
+
+func convertEvent(entry *coreHandle, ev client.StreamEvent) pollEvent {
 	switch ev.Kind {
 	case client.StreamConnected:
 		return pollEvent{Kind: "connected"}
 	case client.StreamMessage:
-		return pollEvent{Kind: "message", Message: &pollMessage{
-			MessageID:       ev.Message.MessageID,
-			SenderAccountID: ev.Message.SenderAccountID,
-			SenderDeviceID:  ev.Message.SenderDeviceID,
-			SentAt:          ev.Message.SentAt.UTC().Format(time.RFC3339Nano),
-			Payload:         ev.Message.Payload,
-		}}
+		entry.mu.Lock()
+		openChatID := entry.openChatID
+		entry.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), receiveNetworkTimeout)
+		defer cancel()
+		outcome := handleAndAck(ctx, entry.client, ev.Message, client.ReceiveOptions{OpenChatID: openChatID})
+		return pollEvent{Kind: "message", Outcome: &outcome}
 	case client.StreamDisconnected:
 		// Deliberately carries no error text even when one is set. A stream
 		// that came up and then ended is a resume from background or a blip,
@@ -339,5 +359,116 @@ func convertEvent(ev client.StreamEvent) pollEvent {
 		return out
 	default:
 		return pollEvent{Kind: "unknown"}
+	}
+}
+
+// handleAndAck runs one envelope through HandleIncoming and does everything a
+// caller owes it from there: acknowledges it to the server per the rule
+// HandleIncoming documents (any result, or a failure that has now been given
+// up on), and sends back whatever receipt the result calls for -- HandleIncoming
+// itself does no network I/O, so nothing else does either unless this does.
+//
+// Shared by the live poll loop (convertEvent, above) and the background sync
+// entry point (doCoreSync, api.go) so the two consumers of a device's queue
+// cannot drift on what "handled" means -- which is exactly the defect this
+// whole item exists to remove.
+func handleAndAck(ctx context.Context, c *client.Client, msg client.IncomingMessage, opts client.ReceiveOptions) pollOutcome {
+	res, err := c.HandleIncoming(msg, opts)
+
+	var decryptErr *client.DecryptError
+	shouldAck := err == nil || (errors.As(err, &decryptErr) && decryptErr.GaveUp)
+	if shouldAck {
+		// Best-effort by design (see AckMessage): a lost ack means redelivery,
+		// which the duplicate check on the next attempt absorbs.
+		_ = c.AckMessage(ctx, msg.MessageID)
+	}
+	if err != nil || res.Duplicate {
+		return pollOutcome{}
+	}
+
+	sendReceiptFor(ctx, c, res)
+
+	out := pollOutcome{Notify: res.ShouldNotify}
+	if res.Group != nil {
+		out.ChatID = res.Group.GroupID
+		out.Invitation = res.Group.Invited
+	} else {
+		out.ChatID = res.PeerAccountID
+	}
+	return out
+}
+
+// coreSyncResponse is what one background-wake sync found.
+type coreSyncResponse struct {
+	Outcomes []pollOutcome `json:"outcomes"`
+
+	// Problems is best-effort housekeeping (see doCoreMaintain) that did not
+	// work -- reported rather than failing the whole sync, since one part
+	// failing (an unreachable server for the prekey top-up, say) must not stop
+	// the messages that were fetched from being handled.
+	Problems []string `json:"problems,omitempty"`
+}
+
+// doCoreSync is the background-wake counterpart to the live poll loop: fetch
+// whatever is queued for this device, run each envelope through the same
+// HandleIncoming-then-ack-then-receipt path convertEvent's "message" case
+// uses, and report what came of each.
+//
+// A separate entry point rather than reusing doCorePoll, because a wake has no
+// open stream to poll -- only a queue to drain once. Sharing handleAndAck with
+// the live path is the point: a message that arrives while the app is
+// backgrounded has to be decided by exactly the same rules as one that arrives
+// while it is open, or the two paths drift back apart into the two
+// implementations this whole item exists to remove -- which is exactly what
+// the previous, Dart-side background sync did.
+func doCoreSync(req coreHandleRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+
+	fetchCtx, cancel := callContext()
+	msgs, err := entry.client.FetchMessages(fetchCtx)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+
+	entry.mu.Lock()
+	openChatID := entry.openChatID
+	entry.mu.Unlock()
+
+	outcomes := make([]pollOutcome, 0, len(msgs))
+	for _, msg := range msgs {
+		ctx, cancel := context.WithTimeout(context.Background(), receiveNetworkTimeout)
+		outcomes = append(outcomes, handleAndAck(ctx, entry.client, msg, client.ReceiveOptions{OpenChatID: openChatID}))
+		cancel()
+	}
+
+	// The same housekeeping a live reconnect does (see doCoreMaintain): a wake
+	// is exactly the kind of fresh-connection moment it exists for, and the
+	// prekey top-up in particular must run *somewhere* for an account that is
+	// only ever opened by a wake and never brought to the foreground.
+	var problems []string
+	if maintained, err := doCoreMaintain(coreHandleRequest{Handle: req.Handle}); err == nil {
+		if m, ok := maintained.(*maintainResponse); ok {
+			problems = m.Problems
+		}
+	}
+
+	return coreSyncResponse{Outcomes: outcomes, Problems: problems}, nil
+}
+
+// sendReceiptFor confirms delivery back to whoever is owed it. Best-effort and
+// swallowed on failure: a receipt is a UI nicety on the recipient's side, never
+// something the ratchet or the transcript depends on, and there is nowhere
+// here to retry it from -- see docs/design/23-shared-client-core.md.
+func sendReceiptFor(ctx context.Context, c *client.Client, res client.ReceiveResult) {
+	if res.Group != nil && res.Group.DeliveredUpTo != nil {
+		_ = c.SendGroupReceipt(ctx, res.Group.GroupID, res.PeerAccountID, client.ReceiptDelivered, *res.Group.DeliveredUpTo)
+		return
+	}
+	if res.DeliveredUpTo != nil {
+		_ = c.SendReceipt(ctx, res.PeerAccountID, client.ReceiptDelivered, *res.DeliveredUpTo)
 	}
 }

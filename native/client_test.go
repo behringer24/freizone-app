@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/behringer24/freizone-server/pkg/client"
 )
 
 // These tests drive the FFI bridge through its cgo-free do* functions, which is
@@ -174,21 +177,121 @@ func TestPollReturnsABatch(t *testing.T) {
 		t.Fatalf("doCoreStreamStart: %v", err)
 	}
 
-	// Collect until every frame has arrived, however the batches fall.
-	seen := map[string]bool{}
+	// Collect until every frame has arrived, however the batches fall. The
+	// payloads are not valid envelopes -- this test is about batching the
+	// crossing, not about what HandleIncoming makes of any one of them -- so
+	// each simply produces an event with an (empty) outcome rather than an
+	// error the poll would have to surface.
+	seen := 0
 	deadline := time.Now().Add(10 * time.Second)
-	for len(seen) < frames && time.Now().Before(deadline) {
+	for seen < frames && time.Now().Before(deadline) {
 		for _, ev := range poll(t, handle, 500).Events {
 			if ev.Kind == "message" {
-				if ev.Message == nil {
-					t.Fatal("a message event arrived without a message")
+				if ev.Outcome == nil {
+					t.Fatal("a message event arrived without an outcome")
 				}
-				seen[ev.Message.MessageID] = true
+				seen++
 			}
 		}
 	}
-	if len(seen) != frames {
-		t.Errorf("want all %d messages, got %d: %v", frames, len(seen), seen)
+	if seen != frames {
+		t.Errorf("want all %d messages, got %d", frames, seen)
+	}
+}
+
+// handleAndAck must not acknowledge an envelope that has merely failed once --
+// it has to stay on the server queue so it can be retried -- but must
+// acknowledge it once HandleIncoming reports it as given up on, or a poison
+// envelope neither this device nor any other consumer of it (see doCoreSync)
+// could ever clear from the queue.
+func TestHandleAndAckOnlyAcksOnceTheEnvelopeIsGivenUp(t *testing.T) {
+	var acked int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			atomic.AddInt32(&acked, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}")) //nolint:errcheck // test server, best-effort write
+	}))
+	defer srv.Close()
+
+	handle := openHandle(t)
+	setIdentity(t, handle, srv.URL)
+	entry, err := lookupHandle(handle)
+	if err != nil {
+		t.Fatalf("lookupHandle: %v", err)
+	}
+
+	// Not a valid envelope -- no session with this sender exists and there is
+	// no prekey block to start one, which fails deterministically without any
+	// server involved. The same message id every time: HandleIncoming only
+	// marks a message processed on a *successful* decrypt, so a failed one
+	// stays retryable and this is what lets the same envelope fail repeatedly
+	// rather than being seen as a fresh one each time.
+	msg := client.IncomingMessage{
+		MessageID:       "poison",
+		SenderAccountID: "fz1stranger",
+		Payload:         json.RawMessage(`{"v":1}`),
+	}
+
+	for i := 0; i < client.MaxDecryptAttempts-1; i++ {
+		handleAndAck(t.Context(), entry.client, msg, client.ReceiveOptions{})
+	}
+	if got := atomic.LoadInt32(&acked); got != 0 {
+		t.Fatalf("an envelope not yet given up on must not be acknowledged, got %d acks", got)
+	}
+
+	handleAndAck(t.Context(), entry.client, msg, client.ReceiveOptions{})
+	if got := atomic.LoadInt32(&acked); got != 1 {
+		t.Errorf("the envelope should be acknowledged exactly once it is given up on, got %d acks", got)
+	}
+}
+
+// The background-wake counterpart to the live poll loop drains the queue the
+// same way: fetch, handle, ack -- exercised here against messages that fail to
+// decrypt (no server round trip needed to prove the fetch-and-ack loop runs)
+// rather than against a real session, which pkg/client's own tests already
+// cover for HandleIncoming itself.
+func TestCoreSyncFetchesHandlesAndAcks(t *testing.T) {
+	var acked int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/messages":
+			fmt.Fprint(w, `[
+				{"message_id":"m1","sender_account_id":"fz1stranger","sent_at":"2026-08-07T09:00:00Z","payload":{"v":1}},
+				{"message_id":"m2","sender_account_id":"fz1stranger","sent_at":"2026-08-07T09:00:01Z","payload":{"v":1}}
+			]`)
+		case r.Method == http.MethodDelete:
+			atomic.AddInt32(&acked, 1)
+			fmt.Fprint(w, "{}")
+		default:
+			// Everything doCoreMaintain's housekeeping tries next (prekey
+			// status, group list, ...) is allowed to fail -- it is
+			// best-effort and reported as a problem, not an error -- so any
+			// other path just needs to answer *something* the transport
+			// layer accepts as a real server, never a network error.
+			fmt.Fprint(w, "{}")
+		}
+	}))
+	defer srv.Close()
+
+	handle := openHandle(t)
+	setIdentity(t, handle, srv.URL)
+
+	resp, err := doCoreSync(coreHandleRequest{Handle: handle})
+	if err != nil {
+		t.Fatalf("doCoreSync: %v", err)
+	}
+	got := resp.(coreSyncResponse)
+	if len(got.Outcomes) != 2 {
+		t.Fatalf("want one outcome per fetched message, got %d", len(got.Outcomes))
+	}
+	// Neither payload is a valid envelope, so a message given up on this
+	// first attempt is not acknowledged yet -- exactly [handleAndAck]'s rule,
+	// exercised here through doCoreSync rather than through the stream.
+	if got := atomic.LoadInt32(&acked); got != 0 {
+		t.Errorf("an envelope not yet given up on must not be acknowledged, got %d acks", got)
 	}
 }
 
