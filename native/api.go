@@ -70,6 +70,17 @@ type chatSummary struct {
 	Invited bool `json:"invited,omitempty"`
 
 	Dissolved bool `json:"dissolved,omitempty"`
+
+	// PinnedMessageIDs and the two watermarks are what a screen needs and the
+	// summary would otherwise force a second call for. Cheap here, because the
+	// transcript has already been read for the preview.
+	PinnedMessageIDs []string `json:"pinned_message_ids,omitempty"`
+
+	// PeerDeliveredUpTo and PeerReadUpTo are how far the peer has got with our
+	// messages, for the ticks. One-to-one only: a group has one per member and
+	// they come with the membership.
+	PeerDeliveredUpTo string `json:"peer_delivered_up_to,omitempty"`
+	PeerReadUpTo      string `json:"peer_read_up_to,omitempty"`
 }
 
 func doCoreChats(req coreHandleRequest) (any, error) {
@@ -91,8 +102,10 @@ func doCoreChats(req coreHandleRequest) (any, error) {
 		row := chatSummary{
 			ChatID: convo.PeerAccountID, PeerServer: convo.PeerServer,
 			HasUnread: convo.HasUnread, Blocked: convo.Blocked,
-			PendingApproval: convo.PendingApproval,
-			LastActivityAt:  formatOptional(convo.LastActivityAt),
+			PendingApproval:   convo.PendingApproval,
+			LastActivityAt:    formatOptional(convo.LastActivityAt),
+			PeerDeliveredUpTo: formatOptional(convo.PeerDeliveredUpTo),
+			PeerReadUpTo:      formatOptional(convo.PeerReadUpTo),
 		}
 		if err := fillPreview(entry.client, &row); err != nil {
 			return nil, err
@@ -147,6 +160,12 @@ func doCoreChats(req coreHandleRequest) (any, error) {
 }
 
 func fillPreview(c *client.Client, row *chatSummary) error {
+	pinned, err := c.PinnedMessageIDs(row.ChatID)
+	if err != nil {
+		return err
+	}
+	row.PinnedMessageIDs = pinned
+
 	last, err := c.LastMessage(row.ChatID)
 	if err != nil || last == nil {
 		return err
