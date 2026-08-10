@@ -980,3 +980,24 @@ rather than riding along with the publicly-decodable attestation token.
   through until the UI reads from the core; `handleIncoming` comes back with
   that switch. The `openChatID` field stays, unused, because it belongs to the
   same step
+- 2026-08-10 — the cut, step 1 of 5: `lib/state/core_bridge.dart`, which fills
+  `AppState` from the core. `Conversation`, `GroupConversation` and
+  `StoredMessage` stay as the shapes widgets draw, so the 83 `session.state`
+  call sites are untouched — what changes is where their contents come from.
+  Rebuilt whole rather than merged, because a merge needs a per-field rule about
+  which side wins and the answer is always the core; rebuilding also makes a gap
+  loud instead of letting a stale copy look fine until a reinstall. The chat
+  summary gained pins and the two tick watermarks, which cost nothing extra
+  because the transcript has already been read for the preview. Unused so far:
+  steps 2–5 (stream, `_handleIncoming`, the send path, and stopping
+  `saveProfile`) are what make it live, and they only work together
+- **Stopped deliberately after step 1.** Steps 2–5 cannot be half-applied: the
+  bridge overwrites whatever the Dart send path writes, so a message would
+  appear and then vanish. Started them, then put the stream and the poll back to
+  where they were rather than leave the app not compiling. What is left is a
+  contained piece of work with the shape already established — one handle per
+  account owned by `AppSession` (two would be two clients over one directory,
+  each with its own idea of which envelopes it had processed), `_handleIncoming`
+  becoming a refresh, `sendMessage` going through `CoreAccount`, and
+  `saveProfile` becoming a no-op so the old profile freezes as the fallback
+  rather than being deleted

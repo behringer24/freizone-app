@@ -33,6 +33,9 @@ class ChatSummary {
     this.members = 0,
     this.invited = false,
     this.dissolved = false,
+    this.pinnedMessageIds = const [],
+    this.peerDeliveredUpTo,
+    this.peerReadUpTo,
   });
 
   factory ChatSummary.fromJson(Map<String, dynamic> j) => ChatSummary(
@@ -51,6 +54,10 @@ class ChatSummary {
     members: j['members'] as int? ?? 0,
     invited: j['invited'] as bool? ?? false,
     dissolved: j['dissolved'] as bool? ?? false,
+    pinnedMessageIds: ((j['pinned_message_ids'] as List<dynamic>?) ?? const [])
+        .cast<String>(),
+    peerDeliveredUpTo: _time(j['peer_delivered_up_to']),
+    peerReadUpTo: _time(j['peer_read_up_to']),
   );
 
   final String chatId;
@@ -80,6 +87,15 @@ class ChatSummary {
   final bool invited;
 
   final bool dissolved;
+
+  /// Carried on the summary because the transcript has already been read for
+  /// the preview, so answering costs nothing extra.
+  final List<String> pinnedMessageIds;
+
+  /// How far the peer has got with our messages, for the ticks. One-to-one
+  /// only: a group keeps one per member, and those come with the membership.
+  final DateTime? peerDeliveredUpTo;
+  final DateTime? peerReadUpTo;
 }
 
 /// One transcript line.
