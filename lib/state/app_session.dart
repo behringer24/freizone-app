@@ -50,10 +50,6 @@ import 'rekey_signal.dart';
 import 'session_recovery.dart';
 import 'stale_device.dart';
 
-/// How many one-time prekeys to generate and upload at once, mirroring
-/// cmd/devclient's defaultOneTimePrekeyBatch.
-const _oneTimePrekeyBatch = 10;
-
 /// The transcript marker for a secure session the user reset themselves --
 /// shown on both sides (the resetting device writes it in
 /// [AppSession.resetSecureSession], the peer when it accepts the re-key in
@@ -65,14 +61,6 @@ const String sessionResetMarker = 'Secure session was reset';
 /// didn't do this, and shouldn't be left wondering what they pressed.
 const String automaticRekeyMarker =
     'Secure session was re-established automatically';
-
-/// How low this device lets its own one-time-prekey pool get before
-/// [topUpOneTimePrekeysIfNeeded] tops it back up -- comfortably above the
-/// server's own lowOneTimePrekeyThreshold (internal/api/prekeys.go),
-/// which only exists as a fallback wake for a device that isn't checking
-/// on its own; a device that's actually in regular use should top up
-/// here, well before the server ever needs to nudge it.
-const _oneTimePrekeyLowWaterMark = 3;
 
 /// Which peer a decrypted message came from, and whether it clears the
 /// bar for a user-visible notification -- distinct from whether it was
@@ -659,15 +647,14 @@ Future<void> _writeAttachmentThumbs(
   }
 }
 
-/// Re-asserts [state]'s DH identity + signed-prekey certificates (using
-/// its already-held key material, unchanged -- never rotates anything)
-/// and tops up the one-time-prekey pool if the server reports it's
-/// running low. Called from [AppSession.init], on every SSE reconnect,
-/// and from a background push-wake sync (push_manager.dart, no live
-/// AppSession there), so it must not assume anything beyond [state]/
-/// [core]/[api]. No-ops before the very first prekey upload (AppSession
-/// .init handles that separately, unconditionally, the one time it's
-/// actually needed).
+/// Re-asserts [state]'s DH identity + signed-prekey certificates, using its
+/// already-held key material, unchanged -- never rotates anything, and no
+/// longer tops up the one-time-prekey pool itself (SRV-23: that raced
+/// coreAccount.maintain()'s own top-up, see the call site). Called from
+/// [AppSession.init] only now, so it must not assume anything beyond
+/// [state]/[core]/[api] -- but no-ops before the very first prekey upload
+/// (AppSession.init handles that separately, unconditionally, the one time
+/// it's actually needed).
 ///
 /// Re-sending the DH identity cert on every call, not just once at
 /// registration, is deliberately defensive, not redundant: found in
@@ -681,7 +668,7 @@ Future<void> _writeAttachmentThumbs(
 /// and re-uploading the SAME key material on every reconnect is cheap
 /// (one GET plus one small POST) and self-heals that class of drift the
 /// moment it happens, rather than needing a live incident to notice it.
-Future<void> topUpOneTimePrekeysIfNeeded(
+Future<void> reassertPrekeyCertificates(
   AppState state,
   FreizoneCore core,
   ApiClient api,
@@ -710,21 +697,21 @@ Future<void> topUpOneTimePrekeysIfNeeded(
     devicePriv: state.devicePriv,
   );
 
-  final remaining = await api.getPrekeyStatus(state.credentials);
-  final otpkDtos = <OneTimePrekeyDTO>[];
-  if (remaining < _oneTimePrekeyLowWaterMark) {
-    for (var i = remaining; i < _oneTimePrekeyBatch; i++) {
-      final kp = core.generateX25519KeyPair();
-      final keyId = state.nextOtpkKeyId;
-      state.nextOtpkKeyId++;
-      state.oneTimePrekeys[keyId] = OneTimePrekeyState(
-        pub: kp.pub,
-        priv: kp.priv,
-      );
-      otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
-    }
-  }
-
+  // One-time prekeys are no longer minted here (SRV-23, closing a gap the
+  // cut left open): this ran on every reconnect right alongside
+  // coreAccount.maintain(), which tops the pool up through
+  // pkg/client.TopUpOneTimePrekeys -- two independent minters racing the
+  // same server-side pool, each holding the private half of only the ones
+  // it minted itself. Whichever key a new contact's claim happened to land
+  // on, if it was one of *this* function's, the core had no private key for
+  // it and every first message to this device failed outright
+  // ("ratchet: initial message references one-time prekey N but no
+  // matching private key was provided") -- deterministically, for as long
+  // as this kept re-topping-up a pool the core already considered healthy.
+  // Always pass an empty list: the upload endpoint accepts one (see the
+  // no-op branch this replaces, which already sent one whenever the pool
+  // wasn't low), and the DH-identity/signed-prekey re-assertion below is
+  // this function's entire remaining job.
   await api.uploadPrekeys(
     creds: state.credentials,
     dhIdentityCert: DHIdentityCertDTO(
@@ -739,14 +726,8 @@ Future<void> topUpOneTimePrekeysIfNeeded(
       issuedAt: spkCert.issuedAt,
       signature: spkCert.signature,
     ),
-    oneTimePrekeys: otpkDtos,
+    oneTimePrekeys: const <OneTimePrekeyDTO>[],
   );
-  // Only when this actually minted keys. Saving unconditionally meant every
-  // reconnect and every push wake wrote the whole profile back -- including,
-  // from a stale in-memory copy, ratchet state another isolate had advanced
-  // in the meantime. Nothing to persist when no new prekey was generated: the
-  // upload above merely re-asserts existing material.
-  if (otpkDtos.isNotEmpty) await LocalStateStore.saveProfile(state);
 }
 
 /// Whether this session's own home server is currently reachable. Drives
@@ -1410,28 +1391,33 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  /// Uploads prekeys if this is the first run, tops up the one-time
-  /// prekey pool if it's already running low, opens this account's handle
+  /// Uploads prekeys if this is the first run, re-asserts the DH
+  /// identity/signed-prekey certs otherwise, opens this account's handle
   /// into the shared client core (SRV-23, the cut), then opens the live
   /// message stream. Call once, right after construction.
   Future<void> init() async {
-    // The prekey upload/top-up is network I/O against this account's home
-    // server and may fail if that server is down. It must NOT gate the
+    // The prekey upload/re-assertion is network I/O against this account's
+    // home server and may fail if that server is down. It must NOT gate the
     // rest of init: the SSE reconnect loop below is what tracks
     // reachability and recovers when the server returns, so it has to
     // start even on a dead server -- otherwise the account would be stuck
     // "connecting" forever with nothing ever retrying. onConnected re-runs
-    // the top-up, so a recovered server still gets its prekeys refreshed.
+    // it, so a recovered server still gets its certs refreshed.
     //
-    // Still Dart-side, deliberately: the core tops its own pool up once
-    // opened (see coreAccount.maintain, run on every reconnect below), but
-    // minting the very first signed prekey stays here rather than moving to
-    // RotatePrekeys for this pass -- see docs/design/23-shared-client-core.md.
+    // Still Dart-side, deliberately: minting the very first signed prekey
+    // stays here rather than moving to RotatePrekeys for this pass -- see
+    // docs/design/23-shared-client-core.md. The one-time-prekey pool is not
+    // -- that's coreAccount.maintain's job exclusively (run on every
+    // reconnect below, via pkg/client.TopUpOneTimePrekeys) now that this
+    // function no longer races it for the same pool with a private half
+    // only Dart held (SRV-23: found live, every first message from a new
+    // contact whose claim landed on one of this side's own kept failing to
+    // decrypt).
     try {
       if (state.signedPrekeyPub == null) {
         await _uploadPrekeys();
       } else {
-        await topUpOneTimePrekeysIfNeeded(state, core, api);
+        await reassertPrekeyCertificates(state, core, api);
       }
       prekeysReady = true;
     } catch (e) {
@@ -1563,18 +1549,17 @@ class AppSession extends ChangeNotifier {
     state.signedPrekeyPub = spk.pub;
     state.signedPrekeyPriv = spk.priv;
 
-    final otpkDtos = <OneTimePrekeyDTO>[];
-    for (var i = 0; i < _oneTimePrekeyBatch; i++) {
-      final kp = core.generateX25519KeyPair();
-      final keyId = state.nextOtpkKeyId;
-      state.nextOtpkKeyId++;
-      state.oneTimePrekeys[keyId] = OneTimePrekeyState(
-        pub: kp.pub,
-        priv: kp.priv,
-      );
-      otpkDtos.add(OneTimePrekeyDTO(keyId: keyId, pubKey: kp.pub));
-    }
-
+    // No one-time prekeys minted here (SRV-23, closing a gap the cut left
+    // open): the very first thing that opens this account's core handle,
+    // right below, is coreSetIdentity -- and the first reconnect after that
+    // runs coreAccount.maintain(), which tops the pool up itself through
+    // pkg/client.TopUpOneTimePrekeys. Minting a batch here too meant two
+    // independent minters claiming ids from the same server-side pool,
+    // each holding the private half of only the ones it minted -- so a
+    // contact whose claim landed on one of *these* had no private key
+    // waiting for it on the core's side, and their first message failed
+    // outright. Identity plus the signed prekey above is enough for the
+    // core to exist; it mints its own one-time prekeys from there.
     await api.uploadPrekeys(
       creds: state.credentials,
       dhIdentityCert: dhCertDto,
@@ -1585,7 +1570,7 @@ class AppSession extends ChangeNotifier {
         issuedAt: spkCert.issuedAt,
         signature: spkCert.signature,
       ),
-      oneTimePrekeys: otpkDtos,
+      oneTimePrekeys: const <OneTimePrekeyDTO>[],
     );
     await LocalStateStore.saveProfile(state);
   }
@@ -4508,8 +4493,8 @@ class AppSession extends ChangeNotifier {
   /// Re-checks every conversation's delivered/read markers against its
   /// locally known message history and re-fires any receipt that never
   /// got through -- the self-heal for _sendReceipt's silent failures.
-  /// Called on every SSE (re)connect (see _startStream), mirroring
-  /// topUpOneTimePrekeysIfNeeded's own "init + reconnect" trigger. A read
+  /// Called on every SSE (re)connect (see _startStream), the same
+  /// "init + reconnect" trigger reassertPrekeyCertificates runs on. A read
   /// receipt is only retried once the conversation is confirmed actually
   /// read locally (!convo.hasUnread, set unconditionally by
   /// enterConversation regardless of whether its own send succeeded) --
