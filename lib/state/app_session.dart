@@ -1718,7 +1718,18 @@ class AppSession extends ChangeNotifier {
   /// refresh whatever chat changed and, sometimes, say something about it --
   /// see [PollOutcome].
   void _handleIncoming(PollOutcome outcome) {
-    if (outcome.chatId.isEmpty) return; // a duplicate or a failed attempt
+    if (outcome.failed) {
+      // Logged, never shown and never acted on: the core has already decided
+      // whether to retry this envelope or acknowledge it away, and there is
+      // nothing a user could do about it. But a message that silently fails
+      // to decrypt is the hardest thing in this app to diagnose without it
+      // -- see PollOutcome.failure.
+      logDiagnostic(
+        'envelope from ${outcome.senderAccountId} not handled: ${outcome.failure}',
+      );
+      return;
+    }
+    if (outcome.chatId.isEmpty) return; // a duplicate
     applyCoreChat(state, coreAccount, outcome.chatId);
 
     if (outcome.notify) {

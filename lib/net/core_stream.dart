@@ -85,6 +85,8 @@ class PollOutcome {
     required this.notify,
     required this.invitation,
     required this.isGroup,
+    this.failure = '',
+    this.senderAccountId = '',
   });
 
   factory PollOutcome.fromJson(Map<String, dynamic> j) => PollOutcome(
@@ -92,6 +94,8 @@ class PollOutcome {
     notify: j['notify'] as bool? ?? false,
     invitation: j['invitation'] as bool? ?? false,
     isGroup: j['is_group'] as bool? ?? false,
+    failure: j['failure'] as String? ?? '',
+    senderAccountId: j['sender_account_id'] as String? ?? '',
   );
 
   /// Which chat changed -- a peer account id or a group id, the one namespace
@@ -113,6 +117,24 @@ class PollOutcome {
   /// AppState.groups to check against (the background wake, see
   /// push_manager.dart) still knows which kind of chat this is.
   final bool isGroup;
+
+  /// Why this envelope was not handled, or empty when it was. Diagnostic
+  /// only -- the core has already decided what to do about it (retry or
+  /// acknowledge away) by the time this arrives.
+  ///
+  /// Worth carrying at all because a message that fails to decrypt is
+  /// otherwise completely invisible from the app: no error anywhere, just a
+  /// message that never appears. Three separate diagnoses in one afternoon
+  /// began by rebuilding the native core with a temporary log statement, for
+  /// want of exactly this string.
+  final String failure;
+
+  /// Who a failed envelope came from. [chatId] is deliberately empty for one,
+  /// and an error text on its own does not say which conversation is broken.
+  final String senderAccountId;
+
+  /// Whether this is a failure rather than something that changed a chat.
+  bool get failed => failure.isNotEmpty;
 }
 
 /// What one queue drain found: the same [PollOutcome]s a streamed envelope
