@@ -738,12 +738,18 @@ Future<void> reassertPrekeyCertificates(
 enum ServerReachability { connecting, online, unreachable }
 
 class AppSession extends ChangeNotifier {
-  AppSession(this.state) {
-    api = ApiClient(baseUrl: state.server, core: core);
+  /// [core] is only ever passed by a test. On a device the library is found by
+  /// name, so the default is right; a host test has to hand over one opened
+  /// from a path, because an isolate is told the same way (see
+  /// FreizoneCore.libraryPath, and CoreAccount's construction in [init] --
+  /// it passes this instance's path on) and by name it would find nothing.
+  AppSession(this.state, {FreizoneCore? core})
+    : core = core ?? FreizoneCore() {
+    api = ApiClient(baseUrl: state.server, core: this.core);
   }
 
   final AppState state;
-  final FreizoneCore core = FreizoneCore();
+  final FreizoneCore core;
   late final ApiClient api;
   CoreStream? _sse;
 
@@ -1729,7 +1735,13 @@ class AppSession extends ChangeNotifier {
           peerAccountId: outcome.isGroup ? null : outcome.chatId,
           groupId: outcome.isGroup ? outcome.chatId : null,
           invitation: outcome.invitation,
-        ),
+        ).catchError((Object e) {
+          // Best-effort, like the receipt and the acknowledgement before it:
+          // the message is already stored and on screen, and a notification
+          // that could not be shown is not worth turning into an unhandled
+          // async error -- which is all this was, since nothing awaits it.
+          logDiagnostic('showing a message notification failed: $e');
+        }),
       );
     }
 
