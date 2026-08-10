@@ -23,6 +23,7 @@ import 'dart:isolate';
 
 import '../ffi/core_models.dart';
 import '../ffi/freizone_core.dart';
+import '../net/core_stream.dart';
 
 /// One open account, addressed by the handle the core gave us.
 class CoreAccount {
@@ -159,6 +160,27 @@ class CoreAccount {
     return MaintenanceReport.fromJson(raw);
   }
 
+  /// Drains whatever is queued for this device and does [maintain]'s
+  /// housekeeping afterwards, in one call -- the same path a push wake takes.
+  ///
+  /// Run on every (re)connect, and that is the point rather than an
+  /// optimisation: the live stream drops events rather than letting a slow
+  /// consumer stall the connection (pkg/client's Stream buffers 32 and
+  /// discards beyond that), and nothing re-pushes what it dropped. The server
+  /// only fires a push wake for a device with *no* stream open
+  /// (docs/PROTOCOL.md §7), so with the stream up there was no second path to
+  /// the queue at all: a dropped envelope sat there until the app happened to
+  /// restart. Fetching here closes that, and costs nothing when there is
+  /// nothing queued -- delivery is at-least-once by design, so an envelope the
+  /// stream already handled is recognised as the duplicate it is.
+  ///
+  /// Returns what the fetched envelopes turned into, for the caller to refresh
+  /// and notify on exactly as it does for a streamed one.
+  Future<SyncReport> sync() async {
+    final raw = await _run({'call': 'sync', 'handle': handle});
+    return SyncReport.fromJson(raw);
+  }
+
   Future<void> resetSession(String accountId) => _run({
     'call': 'reset_session',
     'handle': handle,
@@ -256,6 +278,8 @@ Map<String, dynamic> coreCallInIsolate(
       return core.coreAttachmentPathRaw(request);
     case 'maintain':
       return core.coreMaintainRaw({'handle': handle});
+    case 'sync':
+      return core.coreSyncRaw({'handle': handle});
     case 'reset_session':
       return core.coreResetSessionRaw(request);
     case 'group_create':

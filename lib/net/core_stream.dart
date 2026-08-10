@@ -114,6 +114,33 @@ class PollOutcome {
   final bool isGroup;
 }
 
+/// What one queue drain found: the same [PollOutcome]s a streamed envelope
+/// produces, plus whatever housekeeping went wrong alongside them.
+///
+/// One type for both callers of the core's sync entry point -- the push wake
+/// (push_manager.dart) and every stream (re)connect (CoreAccount.sync) --
+/// because they are the same work on the same path, and a second shape for it
+/// is how the two drifted apart before the cut.
+class SyncReport {
+  const SyncReport({this.outcomes = const [], this.problems = const []});
+
+  factory SyncReport.fromJson(Map<String, dynamic> j) => SyncReport(
+    outcomes: ((j['outcomes'] as List<dynamic>?) ?? const [])
+        .map((o) => PollOutcome.fromJson(o as Map<String, dynamic>))
+        .toList(),
+    problems: ((j['problems'] as List<dynamic>?) ?? const []).cast<String>(),
+  );
+
+  /// Everything the drain handled. Empty is the ordinary case for a queue
+  /// that had nothing in it, and must never read as a failure.
+  final List<PollOutcome> outcomes;
+
+  /// Best-effort housekeeping that did not work (see MaintenanceReport):
+  /// reported rather than thrown, since one part failing must not stop the
+  /// envelopes that were already fetched from being handled.
+  final List<String> problems;
+}
+
 /// How long one poll waits before coming back empty-handed. Long, because an
 /// idle account is the normal case and every return is an isolate spawn; short
 /// enough that [close] is not left waiting on it for long.
