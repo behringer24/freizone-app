@@ -30,6 +30,7 @@
 // needs directly from LocalStateStore/AppSettings.
 import 'dart:async';
 import 'dart:developer' as developer;
+import 'dart:isolate';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -505,30 +506,16 @@ Future<_WakeNotice?> _syncAccount(String accountId) async {
   final identity = await LocalStateStore.loadProfile(accountId);
   if (identity == null) return null;
 
-  final core = FreizoneCore();
-  final handle = core.coreOpen(await coreStatePath(accountId));
+  // Resolved out here, before the isolate: coreStatePath goes through
+  // path_provider, and a plain Isolate.run isolate has no platform channels.
+  final statePath = await coreStatePath(accountId);
   try {
-    core.coreSetIdentity(
-      handle: handle,
-      accountId: identity.accountId,
-      server: identity.server,
-      rootPub: identity.rootPub,
-      rootPriv: identity.rootPriv,
-      deviceId: identity.deviceId,
-      devicePub: identity.devicePub,
-      devicePriv: identity.devicePriv,
-      dhIdentityPub: identity.dhIdentityPub,
-      dhIdentityPriv: identity.dhIdentityPriv,
-      signedPrekeyId: identity.signedPrekeyId,
-      signedPrekeyPub: identity.signedPrekeyPub,
-      signedPrekeyPriv: identity.signedPrekeyPriv,
-      nextSignedPrekeyId: identity.nextSignedPrekeyId,
-      nextOtpkKeyId: identity.nextOtpkKeyId,
-      recoveryBackupDone: identity.recoveryBackupDone,
-      pushMechanism: identity.pushMechanism,
+    final raw = await Isolate.run(
+      () => _wakeSyncInIsolate(
+        statePath,
+        _identityArgs(identity),
+      ),
     );
-
-    final raw = core.coreSyncRaw({'handle': handle});
     for (final problem in (raw['problems'] as List<dynamic>? ?? const [])) {
       // Best-effort housekeeping (prekey top-up, group snapshot debts,
       // session recovery -- see doCoreMaintain) that did not work; one part
@@ -557,6 +544,76 @@ Future<_WakeNotice?> _syncAccount(String accountId) async {
   } catch (e) {
     _log('background sync failed for $accountId: $e');
     return null;
+  }
+}
+
+/// The identity fields [_wakeSyncInIsolate] needs, as plain sendable values.
+///
+/// Spelled out rather than sending the AppState itself: only these are the
+/// core's business (it keeps its own copy of everything else), and an explicit
+/// map cannot start failing to cross the boundary because something
+/// unsendable was added to AppState later.
+Map<String, dynamic> _identityArgs(AppState identity) => {
+  'account_id': identity.accountId,
+  'server': identity.server,
+  'root_pub': identity.rootPub,
+  'root_priv': identity.rootPriv,
+  'device_id': identity.deviceId,
+  'device_pub': identity.devicePub,
+  'device_priv': identity.devicePriv,
+  'dh_identity_pub': identity.dhIdentityPub,
+  'dh_identity_priv': identity.dhIdentityPriv,
+  'signed_prekey_id': identity.signedPrekeyId,
+  'signed_prekey_pub': identity.signedPrekeyPub,
+  'signed_prekey_priv': identity.signedPrekeyPriv,
+  'next_signed_prekey_id': identity.nextSignedPrekeyId,
+  'next_otpk_key_id': identity.nextOtpkKeyId,
+  'recovery_backup_done': identity.recoveryBackupDone,
+  'push_mechanism': identity.pushMechanism,
+};
+
+/// One account's whole wake sync, start to finish, off whichever thread asked.
+///
+/// This has to run in an isolate, and for a while it did not: a wake that
+/// arrives while the app is in the *foreground* is delivered by FCM on the
+/// main isolate (see the onMessage listener in initPush), and every call in
+/// here is a synchronous FFI call -- doCoreSync fetches the queue over the
+/// network. So a foreground wake blocked the UI thread for as long as the
+/// fetch took, once per account, sequentially: on a device holding an account
+/// whose server is simply unreachable that is the full request deadline, and
+/// Android kills an app that ignores input for five seconds. Measured at
+/// 29.5s of one MotionEvent going unanswered before this moved here.
+///
+/// Top-level and taking only plain values, because an isolate entry point
+/// cannot capture a [FreizoneCore] -- it holds native pointers. The handle is
+/// opened and closed inside, so nothing native outlives the isolate either.
+Map<String, dynamic> _wakeSyncInIsolate(
+  String statePath,
+  Map<String, dynamic> identity,
+) {
+  final core = FreizoneCore();
+  final handle = core.coreOpen(statePath);
+  try {
+    core.coreSetIdentity(
+      handle: handle,
+      accountId: identity['account_id'] as String,
+      server: identity['server'] as String,
+      rootPub: identity['root_pub'] as Uint8List,
+      rootPriv: identity['root_priv'] as Uint8List,
+      deviceId: identity['device_id'] as String,
+      devicePub: identity['device_pub'] as Uint8List,
+      devicePriv: identity['device_priv'] as Uint8List,
+      dhIdentityPub: identity['dh_identity_pub'] as Uint8List?,
+      dhIdentityPriv: identity['dh_identity_priv'] as Uint8List?,
+      signedPrekeyId: identity['signed_prekey_id'] as int,
+      signedPrekeyPub: identity['signed_prekey_pub'] as Uint8List?,
+      signedPrekeyPriv: identity['signed_prekey_priv'] as Uint8List?,
+      nextSignedPrekeyId: identity['next_signed_prekey_id'] as int,
+      nextOtpkKeyId: identity['next_otpk_key_id'] as int,
+      recoveryBackupDone: identity['recovery_backup_done'] as bool,
+      pushMechanism: identity['push_mechanism'] as String?,
+    );
+    return core.coreSyncRaw({'handle': handle});
   } finally {
     core.coreClose(handle);
   }
