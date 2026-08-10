@@ -6,6 +6,21 @@
 // itself when the download lands, without the transcript ever jumping --
 // the sender's pixel dimensions let it reserve the right aspect ratio from
 // the very first frame.
+//
+// Fetching goes entirely through the core now (SRV-23, the cut): a
+// StoredMessage built from core_bridge.dart carries no decryption key --
+// deliberately, see its own doc comment -- so this widget has nothing to
+// decrypt with any more even if it wanted to. CoreAccount.attachmentPath
+// answers with a path, downloading first if it has not been downloaded,
+// which folds what used to be three separate concerns here (has it arrived,
+// where do I write it, how do I open it) into one call.
+//
+// Traded away deliberately: MediaStore's cross-widget fetch-state broadcast,
+// which let two bubbles for the same picture (two accounts in the same
+// group, most often) share one in-flight download and notify each other when
+// it landed. Each bubble now resolves its own call independently -- simpler,
+// and correct either way, just not shared; a second concurrent call for the
+// same picture cannot corrupt anything, only cost a redundant round trip.
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
@@ -14,7 +29,6 @@ import 'package:flutter/material.dart';
 
 import '../screens/image_view_screen.dart';
 import '../state/conversation.dart';
-import '../state/media_store.dart';
 import '../state/app_session.dart';
 import '../util/message_actions.dart';
 
@@ -39,138 +53,76 @@ class ImageAttachment extends StatefulWidget {
 }
 
 class _ImageAttachmentState extends State<ImageAttachment> {
-  MediaStore? _media;
   File? _file;
   File? _thumb;
   bool _resolving = true;
+  bool _failed = false;
 
   @override
   void initState() {
     super.initState();
-    _resolve();
+    unawaited(_resolve());
   }
 
+  /// Re-resolves when the widget is rebuilt for a *different* message (a
+  /// reused list item) rather than the same one settling -- the guard that
+  /// used to live here existed only to adopt a MediaStore notification, which
+  /// no longer applies now that each widget resolves its own call.
   @override
   void didUpdateWidget(ImageAttachment oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // The file on disk is the truth, so re-check it whenever the transcript
-    // rebuilds and we still have nothing to show -- which is exactly what
-    // AppSession's notify after a finished prefetch means. Belt and braces
-    // for the listener above: a fetch state cleared before this widget was
-    // listening cannot be heard, and without this the bubble would then wait
-    // for a notification that has already happened.
-    if (_file == null && !_resolving) unawaited(_adoptDownloadedFile());
-  }
-
-  @override
-  void dispose() {
-    _media?.removeListener(_onFetchStateChanged);
-    super.dispose();
-  }
-
-  /// A download this widget did not start has finished, failed, or begun --
-  /// most often the prefetch AppSession fires when a picture arrives, which
-  /// means [AppSession.ensureAttachmentDownloaded] answers our own call with
-  /// null because an attempt is already in flight. Without listening, the
-  /// spinner would then spin until the bubble was rebuilt from scratch.
-  ///
-  /// Deliberately does not start a download of its own, so this can never
-  /// loop: [_resolve] marks the fetch and would notify us straight back.
-  void _onFetchStateChanged() {
-    final media = _media;
-    if (!mounted || media == null || _file != null) return;
-    if (_stateFor(media) == MediaFetchState.downloading) {
-      // Nothing to adopt yet; rebuild so the spinner replaces a retry overlay
-      // if that is what was showing.
-      setState(() {});
-      return;
+    if (oldWidget.message.id != widget.message.id ||
+        oldWidget.chatId != widget.chatId) {
+      _file = null;
+      _thumb = null;
+      _failed = false;
+      unawaited(_resolve());
     }
-    unawaited(_adoptDownloadedFile());
   }
 
-  /// This picture's download state. The account is part of the key because the
-  /// message id is not unique on a device with several accounts in one group --
-  /// each of them has its own copy to fetch (see MediaStore._fetching).
-  MediaFetchState _stateFor(MediaStore media) => media.stateFor(
-    accountId: widget.session.state.accountId,
-    chatId: widget.chatId,
-    messageId: widget.message.id,
-  );
-
-  /// Re-reads the disk after somebody else's download settled.
-  Future<void> _adoptDownloadedFile() async {
-    final media = _media;
-    if (media == null) return;
-    final full = media.fileFor(
-      accountId: widget.session.state.accountId,
-      chatId: widget.chatId,
-      messageId: widget.message.id,
-    );
-    final exists = await full.exists();
-    if (!mounted) return;
-    // Rebuilds even when there was nothing to adopt, on purpose: [build] reads
-    // the fetch state live, so this is also what repaints an attempt that
-    // settled as failed into its retry overlay.
-    setState(() {
-      if (exists) _file = full;
-    });
-  }
-
-  /// Looks for the already-downloaded file, falls back to the thumbnail, and
-  /// starts a download if neither the full file nor an in-flight attempt
-  /// exists yet.
+  /// Fetches the thumbnail (a local lookup, always worth trying, see
+  /// [CoreAccount.attachmentPath]) and the full picture (which may download),
+  /// in that order so the blurred preview can appear before the real file
+  /// does. [force] re-tries after a failure the user tapped to retry.
   Future<void> _resolve({bool force = false}) async {
-    final media = await MediaStore.instance();
-    if (!mounted) return;
-    // Attached -- and remembered -- before anything is awaited below, so a
-    // download that finishes while we are still stat-ing files is not missed.
-    // Recording the store here rather than in the setState further down is
-    // what makes that true: [_onFetchStateChanged] can only adopt a file once
-    // it knows which store to ask, so a notification landing in between used
-    // to be dropped, and nothing would notify a second time.
-    if (_media != media) {
-      _media?.removeListener(_onFetchStateChanged);
-      media.addListener(_onFetchStateChanged);
-      _media = media;
+    if (!force && _failed) return;
+    if (mounted) {
+      setState(() {
+        _resolving = true;
+        _failed = false;
+      });
     }
 
-    final full = media.fileFor(
-      accountId: widget.session.state.accountId,
-      chatId: widget.chatId,
-      messageId: widget.message.id,
-    );
-    final thumb = media.thumbFor(
-      accountId: widget.session.state.accountId,
-      chatId: widget.chatId,
-      messageId: widget.message.id,
-    );
-    final haveFull = await full.exists();
-    final haveThumb = await thumb.exists();
-    if (!mounted) return;
+    try {
+      final thumbPath = await widget.session.coreAccount.attachmentPath(
+        widget.chatId,
+        widget.message.id,
+        thumb: true,
+      );
+      if (mounted && thumbPath.isNotEmpty) {
+        setState(() => _thumb = File(thumbPath));
+      }
+    } catch (_) {
+      // A missing thumbnail costs a preview, never the picture.
+    }
 
-    setState(() {
-      // May only ever *add* the file: the listener above can have adopted a
-      // download that settled while we were stat-ing, and this stat is older
-      // than that, so assigning it outright would throw the picture away.
-      if (haveFull) _file = full;
-      _thumb = haveThumb ? thumb : null;
-      _resolving = false;
-    });
-
-    if (_file != null) return;
-    // Our own sent picture with no local file left: the blob belongs to the
-    // recipient's device, so there is nothing we could fetch back. Retrying
-    // would only ever 404, so don't offer it.
-    if (widget.message.mine) return;
-    // A previous failure isn't retried on its own -- the user taps to retry,
-    // so a dead server can't turn into a silent loop.
-    if (!force && _stateFor(media) == MediaFetchState.failed) return;
-    final downloaded = await widget.session.ensureAttachmentDownloaded(
-      chatId: widget.chatId,
-      message: widget.message,
-    );
-    if (!mounted || downloaded == null) return;
-    setState(() => _file = downloaded);
+    try {
+      final path = await widget.session.coreAccount.attachmentPath(
+        widget.chatId,
+        widget.message.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _resolving = false;
+        if (path.isNotEmpty) _file = File(path);
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _resolving = false;
+        _failed = true;
+      });
+    }
   }
 
   @override
@@ -216,9 +168,6 @@ class _ImageAttachmentState extends State<ImageAttachment> {
       );
     }
 
-    final media = _media;
-    final failed = media != null && _stateFor(media) == MediaFetchState.failed;
-
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -231,13 +180,15 @@ class _ImageAttachmentState extends State<ImageAttachment> {
           )
         else
           ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest),
-        if (widget.message.mine)
-          // Nothing to fetch back (see ensureAttachmentDownloaded), so say
-          // so instead of spinning or offering a retry that cannot work.
-          const _GoneOverlay()
-        else if (failed)
-          _RetryOverlay(onTap: () => _resolve(force: true))
+        if (_failed)
+          _RetryOverlay(onTap: () => unawaited(_resolve(force: true)))
         else if (!_resolving)
+          // Nothing to show yet and nothing failed: an attachment record
+          // exists but the blob hasn't reached us yet -- legitimate and
+          // brief, resolved by the next poll's refresh rebuilding this
+          // widget, not by anything it does itself.
+          const SizedBox.shrink()
+        else
           // Sized against the bubble rather than fixed: at 28px a short or
           // narrow picture's placeholder was almost entirely spinner, which
           // filled the rounded clip and read as a square.
@@ -257,29 +208,6 @@ class _ImageAttachmentState extends State<ImageAttachment> {
             },
           ),
       ],
-    );
-  }
-}
-
-/// A picture we sent whose local copy is gone. Not recoverable: the blob is
-/// owned by the recipient's device.
-class _GoneOverlay extends StatelessWidget {
-  const _GoneOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    return ColoredBox(
-      color: Colors.black.withValues(alpha: 0.45),
-      child: const Center(
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
-            'Picture no longer on this device',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white, fontSize: 12),
-          ),
-        ),
-      ),
     );
   }
 }
