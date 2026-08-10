@@ -157,6 +157,54 @@ func TestAttachmentsCrossWithoutTheirKey(t *testing.T) {
 	}
 }
 
+// A one-to-one attachment's blob lives on this side's own server, never the
+// sender's -- see pkg/client/blobs.go's UploadAttachment: the sender
+// federated-uploads it to the *recipient's* server precisely so the
+// recipient never has to reach back to the sender's. Passing
+// Conversation.PeerServer (the sender's server) to EnsureAttachment sends
+// the fetch federated to a server that was never handed the blob at all --
+// found live, SRV-23, a picture over a genuinely federated 1:1 conversation
+// (q3up8@chat.behringer24.de -> qrqxg@chatcentral.de) came back 401 instead
+// of the picture. doCoreAttachmentPath must always reach for this side's own
+// server for a one-to-one chat, whatever the sender's happens to be.
+func TestOneToOneAttachmentFetchesFromOwnServerNotTheSenders(t *testing.T) {
+	handle, c := offlineHandle(t)
+	chatID := "qpeeraccountid000000x"
+
+	// A federated peer: their server, not ours (offlineHandle's is
+	// https://home.test), which is exactly the shape that misrouted the
+	// download when this was still a live bug.
+	if err := c.PutConversation(client.Conversation{
+		PeerAccountID: chatID,
+		PeerServer:    "https://elsewhere.test",
+	}); err != nil {
+		t.Fatalf("PutConversation: %v", err)
+	}
+	if err := c.AppendMessage(chatID, client.Message{
+		ID: "m1", Text: "look", Timestamp: time.Now().UTC(),
+		Kind: client.MessageNormal, SendState: client.SendSent,
+		Attachments: []client.Attachment{{
+			Kind: "image", BlobID: "blob-1", Key: []byte("key"),
+			MimeType: "image/jpeg", Width: 800, Height: 600,
+		}},
+	}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	// Neither server exists, so this fails either way -- what matters is
+	// *which* host it failed to reach.
+	_, err := doCoreAttachmentPath(coreAttachmentRequest{Handle: handle, ChatID: chatID, MessageID: "m1"})
+	if err == nil {
+		t.Fatal("want an error against a server that does not exist, got none")
+	}
+	if strings.Contains(err.Error(), "elsewhere.test") {
+		t.Errorf("fetched from the sender's server instead of this side's own: %v", err)
+	}
+	if !strings.Contains(err.Error(), "home.test") {
+		t.Errorf("want the fetch aimed at this side's own server (home.test), got: %v", err)
+	}
+}
+
 // An attachment that never finished uploading is marked, so a bubble shows the
 // local preview and a spinner rather than a broken picture.
 func TestAPendingAttachmentSaysSo(t *testing.T) {
