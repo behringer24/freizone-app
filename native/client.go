@@ -387,6 +387,14 @@ func handleAndAck(ctx context.Context, c *client.Client, msg client.IncomingMess
 	}
 
 	sendReceiptFor(ctx, c, res)
+	if res.Group != nil {
+		// HandleIncoming folds the envelope but does no network I/O -- acting on
+		// what it found about the sender's own view (a state-hash mismatch, an
+		// outright sync request, holding no facts at all) is this caller's job,
+		// same as the receipt above. Best-effort: a failed reconcile just means
+		// the divergence is answered on the next envelope instead of this one.
+		_ = c.ReconcileGroup(ctx, *res.Group, res.PeerAccountID)
+	}
 
 	out := pollOutcome{Notify: res.ShouldNotify}
 	if res.Group != nil {
