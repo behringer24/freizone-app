@@ -1642,13 +1642,22 @@ class AppSession extends ChangeNotifier {
         },
         onConnected: () {
           _markStreamConnected();
-          // Everything a fresh connection should settle, in one call: top up
-          // the prekey pool, pay any group snapshot debts, re-establish
-          // sessions the evidence says are broken (see CoreAccount.maintain).
+          // Everything a fresh connection should settle, in one call: drain
+          // whatever is queued for this device, then top up the prekey pool,
+          // pay any group snapshot debts and re-establish sessions the
+          // evidence says are broken (see CoreAccount.sync, which does
+          // maintain's work after the drain).
+          //
           // Replaces three separate Dart-side calls (topUpOneTimePrekeysIfNeeded,
           // an implicit snapshot-debt sweep, _recoverDesyncedSessions) that each
           // read and wrote state the core owns exclusively now.
-          unawaited(coreAccount.maintain());
+          //
+          // The drain is not belt-and-braces: the stream discards events rather
+          // than let a slow consumer stall the connection, nothing re-pushes
+          // what it discarded, and the server only wakes a device that has *no*
+          // stream open -- so without a fetch here an envelope dropped that way
+          // waited for an app restart. See CoreAccount.sync.
+          unawaited(_drainQueue());
           // Re-register push on every (re)connect: a server that was down at
           // startup (or when the endpoint first arrived) never got this
           // account's push target otherwise, and would stay push-less until
@@ -1673,6 +1682,29 @@ class AppSession extends ChangeNotifier {
   void _stopStream() {
     _sse?.close();
     _sse = null;
+  }
+
+  /// Drains this device's queue and folds what turned up in exactly as a
+  /// streamed envelope would be -- see [CoreAccount.sync] for why a
+  /// (re)connect has to fetch at all.
+  ///
+  /// Failure is deliberately quiet: a fetch that could not reach the server is
+  /// what the reconnect loop already exists for, and this must not be the
+  /// thing that lights up the offline banner. Housekeeping problems are logged
+  /// for the same reason [MaintenanceReport.problems] is -- best-effort by
+  /// nature, and not something to put in front of the user.
+  Future<void> _drainQueue() async {
+    try {
+      final report = await coreAccount.sync();
+      for (final problem in report.problems) {
+        logDiagnostic('connect housekeeping problem: $problem');
+      }
+      for (final outcome in report.outcomes) {
+        _handleIncoming(outcome);
+      }
+    } catch (e) {
+      logDiagnostic('draining the queue on connect failed: $e');
+    }
   }
 
   /// One envelope, already decided by the core: decrypted (or folded, if it

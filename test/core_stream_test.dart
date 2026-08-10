@@ -247,6 +247,115 @@ void main() {
       skip: coreMissing,
     );
 
+    // What a (re)connect owes the queue. The stream drops events rather than
+    // let a slow consumer stall the connection (pkg/client's Stream buffers 32
+    // and discards past that), nothing re-pushes what it dropped, and the
+    // server only wakes a device with no stream open -- so before
+    // CoreAccount.sync ran here, an envelope lost that way waited for an app
+    // restart. This pins that a drain reaches the same outcome a streamed
+    // envelope would, through the same receive path.
+    test(
+      'a connect drains the queue and reports what was in it',
+      () async {
+        const senderAccountId = 'fz1zzzzsyntheticsenderaccountid00000';
+
+        final receiverDh = core.generateX25519KeyPair();
+        final receiverSpk = core.generateX25519KeyPair();
+        final senderDh = core.generateX25519KeyPair();
+        final initiated = core.initiateSession(
+          localDhIdentityPriv: senderDh.priv,
+          remote: RemoteBundle(
+            dhIdentityPub: receiverDh.pub,
+            signedPrekeyId: 1,
+            signedPrekeyPub: receiverSpk.pub,
+          ),
+        );
+        final encrypted = core.sessionEncrypt(
+          session: initiated.session,
+          plaintext: const MessageContent(id: 'q1', text: 'queued').encode(),
+        );
+        final payload = core.buildEnvelope(
+          initial: initiated.initial,
+          header: encrypted.header,
+          ciphertext: encrypted.ciphertext,
+          rekey: false,
+        );
+
+        var acked = false;
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        server.listen((request) {
+          final path = request.uri.path;
+          if (request.method == 'GET' && path == '/v1/messages') {
+            // A bare array, which is what the real endpoint answers.
+            request.response
+              ..headers.set('Content-Type', 'application/json')
+              ..write(
+                json.encode([
+                  {
+                    'message_id': 'q-m1',
+                    'sender_account_id': senderAccountId,
+                    'sender_device_id': 'device-2',
+                    'sent_at': '2026-08-10T09:00:00.000Z',
+                    'payload': payload,
+                  },
+                ]),
+              )
+              ..close();
+            return;
+          }
+          if (request.method == 'DELETE' && path == '/v1/messages/q-m1') {
+            acked = true;
+            request.response
+              ..statusCode = 200
+              ..close();
+            return;
+          }
+          // Everything the housekeeping after the drain reaches for (prekey
+          // status, server status, peer resolution for the receipt). Refused
+          // fast on purpose: those are best-effort and belong in
+          // SyncReport.problems, and this test is about the drain.
+          request.response
+            ..statusCode = 404
+            ..headers.set('Content-Type', 'application/json')
+            ..write('{"error":{"code":"not_found","message":"no"}}')
+            ..close();
+        });
+        addTearDown(() => server.close(force: true));
+
+        final handle = openHandle(
+          'http://${server.address.host}:${server.port}',
+          dhIdentityPriv: receiverDh.priv,
+          signedPrekeyId: 1,
+          signedPrekeyPriv: receiverSpk.priv,
+        );
+        addTearDown(() => core.coreClose(handle));
+
+        final account = CoreAccount(
+          core: core,
+          handle: handle,
+          libraryPath: _corePath,
+        );
+        final report = await account.sync().timeout(
+          const Duration(seconds: 30),
+        );
+
+        expect(
+          report.outcomes.map((o) => o.chatId),
+          contains(senderAccountId),
+          reason: 'the queued envelope has to come back as an outcome',
+        );
+        expect(
+          acked,
+          isTrue,
+          reason: 'a handled envelope must be acknowledged, or it is redelivered forever',
+        );
+        // Decrypted for real, not merely reported: read it back the way a
+        // screen would.
+        expect(account.messages(senderAccountId).last.text, 'queued');
+      },
+      skip: coreMissing,
+    );
+
     test(
       'reports a connect that never came up, and keeps retrying',
       () async {
