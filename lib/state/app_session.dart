@@ -780,6 +780,11 @@ class AppSession extends ChangeNotifier {
     // below trigger on their own, just run once up front here.
     applyCoreState(state, coreAccount);
 
+    // Before anything can confirm or record anything: the switch is app-wide
+    // and the core keeps its own per-account copy, so a session that never
+    // passed it on would honour whatever the last one happened to leave there.
+    unawaited(applyReceiptsSetting((await AppSettings.load()).readReceiptsEnabled));
+
     notifyListeners();
     _startStream();
     unawaited(refreshMyRole());
@@ -792,6 +797,22 @@ class AppSession extends ChangeNotifier {
     // gets its first automatic attempt here (APP-08 step 2). Not awaited:
     // a backlog against a slow peer must not hold up startup.
     unawaited(flushOutbox());
+  }
+
+  /// Hands this account's core the read-receipts setting.
+  ///
+  /// Best-effort and never surfaced: failing to pass it on leaves the core with
+  /// whatever it had, which is the previous answer rather than a wrong one, and
+  /// the next session start passes it again.
+  Future<void> applyReceiptsSetting(bool enabled) async {
+    try {
+      await coreAccount.setReceiptsEnabled(enabled);
+    } catch (e) {
+      logDiagnostic(
+        'passing the read-receipts setting to the core failed: ${describeError(e)}',
+        name: 'receipts',
+      );
+    }
   }
 
   Future<void> _registerPush() async {

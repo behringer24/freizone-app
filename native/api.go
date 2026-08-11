@@ -893,6 +893,9 @@ type maintainResponse struct {
 	DebtsPaid       int      `json:"debts_paid,omitempty"`
 	Recovered       []string `json:"recovered,omitempty"`
 
+	// ReceiptsResent counts confirmations that had never got out and have now.
+	ReceiptsResent int `json:"receipts_resent,omitempty"`
+
 	// Problems are the things that did not work, as text. Housekeeping is
 	// best-effort by nature -- one failing part must not stop the others -- so
 	// they are reported rather than returned as an error.
@@ -936,7 +939,32 @@ func doCoreMaintain(req coreHandleRequest) (any, error) {
 	} else {
 		out.Recovered = recovered
 	}
+	// A confirmation lost to a failed send is not marked as sent, so it goes
+	// again -- but only when there is something new to confirm, which a quiet
+	// conversation may not offer for days. A fresh connection is when whatever
+	// broke the last attempt has most likely passed.
+	if resent, err := entry.client.ResendPendingReceipts(ctx); err != nil {
+		out.Problems = append(out.Problems, "re-sending receipts: "+err.Error())
+	} else {
+		out.ReceiptsResent = resent
+	}
 	return out, nil
+}
+
+type coreReceiptsRequest struct {
+	Handle  int64 `json:"handle"`
+	Enabled bool  `json:"enabled"`
+}
+
+// doCoreSetReceiptsEnabled records the user's answer where every consumer of
+// this account can see it -- including the background wake, which opens the
+// account knowing nothing of the app's own settings.
+func doCoreSetReceiptsEnabled(req coreReceiptsRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	return struct{}{}, entry.client.SetReceiptsEnabled(req.Enabled)
 }
 
 type coreResetSessionRequest struct {

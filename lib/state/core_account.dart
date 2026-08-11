@@ -245,6 +245,19 @@ class CoreAccount {
   Future<void> dissolveGroup(String groupId) =>
       _run({'call': 'group_dissolve', 'handle': handle, 'group_id': groupId});
 
+  /// Tells the core whether this account confirms anything to anybody.
+  ///
+  /// Stored by the core rather than consulted from here per call, and that is
+  /// the point: the background push wake opens this account without any of the
+  /// app's settings loaded, so a rule it cannot see is a rule that does not
+  /// hold. Set on every session start as well as on every change, since the
+  /// switch is app-wide while the record is per account.
+  Future<void> setReceiptsEnabled(bool enabled) => _run({
+    'call': 'set_receipts_enabled',
+    'handle': handle,
+    'enabled': enabled,
+  });
+
   /// Discards everything held *about* a peer: the cached device and both
   /// ratchet sessions with them.
   ///
@@ -321,6 +334,8 @@ Map<String, dynamic> coreCallInIsolate(
       return core.coreGroupSyncRequestRaw(request);
     case 'forget_peer':
       return core.coreForgetPeerRaw(request);
+    case 'set_receipts_enabled':
+      return core.coreSetReceiptsEnabledRaw(request);
     case 'group_dissolve':
       return core.coreGroupDissolveRaw(request);
   }

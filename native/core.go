@@ -325,6 +325,11 @@ func CoreGroupSyncRequest(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGr
 //export CoreForgetPeer
 func CoreForgetPeer(cReq *C.char) *C.char { return jsonCall(cReq, doCoreForgetPeer) }
 
+//export CoreSetReceiptsEnabled
+func CoreSetReceiptsEnabled(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreSetReceiptsEnabled)
+}
+
 //export CoreGroupDissolve
 func CoreGroupDissolve(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupDissolve) }
 
