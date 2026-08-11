@@ -381,6 +381,20 @@ class AppSession extends ChangeNotifier {
   /// empty, so a restart or an account switch picks up a change.
   final Map<String, BlobCapability> _peerBlobs = {};
 
+  /// Messages with a retry in flight right now.
+  ///
+  /// [flushOutbox] runs on reconnect *and* on resume, and the two can overlap;
+  /// the delivery sheet's manual retry can land in the middle of either. The
+  /// core refuses a second attempt at a message the first has just marked
+  /// pending -- rightly, it cannot encrypt one message twice at once -- and
+  /// that refusal used to reach the user as "send failed" for a send that was
+  /// going perfectly well. An overlapping retry is the app talking to itself,
+  /// so it is dropped here rather than reported.
+  ///
+  /// Per message, not a lock around the whole flush: two flushes working on
+  /// different messages are doing useful work and must not be serialised.
+  final Set<String> _retrying = {};
+
   /// How many times [flushOutbox] has retried each unsent message this run.
   ///
   /// A message can fail for a reason no amount of retrying fixes -- a peer
@@ -1842,6 +1856,7 @@ class AppSession extends ChangeNotifier {
     final chat = state.groups[groupId];
     final message = chat?.messageById(messageId);
     if (chat == null || message == null || !message.isGroupSend) return;
+    if (!_retrying.add(messageId)) return;
 
     message.sendState = MessageSendState.pending;
     message.sendError = null;
@@ -1854,6 +1869,7 @@ class AppSession extends ChangeNotifier {
       lastError = 'send failed: ${describeError(e)}';
       rethrow;
     } finally {
+      _retrying.remove(messageId);
       applyCoreChat(state, coreAccount, groupId);
       notifyListeners();
     }
@@ -2090,6 +2106,7 @@ class AppSession extends ChangeNotifier {
     if (convo == null) return;
     final message = convo.messageById(messageId);
     if (message == null || !message.hasFailed) return;
+    if (!_retrying.add(messageId)) return;
 
     message.sendState = MessageSendState.pending;
     message.sendError = null;
@@ -2102,6 +2119,7 @@ class AppSession extends ChangeNotifier {
       lastError = 'send failed: ${describeError(e)}';
       rethrow;
     } finally {
+      _retrying.remove(messageId);
       applyCoreChat(state, coreAccount, peerAccountId);
       notifyListeners();
     }
@@ -2119,6 +2137,10 @@ class AppSession extends ChangeNotifier {
           .where((m) => m.hasFailed && m.kind == StoredMessageKind.normal)
           .toList();
       for (final message in unsent) {
+        // Checked here as well as in the retry itself, so an overlapping flush
+        // does not spend one of the three attempts on a call that returns
+        // without doing anything.
+        if (_retrying.contains(message.id)) continue;
         final attempts = _outboxAttempts[message.id] ?? 0;
         if (attempts >= _maxOutboxAttempts) continue;
         _outboxAttempts[message.id] = attempts + 1;
@@ -2147,6 +2169,7 @@ class AppSession extends ChangeNotifier {
           )
           .toList();
       for (final message in unsent) {
+        if (_retrying.contains(message.id)) continue;
         final attempts = _outboxAttempts[message.id] ?? 0;
         if (attempts >= _maxOutboxAttempts) continue;
         _outboxAttempts[message.id] = attempts + 1;
