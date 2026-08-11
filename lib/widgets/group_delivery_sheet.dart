@@ -202,8 +202,10 @@ class _DeliveryRow extends StatelessWidget {
     final detail = [
       label,
       if (delivery.attachmentSkipped) 'picture not received',
-      // Only present within the session that failed -- deliberately not
-      // persisted, since a reason from a previous run may no longer be true.
+      // Recorded with the failure and replayed with the transcript, so a
+      // fan-out that failed overnight can still be read in the morning. Cleared
+      // the moment the copy arrives, so it can never describe a state that has
+      // since moved on.
       if (stage == GroupDeliveryStage.failed && delivery.error != null)
         delivery.error!,
     ].join(' · ');

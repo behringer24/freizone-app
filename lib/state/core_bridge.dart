@@ -105,12 +105,17 @@ GroupConversation _toGroupConversation(
   List<StoredMessage> messages,
   CoreAccount account,
 ) {
-  // Per-member read watermarks live with the membership rather than on the
-  // summary: a chat list has no use for them, and a group screen asks for the
+  // Per-member watermarks live with the membership rather than on the summary:
+  // a chat list has no use for them, and a group screen asks for the
   // membership anyway.
+  final memberDeliveredUpTo = <String, DateTime>{};
   final memberReadUpTo = <String, DateTime>{};
   try {
     for (final member in account.groupInfo(chat.chatId).members) {
+      final deliveredUpTo = member.deliveredUpTo;
+      if (deliveredUpTo != null) {
+        memberDeliveredUpTo[member.accountId] = deliveredUpTo;
+      }
       final readUpTo = member.readUpTo;
       if (readUpTo != null) memberReadUpTo[member.accountId] = readUpTo;
     }
@@ -128,6 +133,7 @@ GroupConversation _toGroupConversation(
     hasUnread: chat.hasUnread,
     pinnedMessageIds: List<String>.from(chat.pinnedMessageIds),
     invitePending: chat.invited,
+    memberDeliveredUpTo: memberDeliveredUpTo,
     memberReadUpTo: memberReadUpTo,
   );
 }
@@ -152,8 +158,12 @@ StoredMessage _toStoredMessage(CoreMessage m) => StoredMessage(
       .map(
         (d) => GroupDelivery(
           accountId: d.accountId,
+          // The core addresses a retry itself, so the shell never needs the id
+          // the recipient's server de-duplicates by.
           wireMessageId: '',
           state: _sendState(d.state),
+          error: d.error.isEmpty ? null : d.error,
+          attachmentSkipped: d.attachmentSkipped,
         ),
       )
       .toList(),

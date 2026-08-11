@@ -52,10 +52,8 @@ class GroupConversation extends ChatTarget {
     this.invitePending = false,
     Map<String, DateTime>? memberDeliveredUpTo,
     Map<String, DateTime>? memberReadUpTo,
-    Map<String, DateTime>? sentReceiptUpTo,
   }) : memberDeliveredUpTo = memberDeliveredUpTo ?? {},
-       memberReadUpTo = memberReadUpTo ?? {},
-       sentReceiptUpTo = sentReceiptUpTo ?? {};
+       memberReadUpTo = memberReadUpTo ?? {};
 
   factory GroupConversation.fromJson(Map<String, dynamic> j) =>
       GroupConversation(
@@ -72,7 +70,6 @@ class GroupConversation extends ChatTarget {
         invitePending: j['invite_pending'] as bool? ?? false,
         memberDeliveredUpTo: _watermarksFromJson(j['member_delivered_up_to']),
         memberReadUpTo: _watermarksFromJson(j['member_read_up_to']),
-        sentReceiptUpTo: _watermarksFromJson(j['sent_receipt_up_to']),
       );
 
   final String groupId;
@@ -106,11 +103,10 @@ class GroupConversation extends ChatTarget {
   final Map<String, DateTime> memberDeliveredUpTo;
   final Map<String, DateTime> memberReadUpTo;
 
-  /// How far I have already told each author I have read theirs -- purely
-  /// local bookkeeping, so an identical receipt is not re-sent on every
-  /// redraw. Keyed by author, since in a group a receipt goes to the person
-  /// who wrote the message rather than to "the peer".
-  final Map<String, DateTime> sentReceiptUpTo;
+  // The mirror of these -- how far each author has already been told -- is not
+  // here. It lives with the core, which is what sends the receipts
+  // (pkg/client's MemberReceipt.SentReadReceiptUpTo), and a second copy on this
+  // side could only go stale.
 
   /// How many of [message]'s recipients have confirmed receiving, and reading,
   /// it -- counted from the watermarks above against the message's own send
@@ -236,7 +232,6 @@ class GroupConversation extends ChatTarget {
     if (invitePending) j['invite_pending'] = true;
     _writeWatermarks(j, 'member_delivered_up_to', memberDeliveredUpTo);
     _writeWatermarks(j, 'member_read_up_to', memberReadUpTo);
-    _writeWatermarks(j, 'sent_receipt_up_to', sentReceiptUpTo);
     return j;
   }
 }

@@ -320,6 +320,119 @@ func TestDoCoreRetryDispatchesOnChatID(t *testing.T) {
 	}
 }
 
+// Both of a member's watermarks cross the FFI, not only the read one.
+//
+// "Received by k of N" is counted from the delivered one, so a field the core
+// files but never hands over makes that count structurally zero -- which is
+// exactly how it read in the group screen: two plain ticks, forever.
+func TestGroupInfoCarriesBothMemberWatermarks(t *testing.T) {
+	handle, core := offlineHandle(t)
+
+	founder := newGroupIdentity(t)
+	member := newGroupIdentity(t)
+	created := groupCreate(t, founder, "Quittungen")
+	added, _ := signAndApply(t, founder, created.State, groupSignEventRequest{
+		Type: "member_add", Subject: member.AccountID, Server: "https://b.example.org",
+	})
+
+	var state group.State
+	if err := json.Unmarshal(added.State, &state); err != nil {
+		t.Fatalf("decoding group state: %v", err)
+	}
+	if err := core.PutGroupState(added.GroupID, &state); err != nil {
+		t.Fatalf("PutGroupState: %v", err)
+	}
+
+	delivered := time.Date(2026, 8, 10, 12, 0, 1, 0, time.UTC)
+	read := time.Date(2026, 8, 10, 12, 0, 2, 0, time.UTC)
+	if err := core.PutGroupChat(client.GroupChat{
+		GroupID: added.GroupID,
+		MemberReceipts: map[string]client.MemberReceipt{
+			member.AccountID: {DeliveredUpTo: &delivered, ReadUpTo: &read},
+		},
+	}); err != nil {
+		t.Fatalf("PutGroupChat: %v", err)
+	}
+
+	out, err := doCoreGroupInfo(coreGroupMemberRequest{Handle: handle, GroupID: added.GroupID})
+	if err != nil {
+		t.Fatalf("doCoreGroupInfo: %v", err)
+	}
+	info := decodeAs[groupInfo](t, out)
+
+	var found bool
+	for _, m := range info.Members {
+		if m.AccountID != member.AccountID {
+			continue
+		}
+		found = true
+		if m.DeliveredUpTo == "" {
+			t.Error("the delivered watermark did not cross the FFI")
+		}
+		if m.ReadUpTo == "" {
+			t.Error("the read watermark did not cross the FFI")
+		}
+		if m.DeliveredUpTo != "" && m.ReadUpTo != "" && m.DeliveredUpTo >= m.ReadUpTo {
+			t.Errorf("the two watermarks were swapped: delivered %s, read %s", m.DeliveredUpTo, m.ReadUpTo)
+		}
+	}
+	if !found {
+		t.Fatalf("the member is missing from the group info: %+v", info.Members)
+	}
+}
+
+// Reading a group confirms something to every author in it, each at their own
+// newest message -- not one receipt to whoever happened to speak last.
+func TestNewestPerAuthorAnchorsEachAuthorAtTheirOwn(t *testing.T) {
+	at := func(sec int) *time.Time {
+		ts := time.Date(2026, 8, 10, 12, 0, sec, 0, time.UTC)
+		return &ts
+	}
+	msgs := []client.Message{
+		{ID: "1", SenderAccountID: "bob", SenderSentAt: at(1), Kind: client.MessageNormal},
+		{ID: "2", SenderAccountID: "carol", SenderSentAt: at(2), Kind: client.MessageNormal},
+		// Bob's newest, and out of order in the transcript on purpose: a
+		// watermark is a maximum, not the last thing seen.
+		{ID: "3", SenderAccountID: "bob", SenderSentAt: at(9), Kind: client.MessageNormal},
+		{ID: "4", SenderAccountID: "bob", SenderSentAt: at(4), Kind: client.MessageNormal},
+		// Mine, a system line, and one with no author: none is anybody's to
+		// confirm.
+		{ID: "5", Mine: true, SenderSentAt: at(10), Kind: client.MessageNormal},
+		{ID: "6", SenderAccountID: "dave", SenderSentAt: at(11), Kind: client.MessageSystemInfo},
+		{ID: "7", SenderSentAt: at(12), Kind: client.MessageNormal},
+	}
+
+	got := newestPerAuthor(msgs)
+	want := []authorAnchor{
+		{accountID: "bob", upTo: *at(9)},
+		{accountID: "carol", upTo: *at(2)},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("want %d authors confirmed, got %d: %+v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i].accountID != want[i].accountID || !got[i].upTo.Equal(want[i].upTo) {
+			t.Errorf("author %d: want %s at %s, got %s at %s", i,
+				want[i].accountID, want[i].upTo, got[i].accountID, got[i].upTo)
+		}
+	}
+}
+
+// A message from a sender predating sent_at is anchored at local arrival time,
+// which is all there is -- and the reduction must still pick the newest.
+func TestNewestPerAuthorFallsBackToArrivalTime(t *testing.T) {
+	early := time.Date(2026, 8, 10, 12, 0, 1, 0, time.UTC)
+	late := time.Date(2026, 8, 10, 12, 0, 5, 0, time.UTC)
+	msgs := []client.Message{
+		{ID: "1", SenderAccountID: "bob", Timestamp: late, Kind: client.MessageNormal},
+		{ID: "2", SenderAccountID: "bob", Timestamp: early, Kind: client.MessageNormal},
+	}
+	got := newestPerAuthor(msgs)
+	if len(got) != 1 || !got[0].upTo.Equal(late) {
+		t.Errorf("want bob at %s, got %+v", late, got)
+	}
+}
+
 func containsBytes(haystack []byte, needle string) bool {
 	return len(needle) > 0 && len(haystack) >= len(needle) &&
 		indexOf(string(haystack), needle) >= 0

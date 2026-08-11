@@ -319,6 +319,9 @@ func CoreGroupLeave(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupLea
 //export CoreGroupSetMeta
 func CoreGroupSetMeta(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupSetMeta) }
 
+//export CoreGroupSyncRequest
+func CoreGroupSyncRequest(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupSyncRequest) }
+
 //export CoreGroupDissolve
 func CoreGroupDissolve(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupDissolve) }
 

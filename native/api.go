@@ -220,6 +220,16 @@ type attachmentDTO struct {
 type deliveryDTO struct {
 	AccountID string `json:"account_id"`
 	State     string `json:"state"`
+
+	// Error is why this copy failed, empty for one that did not. Diagnostic and
+	// local: the delivery sheet is where "not delivered" has to become
+	// something the reader can act on.
+	Error string `json:"error,omitempty"`
+
+	// AttachmentSkipped: they got the caption but not the picture, because
+	// their server would not take it. Not a delivery failure, so it rides
+	// alongside the state rather than in it.
+	AttachmentSkipped bool `json:"attachment_skipped,omitempty"`
 }
 
 func doCoreMessages(req coreMessagesRequest) (any, error) {
@@ -255,7 +265,10 @@ func toMessageDTO(m client.Message) messageDTO {
 		})
 	}
 	for _, d := range m.Deliveries {
-		dto.Deliveries = append(dto.Deliveries, deliveryDTO{AccountID: d.AccountID, State: string(d.State)})
+		dto.Deliveries = append(dto.Deliveries, deliveryDTO{
+			AccountID: d.AccountID, State: string(d.State),
+			Error: d.Error, AttachmentSkipped: d.AttachmentSkipped,
+		})
 	}
 	return dto
 }
@@ -401,11 +414,6 @@ func doCoreMarkRead(req coreOpenChatRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	last, err := entry.client.LastMessage(req.ChatID)
-	if err != nil {
-		return nil, err
-	}
-
 	ctx, cancel := callContext()
 	defer cancel()
 
@@ -419,10 +427,18 @@ func doCoreMarkRead(req coreOpenChatRequest) (any, error) {
 			return nil, err
 		}
 		// A group receipt goes to the author of what was read, not into the
-		// group: who has read what stays between reader and author.
-		if last != nil && !last.Mine && last.SenderAccountID != "" {
-			upTo := receiptAnchor(last)
-			_ = entry.client.SendGroupReceipt(ctx, req.ChatID, last.SenderAccountID, client.ReceiptRead, upTo)
+		// group: who has read what stays between reader and author. One per
+		// author, because a group transcript has many -- confirming only the
+		// author of the newest message leaves everybody else's permanently
+		// unconfirmed, however long the chat has been open.
+		msgs, err := entry.client.Messages(req.ChatID)
+		if err != nil {
+			return nil, err
+		}
+		for _, author := range newestPerAuthor(msgs) {
+			// Best-effort per author, as everywhere else in a fan-out: one
+			// member being unreachable must not cost the others their receipt.
+			_ = entry.client.SendGroupReceipt(ctx, req.ChatID, author.accountID, client.ReceiptRead, author.upTo)
 		}
 		return struct{}{}, nil
 	}
@@ -433,6 +449,12 @@ func doCoreMarkRead(req coreOpenChatRequest) (any, error) {
 	}
 	convo.HasUnread = false
 	if err := entry.client.PutConversation(*convo); err != nil {
+		return nil, err
+	}
+	// One peer, so one watermark: the newest thing they said answers for
+	// everything they said before it.
+	last, err := entry.client.LastMessage(req.ChatID)
+	if err != nil {
 		return nil, err
 	}
 	if last != nil && !last.Mine {
@@ -449,6 +471,44 @@ func receiptAnchor(m *client.Message) time.Time {
 		return *m.SenderSentAt
 	}
 	return m.Timestamp
+}
+
+// authorAnchor is one author and the newest thing of theirs we have read.
+type authorAnchor struct {
+	accountID string
+	upTo      time.Time
+}
+
+// newestPerAuthor reduces a group transcript to one anchor per other author.
+//
+// A watermark is cumulative -- confirming an author's newest message confirms
+// every earlier one they wrote -- which is exactly why a receipt is one marker
+// per member rather than one per message, and why nothing here has to be
+// tracked per message. Each author's anchor is their *own* newest: anchoring
+// everyone at the transcript's newest would hand each of them a reading of
+// somebody else's clock, and the watermark is monotonic, so an anchor set too
+// far ahead can never be walked back.
+//
+// Sorted by account id, so the fan-out below is in a fixed order rather than
+// map order.
+func newestPerAuthor(msgs []client.Message) []authorAnchor {
+	newest := map[string]time.Time{}
+	for i := range msgs {
+		m := &msgs[i]
+		if m.Mine || m.SenderAccountID == "" || m.Kind != client.MessageNormal {
+			continue
+		}
+		anchor := receiptAnchor(m)
+		if at, seen := newest[m.SenderAccountID]; !seen || anchor.After(at) {
+			newest[m.SenderAccountID] = anchor
+		}
+	}
+	anchors := make([]authorAnchor, 0, len(newest))
+	for account, upTo := range newest {
+		anchors = append(anchors, authorAnchor{accountID: account, upTo: upTo})
+	}
+	sort.Slice(anchors, func(i, j int) bool { return anchors[i].accountID < anchors[j].accountID })
+	return anchors
 }
 
 // --- contacts --------------------------------------------------------------
@@ -687,6 +747,22 @@ func doCoreGroupLeave(req coreGroupMemberRequest) (any, error) {
 	return struct{}{}, entry.client.LeaveGroup(ctx, req.GroupID)
 }
 
+// doCoreGroupSyncRequest asks one member for the group's whole fact set.
+//
+// The shell's cue is a group screen opening, which is the moment a stale
+// member list is about to be shown and acted on. Rate limited inside the core
+// (see pkg/client.RequestGroupSync), so calling it on every open is correct
+// rather than merely tolerable.
+func doCoreGroupSyncRequest(req coreGroupMemberRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := callContext()
+	defer cancel()
+	return struct{}{}, entry.client.RequestGroupSync(ctx, req.GroupID)
+}
+
 func doCoreGroupDissolve(req coreGroupMemberRequest) (any, error) {
 	entry, err := lookupHandle(req.Handle)
 	if err != nil {
@@ -731,10 +807,11 @@ type memberDTO struct {
 	Role      string `json:"role"`
 	Joined    bool   `json:"joined,omitempty"`
 
-	// ReadUpTo is how far this member has got with *our* messages. Per member
-	// and never shared onward, which is why it is here rather than on a
-	// message.
-	ReadUpTo string `json:"read_up_to,omitempty"`
+	// DeliveredUpTo and ReadUpTo are how far this member has got with *our*
+	// messages. Per member and never shared onward, which is why they are here
+	// rather than on a message.
+	DeliveredUpTo string `json:"delivered_up_to,omitempty"`
+	ReadUpTo      string `json:"read_up_to,omitempty"`
 }
 
 func doCoreGroupInfo(req coreGroupMemberRequest) (any, error) {
@@ -767,6 +844,7 @@ func doCoreGroupInfo(req coreGroupMemberRequest) (any, error) {
 		dto := memberDTO{AccountID: m.AccountID, Server: m.Server, Role: m.RoleName, Joined: m.Joined}
 		if chat != nil {
 			if receipt, ok := chat.MemberReceipts[m.AccountID]; ok {
+				dto.DeliveredUpTo = formatOptional(receipt.DeliveredUpTo)
 				dto.ReadUpTo = formatOptional(receipt.ReadUpTo)
 			}
 		}

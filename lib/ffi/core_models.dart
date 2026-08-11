@@ -212,15 +212,31 @@ class CoreAttachment {
 }
 
 class CoreDelivery {
-  const CoreDelivery({required this.accountId, required this.state});
+  const CoreDelivery({
+    required this.accountId,
+    required this.state,
+    this.error = '',
+    this.attachmentSkipped = false,
+  });
 
   factory CoreDelivery.fromJson(Map<String, dynamic> j) => CoreDelivery(
     accountId: j['account_id'] as String,
     state: j['state'] as String? ?? 'sent',
+    error: j['error'] as String? ?? '',
+    attachmentSkipped: j['attachment_skipped'] as bool? ?? false,
   );
 
   final String accountId;
   final String state;
+
+  /// Why this copy failed, in the words of whatever refused it. Empty for one
+  /// that did not fail -- "not delivered" on its own is not something a reader
+  /// can do anything about.
+  final String error;
+
+  /// They got the caption but not the picture: their server would not take it.
+  /// Not a delivery failure, and no retry can mend it.
+  final bool attachmentSkipped;
 }
 
 /// A group's membership and roles.
@@ -270,6 +286,7 @@ class GroupMemberInfo {
     required this.role,
     this.server = '',
     this.joined = false,
+    this.deliveredUpTo,
     this.readUpTo,
   });
 
@@ -278,6 +295,7 @@ class GroupMemberInfo {
     role: j['role'] as String? ?? 'member',
     server: j['server'] as String? ?? '',
     joined: j['joined'] as bool? ?? false,
+    deliveredUpTo: _time(j['delivered_up_to']),
     readUpTo: _time(j['read_up_to']),
   );
 
@@ -291,8 +309,10 @@ class GroupMemberInfo {
   /// they agree to it.
   final bool joined;
 
-  /// How far this member has got with *our* messages. Per member and never
-  /// shared onward -- who has read what stays between reader and author.
+  /// How far this member has confirmed receiving, and reading, *our* messages.
+  /// Per member and never shared onward -- who has read what stays between
+  /// reader and author.
+  final DateTime? deliveredUpTo;
   final DateTime? readUpTo;
 }
 
