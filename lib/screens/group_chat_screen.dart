@@ -682,7 +682,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       // The same divider a one-to-one transcript draws, from the same helpers
       // (util/chat_time.dart) -- the two screens show the same thing and a
       // reader moving between them should not have to notice which they are in.
-      final day = localDayOf(message.timestamp);
+      final day = localDayOf(message.displayTime);
       if (lastDay == null || day != lastDay) {
         bubbles.add(DateDivider(label: dayLabel(day)));
         lastDay = day;
@@ -1044,7 +1044,7 @@ class _GroupBubble extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         Text(
-                          timeLabel(message.timestamp),
+                          timeLabel(message.displayTime),
                           style: TextStyle(
                             fontSize: 11,
                             color: onBubble.withValues(alpha: 0.7),

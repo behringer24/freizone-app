@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:freizone/state/chat_target.dart';
 import 'package:freizone/util/chat_time.dart';
 
 // The labels both transcripts read their clock from. Small, but shared by two
@@ -46,6 +47,36 @@ void main() {
         expect(dayLabel(localDayOf(morning)), dayLabel(localDayOf(evening)));
       }
       expect(localDayOf(morning).hour, 0);
+    });
+  });
+
+  // Which of a line's two times is the one on screen.
+  group('the time a line is labelled with', () {
+    test('is the author\'s, not this device\'s', () {
+      final wrote = DateTime.utc(2026, 8, 11, 21, 11);
+      final arrived = DateTime.utc(2026, 8, 11, 21, 12);
+      final line = StoredMessage(
+        text: 'einmal, mit Lücke',
+        mine: false,
+        timestamp: arrived,
+        senderSentAt: wrote,
+      );
+      // The minute between them is the retry that finally got it here. It is
+      // this device's story, not the message's, and in a group each member
+      // has a different one.
+      expect(line.displayTime, wrote);
+    });
+
+    test('falls back to arrival when the sender never said', () {
+      final arrived = DateTime.utc(2026, 8, 11, 21, 12);
+      final line = StoredMessage(text: 'älter', mine: false, timestamp: arrived);
+      expect(line.displayTime, arrived);
+    });
+
+    test('is the send time for a line of our own', () {
+      final sent = DateTime.utc(2026, 8, 11, 21, 11);
+      final line = StoredMessage(text: 'meins', mine: true, timestamp: sent);
+      expect(line.displayTime, sent);
     });
   });
 }

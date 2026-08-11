@@ -221,10 +221,15 @@ type deliveryDTO struct {
 	AccountID string `json:"account_id"`
 	State     string `json:"state"`
 
-	// Error is why this copy failed, empty for one that did not. Diagnostic and
-	// local: the delivery sheet is where "not delivered" has to become
-	// something the reader can act on.
+	// Error is why this copy failed, empty for one that did not, phrased for
+	// the reader: the delivery sheet is where "not delivered" has to become
+	// something they can act on.
 	Error string `json:"error,omitempty"`
+
+	// Detail is the same failure in the words of whatever refused it. Never
+	// shown -- it goes to the log line after a fan-out, so that saying the
+	// first one plainly costs nothing in diagnosis.
+	Detail string `json:"detail,omitempty"`
 
 	// AttachmentSkipped: they got the caption but not the picture, because
 	// their server would not take it. Not a delivery failure, so it rides
@@ -267,7 +272,7 @@ func toMessageDTO(m client.Message) messageDTO {
 	for _, d := range m.Deliveries {
 		dto.Deliveries = append(dto.Deliveries, deliveryDTO{
 			AccountID: d.AccountID, State: string(d.State),
-			Error: d.Error, AttachmentSkipped: d.AttachmentSkipped,
+			Error: d.Error, Detail: d.Detail, AttachmentSkipped: d.AttachmentSkipped,
 		})
 	}
 	return dto

@@ -1890,8 +1890,12 @@ class AppSession extends ChangeNotifier {
     }
     if (message == null || message.deliveries.isEmpty) return;
     final each = message.deliveries.map((d) {
-      final why = d.error == null ? '' : ' (${d.error})';
-      return '${shortAccountId(d.accountId)}=${d.state.name}$why';
+      // The detail, not the sentence the sheet shows: what is useful here is
+      // the endpoint and the syscall, which is exactly what the sheet leaves
+      // out.
+      final why = d.detail ?? d.error;
+      return '${shortAccountId(d.accountId)}=${d.state.name}'
+          '${why == null ? '' : ' ($why)'}';
     });
     logDiagnostic(
       '$label ${shortAccountId(groupId)}/${message.id.substring(0, 8)}: '

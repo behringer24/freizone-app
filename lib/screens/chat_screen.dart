@@ -484,7 +484,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final items = <Widget>[];
     DateTime? lastDay;
     for (final m in convo.messages) {
-      final day = localDayOf(m.timestamp);
+      final day = localDayOf(m.displayTime);
       if (lastDay == null || day != lastDay) {
         items.add(DateDivider(label: dayLabel(day)));
         lastDay = day;
@@ -505,7 +505,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _MessageBubble(
           key: _keyFor(m.id),
           message: m,
-          timeLabel: timeLabel(m.timestamp),
+          timeLabel: timeLabel(m.displayTime),
           peerTitle: convo.titleFor(widget.session.state.server, widget.contacts),
           isPinned: convo.pinnedMessageIds.contains(m.id),
           deliveryStatus: _deliveryStatusFor(convo, m),

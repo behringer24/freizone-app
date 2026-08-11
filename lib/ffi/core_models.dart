@@ -216,6 +216,7 @@ class CoreDelivery {
     required this.accountId,
     required this.state,
     this.error = '',
+    this.detail = '',
     this.attachmentSkipped = false,
   });
 
@@ -223,16 +224,21 @@ class CoreDelivery {
     accountId: j['account_id'] as String,
     state: j['state'] as String? ?? 'sent',
     error: j['error'] as String? ?? '',
+    detail: j['detail'] as String? ?? '',
     attachmentSkipped: j['attachment_skipped'] as bool? ?? false,
   );
 
   final String accountId;
   final String state;
 
-  /// Why this copy failed, in the words of whatever refused it. Empty for one
+  /// Why this copy failed, in words for the person who sent it. Empty for one
   /// that did not fail -- "not delivered" on its own is not something a reader
   /// can do anything about.
   final String error;
+
+  /// The same failure in the words of whatever refused it: endpoint, status,
+  /// syscall. Goes to the log and never on screen.
+  final String detail;
 
   /// They got the caption but not the picture: their server would not take it.
   /// Not a delivery failure, and no retry can mend it.

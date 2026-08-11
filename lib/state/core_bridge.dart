@@ -163,6 +163,7 @@ StoredMessage _toStoredMessage(CoreMessage m) => StoredMessage(
           wireMessageId: '',
           state: _sendState(d.state),
           error: d.error.isEmpty ? null : d.error,
+          detail: d.detail.isEmpty ? null : d.detail,
           attachmentSkipped: d.attachmentSkipped,
         ),
       )
