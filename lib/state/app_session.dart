@@ -517,10 +517,14 @@ class AppSession extends ChangeNotifier {
         myRole = null;
         adminAccounts = [];
       } else {
-        lastError = 'checking admin role failed: $e';
+        _noteFailure('checking admin role failed', e);
       }
     } catch (e) {
-      lastError = 'checking admin role failed: $e';
+      // Through _noteFailure like every other failure, rather than raw: this
+      // runs on every start and on every visit to the admin area, so against
+      // a server that is away it was the banner, reciting a SocketException
+      // with an errno and an ephemeral port number.
+      _noteFailure('checking admin role failed', e);
     }
     notifyListeners();
   }

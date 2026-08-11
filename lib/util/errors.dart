@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../ffi/freizone_core_exception.dart';
 import '../net/api_client.dart';
 
 String describeError(Object e) {
@@ -20,6 +21,11 @@ String describeError(Object e) {
   if (isServerUnreachable(e)) {
     return 'Server not reachable. Check the server address and your connection.';
   }
+  // A core failure that is not the server being away still reaches somebody
+  // eventually, and "FreizoneCoreException: client: POST /v1/..." is not a
+  // sentence. The core's own message is written to be read; the wrapper name
+  // is what makes it look like a crash report.
+  if (e is FreizoneCoreException) return e.message;
   // StateError carries an already user-facing message (e.g. the self-chat and
   // federation-disabled guards in AppSession.startConversation) -- show it
   // directly rather than Dart's "Bad state: ..." toString() prefix.
@@ -40,4 +46,11 @@ bool isServerUnreachable(Object e) =>
     e is SocketException ||
     e is http.ClientException ||
     e is HandshakeException ||
-    e is TimeoutException;
+    e is TimeoutException ||
+    // The same thing, reported by the core rather than by dart:io. Every
+    // request that used to be made here is made there now, so without this the
+    // predicate silently stopped matching the failure it was written for --
+    // and a stream that could not connect went from a dimmed account to a
+    // full-width red banner repeating a socket error every few seconds.
+    (e is FreizoneCoreException &&
+        e.code == CoreErrorCode.serverUnreachable);

@@ -26,7 +26,6 @@ import 'package:path_provider/path_provider.dart';
 
 import '../ffi/freizone_core.dart';
 import '../ffi/freizone_core_exception.dart';
-import 'api_client.dart';
 
 /// What one blocking `CorePoll` returned.
 class CorePollResult {
@@ -50,7 +49,12 @@ class CorePollResult {
 
 /// One thing that happened on the stream.
 class CoreStreamEvent {
-  const CoreStreamEvent({required this.kind, this.outcome, this.error});
+  const CoreStreamEvent({
+    required this.kind,
+    this.outcome,
+    this.error,
+    this.errorCode,
+  });
 
   factory CoreStreamEvent.fromJson(Map<String, dynamic> j) => CoreStreamEvent(
     kind: j['kind'] as String? ?? 'unknown',
@@ -58,6 +62,7 @@ class CoreStreamEvent {
         ? null
         : PollOutcome.fromJson(j['outcome'] as Map<String, dynamic>),
     error: j['error'] as String?,
+    errorCode: j['code'] as String?,
   );
 
   /// "connected", "message", "disconnected" or "failed".
@@ -73,6 +78,10 @@ class CoreStreamEvent {
   /// Present for "failed", and deliberately absent for "disconnected" even
   /// though the core knows why -- see [CoreStream.connect].
   final String? error;
+
+  /// A [CoreErrorCode] when the core could classify that failure, null when it
+  /// could not. What the caller decides with, since [error] is prose.
+  final String? errorCode;
 }
 
 /// What one handled envelope turned into. The core has already decrypted it
@@ -240,8 +249,15 @@ class CoreStream {
             case 'message':
               if (event.outcome != null) onMessage(event.outcome!);
             case 'failed':
+              // Not an ApiException: that type means a server answered and
+              // said no, which is precisely what did not happen here, and
+              // dressing a failed connect as one is what stopped the caller
+              // recognising an unreachable server as ordinary.
               onError?.call(
-                ApiException(0, null, event.error ?? 'stream attempt failed'),
+                FreizoneCoreException(
+                  event.error ?? 'stream attempt failed',
+                  code: event.errorCode,
+                ),
               );
             case 'disconnected':
               break; // the core is already reconnecting -- see above

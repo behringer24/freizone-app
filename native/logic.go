@@ -23,6 +23,7 @@ import (
 
 	"github.com/behringer24/freizone-server/pkg/address"
 	"github.com/behringer24/freizone-server/pkg/attest"
+	"github.com/behringer24/freizone-server/pkg/client"
 	"github.com/behringer24/freizone-server/pkg/devicecert"
 	"github.com/behringer24/freizone-server/pkg/httpsig"
 	"github.com/behringer24/freizone-server/pkg/mnemonic"
@@ -70,8 +71,22 @@ func errorCode(err error) string {
 	if errors.As(err, &coded) {
 		return coded.Code()
 	}
+	// Derived rather than attached: every call in this file can fail because
+	// the server is simply not there, so marking each one by hand would mean
+	// marking all of them and missing the next. The shell needs to tell that
+	// apart from a server that answered and refused -- it keeps quiet for one
+	// and interrupts for the other -- and error text is not a contract it can
+	// match on.
+	if client.IsUnreachable(err) {
+		return codeServerUnreachable
+	}
 	return ""
 }
+
+// codeServerUnreachable is the one classification this layer derives itself.
+// KEEP IN STEP with CoreErrorCode.serverUnreachable in
+// lib/ffi/freizone_core_exception.dart.
+const codeServerUnreachable = "server_unreachable"
 
 // verifyResult is the shared shape for "did this signature/certificate
 // verify" calls: verification failure is a normal, expected outcome (not a

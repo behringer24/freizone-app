@@ -241,6 +241,13 @@ type pollEvent struct {
 	// this is its text -- for logging and for the app's own failure notice,
 	// never for deciding anything.
 	Error string `json:"error,omitempty"`
+
+	// Code classifies that failure when it can be classified, because the
+	// shell does have one thing to decide: whether this is worth a red banner.
+	// It is not, when the server is merely away -- that retries itself and the
+	// account is already dimmed. Without this the shell had only the text, so
+	// it treated every failed connect as worth interrupting somebody over.
+	Code string `json:"code,omitempty"`
 }
 
 // pollOutcome is what one envelope turned into, after HandleIncoming has
@@ -397,6 +404,7 @@ func convertEvent(entry *coreHandle, ev client.StreamEvent) pollEvent {
 		out := pollEvent{Kind: "failed"}
 		if ev.Err != nil {
 			out.Error = ev.Err.Error()
+			out.Code = errorCode(ev.Err)
 		}
 		return out
 	default:

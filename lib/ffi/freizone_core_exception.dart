@@ -21,6 +21,18 @@ class CoreErrorCode {
   /// A message for a receiving chain that doesn't exist here yet.
   static const noReceivingChain = 'no_receiving_chain';
 
+  /// The request never reached a working server: refused, timed out, no DNS,
+  /// no route. Says nothing about the account or the request -- only that
+  /// nothing was learned, so a later attempt may well say something else.
+  ///
+  /// The one code the core derives rather than being handed (native/logic.go's
+  /// errorCode, from pkg/client.IsUnreachable), because any call at all can
+  /// fail this way. Acted on in util/errors.dart: a server that is away is the
+  /// most common failure there is, it retries itself, and the account is
+  /// already dimmed with an offline badge -- so it must not also raise the red
+  /// banner that is supposed to mean "look at this".
+  static const serverUnreachable = 'server_unreachable';
+
   /// Whether [code] means the session with this peer is unlikely to ever
   /// decrypt again, so it should be re-established rather than retried
   /// (ratchet.SuggestsDesync). False for a duplicate (nothing is wrong) and
