@@ -85,6 +85,7 @@ class PollOutcome {
     required this.notify,
     required this.invitation,
     required this.isGroup,
+    this.attachmentMessageId = '',
     this.failure = '',
     this.senderAccountId = '',
   });
@@ -94,6 +95,7 @@ class PollOutcome {
     notify: j['notify'] as bool? ?? false,
     invitation: j['invitation'] as bool? ?? false,
     isGroup: j['is_group'] as bool? ?? false,
+    attachmentMessageId: j['attachment_message_id'] as String? ?? '',
     failure: j['failure'] as String? ?? '',
     senderAccountId: j['sender_account_id'] as String? ?? '',
   );
@@ -117,6 +119,11 @@ class PollOutcome {
   /// AppState.groups to check against (the background wake, see
   /// push_manager.dart) still knows which kind of chat this is.
   final bool isGroup;
+
+  /// The line this envelope stored, when it carried a picture -- empty
+  /// otherwise. Lets a foreground session start the download as the message
+  /// lands instead of when its bubble is first looked at.
+  final String attachmentMessageId;
 
   /// Why this envelope was not handled, or empty when it was. Diagnostic
   /// only -- the core has already decided what to do about it (retry or

@@ -288,6 +288,19 @@ type pollOutcome struct {
 	// that failed is still acknowledged or retried by exactly the rule above.
 	Failure string `json:"failure,omitempty"`
 
+	// AttachmentMessageID names the line this envelope stored, when that line
+	// carried a picture. Empty otherwise, which is nearly always.
+	//
+	// Here so a foreground session can start the download the moment the
+	// message lands rather than when its bubble is first looked at. That is an
+	// optimisation over the lazy fetch and never a substitute: history, a
+	// failed attempt and the background wake (which deliberately writes only
+	// the inline thumbnail) all still rely on ImageAttachment asking for
+	// itself. Said outright rather than left to be re-derived, so the shell
+	// does not have to go rummaging in a transcript it has just refreshed to
+	// find out whether there is anything to fetch.
+	AttachmentMessageID string `json:"attachment_message_id,omitempty"`
+
 	// SenderAccountID names who the failed envelope came from, since ChatID
 	// is deliberately empty for one and a bare error text says nothing about
 	// which conversation is broken.
@@ -429,6 +442,9 @@ func handleAndAck(ctx context.Context, c *client.Client, msg client.IncomingMess
 	}
 
 	out := pollOutcome{Notify: res.ShouldNotify}
+	if res.StoredMessageID != "" && len(res.Content.Attachments) > 0 {
+		out.AttachmentMessageID = res.StoredMessageID
+	}
 	if res.Group != nil {
 		out.ChatID = res.Group.GroupID
 		out.Invitation = res.Group.Invited

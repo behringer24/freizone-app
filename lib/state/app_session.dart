@@ -1077,6 +1077,21 @@ class AppSession extends ChangeNotifier {
     if (outcome.chatId.isEmpty) return; // a duplicate
     applyCoreChat(state, coreAccount, outcome.chatId);
 
+    // A picture starts downloading as it arrives rather than when its bubble is
+    // first looked at -- i.e. not at the moment the user is waiting for it.
+    // Unawaited on purpose: this is an optimisation over ImageAttachment's own
+    // lazy fetch, and a download must never delay a receipt, a notification or
+    // the redraw above, nor make a message that did arrive look as though it
+    // had not.
+    if (outcome.attachmentMessageId.isNotEmpty) {
+      unawaited(
+        _prefetchAttachment(
+          chatId: outcome.chatId,
+          messageId: outcome.attachmentMessageId,
+        ),
+      );
+    }
+
     if (outcome.notify) {
       // Without this call, the launcher icon's badge (which Android derives
       // from active notifications, not anything drawn in-app) would never
@@ -1909,7 +1924,31 @@ class AppSession extends ChangeNotifier {
 
   // The sender's own copy of a picture is written by the core before the
   // network is touched (pkg/client.SendText), so there is nothing to keep here.
-  // Prefetching an arriving one is not: see the note in docs/ROADMAP.md.
+
+  /// Starts downloading a just-arrived picture, and tells the UI when it lands
+  /// so a bubble already on screen swaps its placeholder for the real file.
+  ///
+  /// Every failure is swallowed: this is an optimisation over the lazy fetch,
+  /// and a picture that cannot be downloaded now still gets its tap-to-retry
+  /// placeholder from [ImageAttachment] exactly as before.
+  Future<void> _prefetchAttachment({
+    required String chatId,
+    required String messageId,
+  }) async {
+    final message =
+        state.groups[chatId]?.messageById(messageId) ??
+        state.conversations[chatId]?.messageById(messageId);
+    if (message == null) return;
+    try {
+      final file = await ensureAttachmentDownloaded(
+        chatId: chatId,
+        message: message,
+      );
+      if (file != null) notifyListeners();
+    } catch (_) {
+      // Left to the lazy path, which reports it in the bubble.
+    }
+  }
 
   /// Fetches and decrypts one attachment, storing it as a local file, and
   /// returns that file. If it is already downloaded the existing file is
