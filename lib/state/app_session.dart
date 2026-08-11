@@ -1,4 +1,4 @@
-﻿// Owns everything that used to live inside a single ChatScreen: the Go
+// Owns everything that used to live inside a single ChatScreen: the Go
 // core, the API client, one long-lived SSE stream, prekey upload, X3DH
 // session establishment, and encrypt/decrypt -- for the lifetime of the
 // app, independent of which screen is on screen. This is what lets the
@@ -204,7 +204,7 @@ class AppSession extends ChangeNotifier {
   /// The ApiClient to use for a peer whose home server is [server] --
   /// this session's own [api] if null or the same server, otherwise a
   /// cached (or freshly created) client pointed at that server directly.
-  /// See docs/PROTOCOL.md Â§9: federation is client-direct, not relayed
+  /// See docs/PROTOCOL.md §9: federation is client-direct, not relayed
   /// through this session's own server.
   ApiClient _clientFor(String? server) {
     if (server == null || sameServer(server, state.server)) return api;
@@ -409,7 +409,7 @@ class AppSession extends ChangeNotifier {
   /// What the server holding this conversation's attachments will accept.
   ///
   /// That is the RECIPIENT's server, not ours: a blob is uploaded to where
-  /// the recipient can fetch it from (docs/PROTOCOL.md Â§10), so for a
+  /// the recipient can fetch it from (docs/PROTOCOL.md §10), so for a
   /// federated peer the remote operator's switch and size cap are the ones
   /// that count. Returns null while unknown -- callers treat that as "don't
   /// know yet" rather than "unsupported", so a slow status call doesn't
@@ -1125,7 +1125,7 @@ class AppSession extends ChangeNotifier {
   /// or just a bare id/prefix, see lib/util/freizone_address.dart), so a
   /// dash-grouped or phone-dictated id ("k5x9 p2qa n7f3...") resolves the
   /// same as the canonical form. An explicit `*server` that isn't this
-  /// session's own (or `local`) is a federated address (docs/PROTOCOL.md Â§9):
+  /// session's own (or `local`) is a federated address (docs/PROTOCOL.md §9):
   /// resolved and messaged directly against that server, not this session's
   /// own.
   ///

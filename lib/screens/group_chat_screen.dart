@@ -1,4 +1,4 @@
-﻿// A group's transcript (APP-16).
+// A group's transcript (APP-16).
 //
 // Deliberately its own screen for now rather than a ChatScreen taught to
 // render both. ChatScreen is built end to end around a peer -- blocking,
@@ -268,7 +268,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         title: const Text('Decline this invitation?'),
         content: const Text(
           'The group will see that you declined, and you will be removed from '
-          'its member list. This group then disappears from your chats â€” only '
+          'its member list. This group then disappears from your chats — only '
           'someone in the group can invite you again.',
         ),
         actions: [
@@ -851,7 +851,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 // uploaded once per recipient server, which is exactly why the
                 // size is worth showing before the send.
                 Text(
-                  '${attachment.width}Ã—${attachment.height} Â· '
+                  '${attachment.width}×${attachment.height} · '
                   '${formatByteSize(attachment.bytes.length)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
