@@ -638,6 +638,8 @@ class FreizoneCore {
       _call(_bindings.coreGroupSetMeta, req);
   Map<String, dynamic> coreGroupSyncRequestRaw(Map<String, dynamic> req) =>
       _call(_bindings.coreGroupSyncRequest, req);
+  Map<String, dynamic> coreForgetPeerRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreForgetPeer, req);
   Map<String, dynamic> coreGroupDissolveRaw(Map<String, dynamic> req) =>
       _call(_bindings.coreGroupDissolve, req);
 

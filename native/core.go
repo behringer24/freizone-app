@@ -322,6 +322,9 @@ func CoreGroupSetMeta(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupS
 //export CoreGroupSyncRequest
 func CoreGroupSyncRequest(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupSyncRequest) }
 
+//export CoreForgetPeer
+func CoreForgetPeer(cReq *C.char) *C.char { return jsonCall(cReq, doCoreForgetPeer) }
+
 //export CoreGroupDissolve
 func CoreGroupDissolve(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupDissolve) }
 

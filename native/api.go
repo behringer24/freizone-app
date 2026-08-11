@@ -597,6 +597,27 @@ func doCoreDeleteChat(req coreOpenChatRequest) (any, error) {
 	return struct{}{}, entry.client.DeleteConversation(req.ChatID)
 }
 
+// doCoreForgetPeer discards everything this device holds *about* a peer: the
+// cached device and both ratchet sessions with them.
+//
+// The counterpart to deleting a chat, not a part of it. Deleting a chat keeps
+// the session on purpose -- the peer does not know their chat was deleted here,
+// and their next message must not look like a desync. This is for the case the
+// shell gates behind evidence that the peer is genuinely gone (see
+// peer_absence.dart), where there is no next message to protect and leaving
+// their ratchet behind would make "nothing about this peer is left on the
+// device" untrue.
+//
+// Deliberately not ResetSession, which discards in order to re-establish and
+// tells the peer so. This one forgets.
+func doCoreForgetPeer(req coreOpenChatRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	return struct{}{}, entry.client.ForgetPeerDevice(req.ChatID)
+}
+
 // --- attachments -----------------------------------------------------------
 
 type coreAttachmentRequest struct {

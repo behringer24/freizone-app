@@ -1287,18 +1287,13 @@ class AppSession extends ChangeNotifier {
   /// conclude -- but then with the consequence stated: if that peer does come
   /// back, their first messages are undecryptable until a re-key completes.
   ///
-  /// KNOWN GAP: the session itself does not go yet.
-  ///
-  /// This used to discard both ratchet sessions with the peer, which is what
-  /// made "nothing about this peer is left" true. Both lived in AppState then.
-  /// Since the core took over the ratchet they live in its files, and the two
-  /// lines here were removing a copy that no longer meant anything -- so what
-  /// this call really does today is delete the chat, not the session. Closing
-  /// it needs a core call that drops a peer's sending *and* inbound session
-  /// outright; [resetSecureSession] is the nearest thing and deliberately not
-  /// the same, since it re-establishes rather than forgets.
+  /// Both ratchet sessions go too, and the cached device with them (see
+  /// [CoreAccount.forgetPeer]): leaving half of a discarded pair behind would
+  /// keep exactly the state this action exists to clear, and a session is
+  /// keyed to the device that established it.
   Future<void> removeConversationPermanently(String peerAccountId) async {
     await deleteConversation(peerAccountId);
+    await coreAccount.forgetPeer(peerAccountId);
     await LocalStateStore.saveProfile(state);
     notifyListeners();
   }

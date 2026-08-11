@@ -245,6 +245,15 @@ class CoreAccount {
   Future<void> dissolveGroup(String groupId) =>
       _run({'call': 'group_dissolve', 'handle': handle, 'group_id': groupId});
 
+  /// Discards everything held *about* a peer: the cached device and both
+  /// ratchet sessions with them.
+  ///
+  /// Not part of deleting a chat, which keeps the session on purpose so the
+  /// peer's next message does not read as a desync. This is for a peer the
+  /// caller has evidence is gone, where "nothing is left" has to be true.
+  Future<void> forgetPeer(String accountId) =>
+      _run({'call': 'forget_peer', 'handle': handle, 'chat_id': accountId});
+
   /// Asks one member for the group's whole fact set.
   ///
   /// Convergence would otherwise be reactive only: a device that missed a fact
@@ -310,6 +319,8 @@ Map<String, dynamic> coreCallInIsolate(
       return core.coreGroupSetMetaRaw(request);
     case 'group_sync_request':
       return core.coreGroupSyncRequestRaw(request);
+    case 'forget_peer':
+      return core.coreForgetPeerRaw(request);
     case 'group_dissolve':
       return core.coreGroupDissolveRaw(request);
   }
