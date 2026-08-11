@@ -1,4 +1,4 @@
-// A group's transcript (APP-16).
+﻿// A group's transcript (APP-16).
 //
 // Deliberately its own screen for now rather than a ChatScreen taught to
 // render both. ChatScreen is built end to end around a peer -- blocking,
@@ -268,7 +268,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         title: const Text('Decline this invitation?'),
         content: const Text(
           'The group will see that you declined, and you will be removed from '
-          'its member list. This group then disappears from your chats — only '
+          'its member list. This group then disappears from your chats â€” only '
           'someone in the group can invite you again.',
         ),
         actions: [
@@ -851,7 +851,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 // uploaded once per recipient server, which is exactly why the
                 // size is worth showing before the send.
                 Text(
-                  '${attachment.width}×${attachment.height} · '
+                  '${attachment.width}Ã—${attachment.height} Â· '
                   '${formatByteSize(attachment.bytes.length)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -1010,10 +1010,21 @@ class _GroupBubble extends StatelessWidget {
                       // group id: it only ever names the directory the file
                       // lives in, so the download and cache paths need no
                       // group-specific branch at all.
-                      ImageAttachment(
-                        session: session,
-                        chatId: chat.groupId,
-                        message: message,
+                      //
+                      // Given a width here, unlike in a one-to-one bubble, and
+                      // that is not cosmetic: [IntrinsicWidth] below asks this
+                      // column how wide it wants to be, a tight width is the one
+                      // answer a box can give without asking its own child, and
+                      // asking further down is what blanked this transcript
+                      // outright (see ImageAttachment's spinner). The picture
+                      // caps at this width anyway.
+                      SizedBox(
+                        width: 260,
+                        child: ImageAttachment(
+                          session: session,
+                          chatId: chat.groupId,
+                          message: message,
+                        ),
                       ),
                       if (message.text.isNotEmpty) const SizedBox(height: 6),
                     ],

@@ -189,23 +189,27 @@ class _ImageAttachmentState extends State<ImageAttachment> {
           // widget, not by anything it does itself.
           const SizedBox.shrink()
         else
-          // Sized against the bubble rather than fixed: at 28px a short or
-          // narrow picture's placeholder was almost entirely spinner, which
-          // filled the rounded clip and read as a square.
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final shortest = constraints.biggest.shortestSide;
-              final diameter = (shortest * 0.35).clamp(14.0, 28.0);
-              return Center(
-                child: SizedBox(
-                  width: diameter,
-                  height: diameter,
-                  child: CircularProgressIndicator(
-                    strokeWidth: diameter / 11,
-                  ),
-                ),
-              );
-            },
+          // A fixed size, deliberately, where this used to measure itself
+          // against the bubble with a LayoutBuilder.
+          //
+          // LayoutBuilder cannot answer an intrinsic-dimension query at all,
+          // and this widget goes inside a bubble that asks one: the group
+          // transcript wraps its column in IntrinsicWidth so a bubble hugs its
+          // text. The query walks ConstrainedBox -> AspectRatio (which, given
+          // unbounded height, delegates to its child) -> Stack -> here, and
+          // every message in that transcript stopped being painted -- with no
+          // error anywhere, which is what made it expensive to find.
+          //
+          // The old sizing existed so a small picture's placeholder was not
+          // almost entirely spinner. 22px keeps that within a rounded clip of
+          // any size this widget is given, which is a fair trade for a
+          // placeholder that is on screen for a moment.
+          const Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
           ),
       ],
     );
