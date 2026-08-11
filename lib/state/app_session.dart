@@ -1856,10 +1856,47 @@ class AppSession extends ChangeNotifier {
     } finally {
       chat.messages.remove(placeholder);
       applyCoreChat(state, coreAccount, groupId);
+      _logGroupDelivery('sent', groupId, null);
     }
     if (error == null) lastError = null;
     notifyListeners();
     if (error != null) throw error;
+  }
+
+  /// Writes the per-member outcome of one group fan-out to the log.
+  ///
+  /// A group send is the one path whose result exists nowhere but the bubble.
+  /// The sending server records the copies it accepted and knows nothing of
+  /// the ones addressed elsewhere; the server that refused, being down, logs
+  /// nothing at all. So a partial delivery could until now only be described
+  /// from the screen -- which is precisely the state a retry has to be
+  /// debugged from. [logDiagnostic] keeps it out of release builds.
+  ///
+  /// [messageId] is null after a first send, where the core mints the id and
+  /// the placeholder's is discarded; the newest outgoing line is that message.
+  void _logGroupDelivery(String label, String groupId, String? messageId) {
+    final chat = state.groups[groupId];
+    if (chat == null) return;
+    StoredMessage? message;
+    if (messageId != null) {
+      message = chat.messageById(messageId);
+    } else {
+      for (var i = chat.messages.length - 1; i >= 0; i--) {
+        if (chat.messages[i].mine) {
+          message = chat.messages[i];
+          break;
+        }
+      }
+    }
+    if (message == null || message.deliveries.isEmpty) return;
+    final each = message.deliveries.map((d) {
+      final why = d.error == null ? '' : ' (${d.error})';
+      return '${shortAccountId(d.accountId)}=${d.state.name}$why';
+    });
+    logDiagnostic(
+      '$label ${shortAccountId(groupId)}/${message.id.substring(0, 8)}: '
+      '${each.join(', ')}',
+    );
   }
 
   /// Re-sends only the copies of a group message that never arrived.
@@ -1886,6 +1923,7 @@ class AppSession extends ChangeNotifier {
     } finally {
       _retrying.remove(messageId);
       applyCoreChat(state, coreAccount, groupId);
+      _logGroupDelivery('retried', groupId, messageId);
       notifyListeners();
     }
   }
