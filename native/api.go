@@ -919,10 +919,17 @@ func doCoreMaintain(req coreHandleRequest) (any, error) {
 	} else {
 		out.PrekeysToppedUp = true
 	}
-	if paid, err := entry.client.PayGroupSnapshotDebts(ctx); err != nil {
+	if paid, gone, err := entry.client.PayGroupSnapshotDebts(ctx); err != nil {
 		out.Problems = append(out.Problems, "settling group facts: "+err.Error())
 	} else {
 		out.DebtsPaid = paid
+		// Said once, here, because nothing else will ever say it: a member
+		// whose account is gone keeps their row in the group until a moderator
+		// removes them, and this is the only moment anything found out.
+		for _, account := range gone {
+			out.Problems = append(out.Problems,
+				"group member "+account+" no longer exists on their server")
+		}
 	}
 	if recovered, err := entry.client.RecoverDesyncedSessions(ctx); err != nil {
 		out.Problems = append(out.Problems, "recovering sessions: "+err.Error())
