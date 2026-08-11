@@ -648,6 +648,19 @@ func doCoreAttachmentPath(req coreAttachmentRequest) (any, error) {
 		return attachmentPathResponse{Path: entry.client.AttachmentThumbPath(req.ChatID, req.MessageID)}, nil
 	}
 
+	// A file already here needs no blob and no key. That is the sender's own
+	// picture -- written before the network was touched, and since a group's
+	// blob is per recipient server its line keeps a placeholder with no id at
+	// all -- and equally anything downloaded earlier. Asked first, because the
+	// blob-id check below would otherwise answer "nothing" for a picture
+	// sitting on disk, which is what left a sender looking at their own
+	// photograph as a blurred thumbnail.
+	if path := entry.client.AttachmentPath(req.ChatID, req.MessageID); path != "" {
+		if _, err := os.Stat(path); err == nil {
+			return attachmentPathResponse{Path: path}, nil
+		}
+	}
+
 	msgs, err := entry.client.Messages(req.ChatID)
 	if err != nil {
 		return nil, err
@@ -659,6 +672,9 @@ func doCoreAttachmentPath(req coreAttachmentRequest) (any, error) {
 			break
 		}
 	}
+	// Nothing to fetch: a line whose attachment never finished uploading has no
+	// blob anywhere to fetch it from, and asking would fail on the missing key
+	// rather than on the missing blob.
 	if attachment == nil || attachment.BlobID == "" {
 		return attachmentPathResponse{}, nil
 	}

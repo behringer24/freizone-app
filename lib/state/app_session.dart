@@ -1928,6 +1928,11 @@ class AppSession extends ChangeNotifier {
   /// Starts downloading a just-arrived picture, and tells the UI when it lands
   /// so a bubble already on screen swaps its placeholder for the real file.
   ///
+  /// Through the core, exactly as [ImageAttachment] does when a bubble asks for
+  /// itself -- the same call, just made earlier. It has to be: the key a blob is
+  /// opened with never crosses the FFI (see native's attachmentDTO), so this
+  /// side cannot download anything itself.
+  ///
   /// Every failure is swallowed: this is an optimisation over the lazy fetch,
   /// and a picture that cannot be downloaded now still gets its tap-to-retry
   /// placeholder from [ImageAttachment] exactly as before.
@@ -1935,109 +1940,24 @@ class AppSession extends ChangeNotifier {
     required String chatId,
     required String messageId,
   }) async {
-    final message =
-        state.groups[chatId]?.messageById(messageId) ??
-        state.conversations[chatId]?.messageById(messageId);
-    if (message == null) return;
     try {
-      final file = await ensureAttachmentDownloaded(
-        chatId: chatId,
-        message: message,
-      );
-      if (file != null) notifyListeners();
+      final path = await coreAccount.attachmentPath(chatId, messageId);
+      if (path.isEmpty) return;
+      notifyListeners();
+
+      // APP-20's automatic save, off unless the user turned it on. This is the
+      // moment a received picture first exists as a file, and the only one at
+      // which "as it arrives" means anything. Best-effort and never prompting:
+      // a picture landing in the background must not raise a permission
+      // dialog, and a save that fails leaves the copy inside the app.
+      if ((await AppSettings.load()).autoSavePicturesToGallery) {
+        unawaited(saveImageToGallery(File(path), mayPrompt: false));
+      }
     } catch (_) {
       // Left to the lazy path, which reports it in the bubble.
     }
   }
 
-  /// Fetches and decrypts one attachment, storing it as a local file, and
-  /// returns that file. If it is already downloaded the existing file is
-  /// returned untouched -- the filesystem is the record of what's local, so
-  /// this is safe to call whenever a bubble comes into view.
-  ///
-  /// A blob always lives on OUR OWN server, even for a federated peer: the
-  /// sender uploaded it here (see docs/PROTOCOL.md Â§10), precisely so a
-  /// recipient never has to contact a stranger's server. Hence [api], not
-  /// [_clientFor].
-  ///
-  /// Only ever downloads a RECEIVED attachment. A blob is owned by the
-  /// recipient device, so the sender's own upload is not retrievable by them
-  /// on any server -- their copy is the local one written at send time.
-  Future<File?> ensureAttachmentDownloaded({
-    required String chatId,
-    required StoredMessage message,
-  }) async {
-    if (message.attachments.isEmpty) return null;
-    final attachment = message.attachments.first;
-
-    final media = await MediaStore.instance();
-    final target = media.fileFor(
-      accountId: state.accountId,
-      chatId: chatId,
-      messageId: message.id,
-    );
-    if (await target.exists()) return target;
-    if (message.mine) return null;
-
-    // Keyed by the same three ids as the file itself, never by the message
-    // alone: with more than one account on this device in the same group, the
-    // message id is shared and the file is not (see MediaStore._fetching).
-    final inFlight = media.stateFor(
-      accountId: state.accountId,
-      chatId: chatId,
-      messageId: message.id,
-    );
-    if (inFlight == MediaFetchState.downloading) return null;
-    media.markFetching(
-      accountId: state.accountId,
-      chatId: chatId,
-      messageId: message.id,
-    );
-    try {
-      final ciphertext = await api.downloadBlob(
-        attachment.blobId,
-        state.credentials,
-      );
-      final plaintext = core.decryptBlob(
-        key: attachment.key,
-        ciphertext: ciphertext,
-      );
-      await media.writeFile(target, plaintext);
-      media.clearFetchState(
-        accountId: state.accountId,
-        chatId: chatId,
-        messageId: message.id,
-      );
-      // APP-20's automatic save, off unless the user turned it on: this is
-      // the moment a received picture first exists as a file, and the only
-      // one at which "as it arrives" can mean anything. Best-effort and
-      // never prompting -- a picture landing in the background must not
-      // raise a permission dialog, and a save that fails leaves the copy
-      // inside the app exactly as before.
-      if (attachment.isImage &&
-          (await AppSettings.load()).autoSavePicturesToGallery) {
-        unawaited(saveImageToGallery(target, mayPrompt: false));
-      }
-      // The file is safely on disk, so the server copy has served its
-      // purpose: free the quota now rather than waiting for the retention
-      // sweep. Best effort -- if it fails, the TTL cleanup gets it later.
-      unawaited(
-        api.deleteBlob(attachment.blobId, state.credentials).catchError((_) {}),
-      );
-      return target;
-    } catch (e) {
-      // Left as failed rather than retried automatically: the picture gets a
-      // tap-to-retry placeholder, so a dead server or a deleted blob doesn't
-      // turn into a silent retry loop.
-      lastError = 'downloading attachment failed: $e';
-      media.markFailed(
-        accountId: state.accountId,
-        chatId: chatId,
-        messageId: message.id,
-      );
-      return null;
-    }
-  }
 
   /// Discards the ratchet session with [peerAccountId] so a fresh X3DH runs as
   /// initiator, carrying an `initial` the peer's receive path accepts in
