@@ -1,4 +1,4 @@
-// Persisted local identity and conversation state -- the Dart-side
+﻿// Persisted local identity and conversation state -- the Dart-side
 // mirror of cmd/devclient's State (state.go) in freizone-server. Stored
 // as one indented JSON file under the app's documents directory via
 // path_provider.
@@ -13,27 +13,6 @@ import '../ffi/models.dart';
 import '../net/api_client.dart';
 import 'conversation.dart';
 import 'group_conversation.dart';
-import 'session_recovery.dart';
-
-/// One uploaded one-time prekey's key pair, kept locally until it's
-/// consumed by a peer (the server never says which one gets claimed).
-class OneTimePrekeyState {
-  OneTimePrekeyState({required this.pub, required this.priv});
-
-  factory OneTimePrekeyState.fromJson(Map<String, dynamic> j) =>
-      OneTimePrekeyState(
-        pub: decodeB64(j['pub'] as String),
-        priv: decodeB64(j['priv'] as String),
-      );
-
-  Map<String, dynamic> toJson() => {
-    'pub': encodeB64(pub),
-    'priv': encodeB64(priv),
-  };
-
-  final Uint8List pub;
-  final Uint8List priv;
-}
 
 /// A peer blocked purely locally (see AppSession.setBlocked), snapshotted
 /// at block time -- kept independent of Conversation so the block survives
@@ -70,20 +49,14 @@ class BlockedPeer {
   final String? peerServer;
 }
 
-/// How many processed message ids [AppState.processedMessageIds] keeps.
-/// Generous enough to cover a backlog that built up while the device was
-/// offline (the server caps a device's queue well below this), small enough
-/// to stay negligible in the profile file.
-const int maxProcessedMessageIds = 500;
-
-/// How many times a message may fail to decrypt before it is given up on and
-/// dropped from the server queue (see [AppState.recordDecryptFailure]). An
-/// envelope that fails once may just have raced a session change; one that
-/// fails repeatedly never will, and must not block the queue forever.
-const int maxDecryptAttempts = 3;
-
-/// The app's entire local identity and conversation state for one
-/// account.
+/// The app's entire local identity and conversation state for one account.
+///
+/// Identity and history only. Everything the protocol needs to *run* -- ratchet
+/// sessions, the one-time-prekey pool, which envelopes have been handled, how
+/// often one failed to decrypt, which member is behind on a group's facts --
+/// belongs to the core and lives in its own files (see
+/// freizone-server's pkg/client). What is kept here is what the screens read,
+/// plus the key material the core is handed at open time.
 class AppState {
   AppState({
     required this.server,
@@ -100,35 +73,17 @@ class AppState {
     this.signedPrekeyPriv,
     this.nextSignedPrekeyId = 0,
     this.nextOtpkKeyId = 0,
-    Map<int, OneTimePrekeyState>? oneTimePrekeys,
-    Map<String, RatchetSessionJson>? sessions,
-    Map<String, RatchetSessionJson>? inboundSessions,
     Map<String, Conversation>? conversations,
     Map<String, GroupConversation>? groups,
-    Map<String, List<Map<String, dynamic>>>? pendingGroupEvents,
-    Map<String, Set<String>>? groupSnapshotDebts,
-    Map<String, Map<String, String>>? groupPeerStateHashes,
     Set<String>? knownPeerIds,
     Map<String, BlockedPeer>? blockedPeers,
-    Set<String>? processedMessageIds,
-    Map<String, int>? decryptFailures,
-    Map<String, PeerSessionHealth>? peerSessionHealth,
     this.recoveryBackupDone = false,
     this.pushRegisteredAt,
     this.pushMechanism,
-  }) : oneTimePrekeys = oneTimePrekeys ?? {},
-       sessions = sessions ?? {},
-       inboundSessions = inboundSessions ?? {},
-       conversations = conversations ?? {},
+  }) : conversations = conversations ?? {},
        groups = groups ?? {},
-       pendingGroupEvents = pendingGroupEvents ?? {},
-       groupSnapshotDebts = groupSnapshotDebts ?? {},
-       groupPeerStateHashes = groupPeerStateHashes ?? {},
        knownPeerIds = knownPeerIds ?? {},
-       blockedPeers = blockedPeers ?? {},
-       processedMessageIds = processedMessageIds ?? {},
-       decryptFailures = decryptFailures ?? {},
-       peerSessionHealth = peerSessionHealth ?? {};
+       blockedPeers = blockedPeers ?? {};
 
   factory AppState.fromJson(Map<String, dynamic> j) => AppState(
     server: j['server'] as String,
@@ -153,18 +108,6 @@ class AppState {
         : decodeB64(j['signed_prekey_priv'] as String),
     nextSignedPrekeyId: j['next_signed_prekey_id'] as int? ?? 0,
     nextOtpkKeyId: j['next_otpk_key_id'] as int? ?? 0,
-    oneTimePrekeys: (j['one_time_prekeys'] as Map<String, dynamic>?)?.map(
-      (k, v) => MapEntry(
-        int.parse(k),
-        OneTimePrekeyState.fromJson(v as Map<String, dynamic>),
-      ),
-    ),
-    sessions: (j['sessions'] as Map<String, dynamic>?)?.map(
-      (k, v) => MapEntry(k, v as Map<String, dynamic>),
-    ),
-    inboundSessions: (j['inbound_sessions'] as Map<String, dynamic>?)?.map(
-      (k, v) => MapEntry(k, v as Map<String, dynamic>),
-    ),
     conversations: (j['conversations'] as Map<String, dynamic>?)?.map(
       (k, v) => MapEntry(k, Conversation.fromJson(v as Map<String, dynamic>)),
     ),
@@ -172,26 +115,6 @@ class AppState {
       (k, v) =>
           MapEntry(k, GroupConversation.fromJson(v as Map<String, dynamic>)),
     ),
-    pendingGroupEvents: (j['pending_group_events'] as Map<String, dynamic>?)
-        ?.map(
-          (k, v) => MapEntry(
-            k,
-            (v as List<dynamic>).cast<Map<String, dynamic>>(),
-          ),
-        ),
-    groupSnapshotDebts: (j['group_snapshot_debts'] as Map<String, dynamic>?)
-        ?.map(
-          (k, v) => MapEntry(k, (v as List<dynamic>).cast<String>().toSet()),
-        ),
-    groupPeerStateHashes:
-        (j['group_peer_state_hashes'] as Map<String, dynamic>?)?.map(
-          (k, v) => MapEntry(
-            k,
-            (v as Map<String, dynamic>).map(
-              (peer, hash) => MapEntry(peer, hash as String),
-            ),
-          ),
-        ),
     knownPeerIds: (j['known_peer_ids'] as List<dynamic>?)
         ?.cast<String>()
         .toSet(),
@@ -201,15 +124,6 @@ class AppState {
           m[p.peerAccountId] = p;
           return m;
         }),
-    processedMessageIds: (j['processed_message_ids'] as List<dynamic>?)
-        ?.cast<String>()
-        .toSet(),
-    decryptFailures: (j['decrypt_failures'] as Map<String, dynamic>?)?.map(
-      (k, v) => MapEntry(k, v as int),
-    ),
-    peerSessionHealth: (j['peer_session_health'] as Map<String, dynamic>?)?.map(
-      (k, v) => MapEntry(k, PeerSessionHealth.fromJson(v as Map<String, dynamic>)),
-    ),
     recoveryBackupDone: j['recovery_backup_done'] as bool? ?? false,
     pushRegisteredAt: j['push_registered_at'] == null
         ? null
@@ -236,71 +150,12 @@ class AppState {
 
   int nextSignedPrekeyId;
   int nextOtpkKeyId;
-  Map<int, OneTimePrekeyState> oneTimePrekeys;
 
-  /// Keyed by peer account id -- mirrors cmd/devclient's own simplifying
-  /// assumption of a single active session per peer.
-  Map<String, RatchetSessionJson> sessions;
-
-  /// Sessions kept only for READING, keyed by peer.
-  ///
-  /// Two parties who establish with each other at the same moment each hold
-  /// their own initiator session and neither can read the other's. That is
-  /// rare in a one-to-one chat, where somebody speaks first, and routine in a
-  /// group, where a joining member reaches for everyone at once and everyone
-  /// reaches back. A tie-break on the lower account id decides which session
-  /// both sides will *send* on (docs/PROTOCOL.md §5); the losing one is kept
-  /// here rather than discarded, so the messages already in flight on it can
-  /// still be read instead of looking like a desync.
-  Map<String, RatchetSessionJson> inboundSessions;
-
-  /// Keyed by peer account id -- the UI/history layer on top of
-  /// [sessions]'s crypto layer.
+  /// Keyed by peer account id -- the transcript and the chat-list row. The
+  /// crypto layer beneath it (ratchet sessions, prekeys, which envelopes have
+  /// been handled) is not here at all: the core holds it, in its own files, and
+  /// a second copy on this side could only disagree with it.
   Map<String, Conversation> conversations;
-
-  /// Group facts that arrived before the ones they depend on, keyed by group
-  /// id (APP-16).
-  ///
-  /// Delivery is unordered, so an `events` envelope routinely overtakes the
-  /// snapshot carrying the genesis it needs. Persisted rather than kept in
-  /// memory because the snapshot that unblocks them may be a long way behind,
-  /// and the ratchet has already advanced past the envelope they came in --
-  /// dropping them would be final.
-  Map<String, List<Map<String, dynamic>>> pendingGroupEvents;
-
-  /// Members who may be missing group facts *we* hold, keyed by group id: a
-  /// control envelope to them failed to go out, and nothing in the protocol
-  /// tells them what they never received (APP-16).
-  ///
-  /// A group's fact set is grow-only and its state hash says only "we differ",
-  /// never who is behind -- so a fact lost in transit is not noticed by anyone
-  /// until somebody next sends into the group, and then costs two further
-  /// control envelopes to reconcile. That is what made a third member take
-  /// several messages to appear for everyone. Recorded here instead, and paid
-  /// off as a whole snapshot (idempotent: the fold dedupes by event id) the next
-  /// time this account has a working connection -- see
-  /// AppSession.flushOutbox.
-  ///
-  /// Persisted, because the failure that created the debt is usually the app
-  /// losing its network, and it must survive being closed in that state.
-  /// Deliberately holds account ids only, not the events themselves: what we owe
-  /// is "everything we know about this group", which is always readable from the
-  /// group's own file.
-  Map<String, Set<String>> groupSnapshotDebts;
-
-  /// The state hash each member last told us they were on, per group id.
-  ///
-  /// Read as "have we ever seen this member level with us": if the remembered
-  /// hash is our current one, they were up to date as of their last envelope, and
-  /// the fan-out sends them the message alone. Anything else -- a different hash,
-  /// or a member never heard from -- and their copy is preceded by the whole fact
-  /// set (AppSession._needsProactiveSnapshot), because state drives delivery: a
-  /// member missing facts leaves people out of their own fan-out, and their stale
-  /// hash is the only warning anyone gets.
-  ///
-  /// Persisted, so a restart does not make every first message in every group
-  /// carry a snapshot again. Costs one short string per member per group.
-  Map<String, Map<String, String>> groupPeerStateHashes;
 
   /// Group transcripts, keyed by group id (APP-16).
   ///
@@ -324,34 +179,6 @@ class AppState {
   /// un-block them.
   Map<String, BlockedPeer> blockedPeers;
 
-  /// Ids of messages already decrypted and stored, newest last.
-  ///
-  /// Delivery is at-least-once: the server keeps a message queued until the
-  /// client explicitly deletes it, and that delete can be lost (offline, a
-  /// killed process, a wake that raced the SSE stream). Re-processing a
-  /// message is not harmless -- it advances the Double Ratchet a second time
-  /// for one message, and a redelivered X3DH initial would rebuild the
-  /// responder session and overwrite the advanced one, permanently desyncing
-  /// the conversation. Checked in [processIncomingMessage], so both the live
-  /// stream and the background push sync are covered.
-  ///
-  /// Bounded to [maxProcessedMessageIds] (insertion-ordered, oldest evicted
-  /// first) -- redelivery happens within a queue's lifetime, so remembering
-  /// the recent past is enough and the profile can't grow without limit.
-  Set<String> processedMessageIds;
-
-  /// How often each still-undelivered message has failed to decrypt, so a
-  /// permanently undecryptable one can be dropped instead of blocking the
-  /// queue forever. See [recordDecryptFailure].
-  Map<String, int> decryptFailures;
-
-  /// Per-peer evidence that a session has desynced, keyed by peer account id
-  /// and present only for peers something has actually gone wrong with (see
-  /// [PeerSessionHealth]). Drives the automatic recovery in
-  /// AppSession._recoverDesyncedSessions; written by whichever isolate notices
-  /// (including a background push wake, which cannot send and so cannot act on
-  /// it itself), read by the one that can act.
-  Map<String, PeerSessionHealth> peerSessionHealth;
 
   /// True once the user has backed up (or explicitly dismissed the prompt to
   /// back up) this account's recovery phrase (APP-01). Drives the one-time
@@ -376,79 +203,6 @@ class AppState {
   DateTime? pushRegisteredAt;
   String? pushMechanism;
 
-  /// Records messageId as handled, evicting the oldest entries past the cap.
-  void markMessageProcessed(String messageId) {
-    processedMessageIds.add(messageId);
-    while (processedMessageIds.length > maxProcessedMessageIds) {
-      processedMessageIds.remove(processedMessageIds.first);
-    }
-    // A message that finally succeeded needs no failure history any more.
-    decryptFailures.remove(messageId);
-  }
-
-  /// Counts one failed decrypt of messageId and reports whether it should now
-  /// be given up on (dropped from the server queue).
-  ///
-  /// Persisted rather than in-memory because the background push isolate is
-  /// torn down between wakes: a counter living only in RAM would restart at
-  /// zero every time and never reach the limit, so an envelope that can never
-  /// be decrypted would be re-fetched and re-fail on every single wake,
-  /// forever.
-  bool recordDecryptFailure(String messageId) {
-    final attempts = (decryptFailures[messageId] ?? 0) + 1;
-    if (attempts >= maxDecryptAttempts) {
-      decryptFailures.remove(messageId);
-      return true;
-    }
-    decryptFailures[messageId] = attempts;
-    while (decryptFailures.length > maxProcessedMessageIds) {
-      decryptFailures.remove(decryptFailures.keys.first);
-    }
-    return false;
-  }
-
-  /// Records that one envelope from peerAccountId has been given up on for a
-  /// reason that implies diverged ratchet keys -- i.e. one unit of the evidence
-  /// [shouldAutoRekey] weighs. Call only once per envelope, when
-  /// [recordDecryptFailure] has just reported it exhausted AND the failure code
-  /// meant desync (CoreErrorCode.suggestsDesync): counting every attempt would
-  /// reach any threshold three times over, and counting a redelivery or an
-  /// undiagnosed error would recover sessions that were never broken.
-  ///
-  /// Ignored for a peer there is no [conversations] entry for, which bounds this
-  /// map to conversations that exist: recovery has nowhere to send to without
-  /// one anyway, and without the guard a stranger sending undecryptable
-  /// envelopes could grow the profile with an entry per account id they invent.
-  void recordDesyncEvidence(String peerAccountId, DateTime at) {
-    if (!conversations.containsKey(peerAccountId)) return;
-    final health = peerSessionHealth.putIfAbsent(
-      peerAccountId,
-      PeerSessionHealth.new,
-    );
-    health.desyncEvidence++;
-    health.firstFailureAt ??= at;
-  }
-
-  /// Forgets everything recorded about peerAccountId's session going wrong --
-  /// called whenever a message from them decrypts, which is the only proof that
-  /// the session works. Also clears the re-key spacing, deliberately: a healthy
-  /// session needs no protection against re-keying too often.
-  void clearDesyncEvidence(String peerAccountId) {
-    peerSessionHealth.remove(peerAccountId);
-  }
-
-  /// Records that an automatic re-key with peerAccountId has just been sent:
-  /// the evidence that triggered it is spent, but the timestamp outlives it to
-  /// space out any further attempt ([minAutoRekeyInterval]).
-  void recordAutoRekey(String peerAccountId, DateTime at) {
-    final health = peerSessionHealth.putIfAbsent(
-      peerAccountId,
-      PeerSessionHealth.new,
-    );
-    health.desyncEvidence = 0;
-    health.firstFailureAt = null;
-    health.lastRekeyAt = at;
-  }
 
   DeviceCredentials get credentials =>
       DeviceCredentials(deviceId: deviceId, devicePriv: devicePriv);
@@ -470,34 +224,13 @@ class AppState {
       'signed_prekey_priv': encodeB64(signedPrekeyPriv!),
     'next_signed_prekey_id': nextSignedPrekeyId,
     'next_otpk_key_id': nextOtpkKeyId,
-    if (oneTimePrekeys.isNotEmpty)
-      'one_time_prekeys': oneTimePrekeys.map(
-        (k, v) => MapEntry(k.toString(), v.toJson()),
-      ),
-    if (sessions.isNotEmpty) 'sessions': sessions,
-    if (inboundSessions.isNotEmpty) 'inbound_sessions': inboundSessions,
     if (conversations.isNotEmpty)
       'conversations': conversations.map((k, v) => MapEntry(k, v.toJson())),
     if (groups.isNotEmpty)
       'groups': groups.map((k, v) => MapEntry(k, v.toJson())),
-    if (pendingGroupEvents.isNotEmpty)
-      'pending_group_events': pendingGroupEvents,
-    if (groupSnapshotDebts.isNotEmpty)
-      'group_snapshot_debts': groupSnapshotDebts.map(
-        (k, v) => MapEntry(k, v.toList()),
-      ),
-    if (groupPeerStateHashes.isNotEmpty)
-      'group_peer_state_hashes': groupPeerStateHashes,
     if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
     if (blockedPeers.isNotEmpty)
       'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),
-    if (processedMessageIds.isNotEmpty)
-      'processed_message_ids': processedMessageIds.toList(),
-    if (decryptFailures.isNotEmpty) 'decrypt_failures': decryptFailures,
-    if (peerSessionHealth.isNotEmpty)
-      'peer_session_health': peerSessionHealth.map(
-        (k, v) => MapEntry(k, v.toJson()),
-      ),
     if (recoveryBackupDone) 'recovery_backup_done': true,
     if (pushRegisteredAt != null)
       'push_registered_at': encodeTime(pushRegisteredAt!),

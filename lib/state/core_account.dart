@@ -245,6 +245,18 @@ class CoreAccount {
   Future<void> dissolveGroup(String groupId) =>
       _run({'call': 'group_dissolve', 'handle': handle, 'group_id': groupId});
 
+  /// Asks one member for the group's whole fact set.
+  ///
+  /// Convergence would otherwise be reactive only: a device that missed a fact
+  /// and does not itself write stays behind until somebody else speaks. Rate
+  /// limited per group inside the core, so a caller may fire it whenever a
+  /// stale member list would matter -- opening the group screen.
+  Future<void> requestGroupSync(String groupId) => _run({
+    'call': 'group_sync_request',
+    'handle': handle,
+    'group_id': groupId,
+  });
+
   Future<Map<String, dynamic>> _run(Map<String, dynamic> request) {
     final path = libraryPath;
     return Isolate.run(() => coreCallInIsolate(request, path));
@@ -296,6 +308,8 @@ Map<String, dynamic> coreCallInIsolate(
       return core.coreGroupLeaveRaw(request);
     case 'group_set_meta':
       return core.coreGroupSetMetaRaw(request);
+    case 'group_sync_request':
+      return core.coreGroupSyncRequestRaw(request);
     case 'group_dissolve':
       return core.coreGroupDissolveRaw(request);
   }

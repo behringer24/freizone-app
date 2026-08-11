@@ -86,6 +86,7 @@ class FreizoneCoreBindings {
       coreGroupRemove = _lookupWithReq(lib, 'CoreGroupRemove'),
       coreGroupLeave = _lookupWithReq(lib, 'CoreGroupLeave'),
       coreGroupSetMeta = _lookupWithReq(lib, 'CoreGroupSetMeta'),
+      coreGroupSyncRequest = _lookupWithReq(lib, 'CoreGroupSyncRequest'),
       coreGroupDissolve = _lookupWithReq(lib, 'CoreGroupDissolve'),
       coreGroupInfo = _lookupWithReq(lib, 'CoreGroupInfo'),
       coreMaintain = _lookupWithReq(lib, 'CoreMaintain'),
@@ -200,5 +201,6 @@ class FreizoneCoreBindings {
   final WithReqFn coreGroupRemove;
   final WithReqFn coreGroupLeave;
   final WithReqFn coreGroupSetMeta;
+  final WithReqFn coreGroupSyncRequest;
   final WithReqFn coreGroupDissolve;
 }
