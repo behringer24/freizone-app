@@ -65,6 +65,14 @@ Every account's local state (its keys, conversation history, ratchet sessions) i
    ```
 4. On first launch, the setup wizard asks for a server address (no `https://` or port needed for a normally-deployed server) and walks through whatever that server actually needs — bootstrap, open registration, or an invite code — including scanning an invite QR code instead of typing.
 
+   An address without a scheme is always `https://`, and there is deliberately no fallback to plain HTTP: a connection the user believes is encrypted must never be silently downgraded. A server running **without TLS** — a local instance you started for a trial run, say — is reached by writing the scheme out in full, along with its port:
+
+   ```
+   http://192.168.1.10:18080
+   ```
+
+   The same holds anywhere else an address is typed, including the `id*server` form used to reach someone on another server: `q2xjx*http://192.168.1.10:18080`.
+
 ## Running the tests
 
 `flutter test` works out of the box for everything that is pure Dart. Tests that
