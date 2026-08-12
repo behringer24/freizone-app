@@ -87,7 +87,6 @@ void main() {
       // the single watermark a one-to-one conversation keeps cannot express.
       chat.memberReadUpTo['qclara00000000000000a'] = DateTime.utc(2026, 8, 2, 11);
       chat.memberDeliveredUpTo['qben000000000000000b'] = DateTime.utc(2026, 8, 2, 10);
-      chat.sentReceiptUpTo['qclara00000000000000a'] = DateTime.utc(2026, 8, 2, 9);
 
       final restored = GroupConversation.fromJson(chat.toJson());
       expect(restored.groupId, chat.groupId);
@@ -98,7 +97,6 @@ void main() {
       expect(restored.messages.single.senderAccountId, 'qclara00000000000000a');
       expect(restored.memberReadUpTo['qclara00000000000000a'], DateTime.utc(2026, 8, 2, 11));
       expect(restored.memberDeliveredUpTo['qben000000000000000b'], DateTime.utc(2026, 8, 2, 10));
-      expect(restored.sentReceiptUpTo['qclara00000000000000a'], DateTime.utc(2026, 8, 2, 9));
     });
 
     test('a reply keeps the quoted author across a restart', () {
@@ -150,7 +148,6 @@ void main() {
         'invite_pending',
         'member_delivered_up_to',
         'member_read_up_to',
-        'sent_receipt_up_to',
         'pinned_message_ids',
       ]) {
         expect(json.containsKey(key), isFalse, reason: '$key should be omitted');
@@ -422,11 +419,15 @@ void main() {
         status: ReceiptStatus.delivered,
         upTo: DateTime.utc(2026, 8, 2, 12, 1),
       );
-      chat.sentReceiptUpTo['clara'] = DateTime.utc(2026, 8, 2, 12, 2);
+      chat.recordMemberReceipt(
+        accountId: 'clara',
+        status: ReceiptStatus.read,
+        upTo: DateTime.utc(2026, 8, 2, 12, 2),
+      );
 
       final restored = GroupConversation.fromJson(chat.toJson());
       expect(restored.memberDeliveredUpTo['ben'], DateTime.utc(2026, 8, 2, 12, 1));
-      expect(restored.sentReceiptUpTo['clara'], DateTime.utc(2026, 8, 2, 12, 2));
+      expect(restored.memberReadUpTo['clara'], DateTime.utc(2026, 8, 2, 12, 2));
     });
   });
 

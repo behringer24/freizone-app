@@ -76,6 +76,7 @@ class GroupDelivery {
     required this.wireMessageId,
     this.state = MessageSendState.pending,
     this.error,
+    this.detail,
     this.attachmentSkipped = false,
   });
 
@@ -103,7 +104,14 @@ class GroupDelivery {
   final String wireMessageId;
 
   MessageSendState state;
+
+  /// Why this copy failed, in words meant for the person reading the delivery
+  /// sheet. Null for one that did not fail.
   String? error;
+
+  /// The same failure as whatever refused it put it. For the log only: it
+  /// exists so [error] can be a sentence without the diagnosis being lost.
+  String? detail;
 
   /// This member got the caption but not the picture: their server does not
   /// store attachments, or would not take this one (APP-16/SRV-18). Not a
@@ -282,10 +290,27 @@ class StoredMessage {
   /// For a RECEIVED message: the sender's own clock reading at send time,
   /// carried inside the encrypted content (message_content.dart's sentAt)
   /// -- null for own messages and for messages from senders predating the
-  /// field. Display and ordering keep using [timestamp] (local arrival
-  /// time); this exists solely as the value receipts must echo back, see
-  /// [receiptAnchor].
+  /// field. Ordering keeps using [timestamp] (local arrival time); this is
+  /// what receipts echo back ([receiptAnchor]) and what a line is *labelled*
+  /// with ([displayTime]).
   final DateTime? senderSentAt;
+
+  /// The time to show against this line: when its author wrote it.
+  ///
+  /// Not when it arrived here, which is a fact about this device's luck with
+  /// the network rather than about the message. It shows in a group, where one
+  /// copy per member means one arrival time per member: a copy that failed and
+  /// went through on a retry a minute later was labelled a minute later for
+  /// that member alone, so the same line read differently for everybody who
+  /// held it. Receipts already reason in the author's clock ([receiptAnchor]);
+  /// this makes the label agree with them.
+  ///
+  /// Ordering deliberately stays on [timestamp]: a message is placed where the
+  /// reader saw it appear, so a late arrival does not silently insert itself
+  /// into a conversation that has moved on. Which means a line can carry a
+  /// time slightly older than the one above it -- the same trade every
+  /// messenger makes, and the honest one, since both facts are true.
+  DateTime get displayTime => senderSentAt ?? timestamp;
 
   /// The timestamp a delivery/read receipt for this message must carry:
   /// the sender's own send-time stamp when known, so the sender's

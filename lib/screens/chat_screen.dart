@@ -18,11 +18,13 @@ import '../state/conversation.dart';
 import '../state/outgoing_attachment.dart';
 import '../state/receipt_signal.dart';
 import '../widgets/attachment_thumbnail.dart';
+import '../widgets/date_divider.dart';
 import '../widgets/image_attachment.dart';
 import '../widgets/link_confirm_sheet.dart';
 import '../widgets/message_text.dart';
 import '../widgets/new_chat_sheet.dart';
 import '../util/block_actions.dart';
+import '../util/chat_time.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/link_detection.dart';
@@ -462,21 +464,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  String _dayLabel(DateTime day) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    if (day == today) return 'Today';
-    if (day == today.subtract(const Duration(days: 1))) return 'Yesterday';
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(day.day)}.${two(day.month)}.${day.year}';
-  }
-
-  String _timeLabel(DateTime utc) {
-    final local = utc.toLocal();
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(local.hour)}:${two(local.minute)}';
-  }
-
   /// Derived from convo's per-conversation markers (see conversation
   /// .dart), not stored per message -- null for a peer's own message, or
   /// one of mine the peer hasn't yet confirmed at all.
@@ -497,10 +484,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final items = <Widget>[];
     DateTime? lastDay;
     for (final m in convo.messages) {
-      final local = m.timestamp.toLocal();
-      final day = DateTime(local.year, local.month, local.day);
+      final day = localDayOf(m.displayTime);
       if (lastDay == null || day != lastDay) {
-        items.add(_DateDivider(label: _dayLabel(day)));
+        items.add(DateDivider(label: dayLabel(day)));
         lastDay = day;
       }
       if (m.kind == StoredMessageKind.systemInfo) {
@@ -519,7 +505,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _MessageBubble(
           key: _keyFor(m.id),
           message: m,
-          timeLabel: _timeLabel(m.timestamp),
+          timeLabel: timeLabel(m.displayTime),
           peerTitle: convo.titleFor(widget.session.state.server, widget.contacts),
           isPinned: convo.pinnedMessageIds.contains(m.id),
           deliveryStatus: _deliveryStatusFor(convo, m),
@@ -827,7 +813,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// (see AppSession.reachability). Sending is disabled; the chat history
   /// above stays fully readable. Unlike the blocked bar this is nothing the
   /// user did wrong, so it uses a neutral tone rather than error red, and
-  /// offers no action -- reconnection is automatic (SseClient's backoff),
+  /// offers no action -- reconnection is automatic (the core's backoff),
   /// and the bar clears itself once the server is reachable again.
   Widget _buildServerOfflineBar(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -1036,29 +1022,6 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () => setState(() => _pendingAttachment = null),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _DateDivider extends StatelessWidget {
-  const _DateDivider({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(label, style: Theme.of(context).textTheme.bodySmall),
-        ),
       ),
     );
   }

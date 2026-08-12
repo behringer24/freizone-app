@@ -16,6 +16,69 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-08-12 (versionCode 25)
+
+**Please read before updating.** The app no longer carries its own copy of the
+Freizone protocol; it now runs the same one the server project maintains
+(`SRV-23`), which is why group chats work properly in this release for the
+first time. Your accounts, contacts and settings come across untouched — but
+**existing chat history and secure sessions do not**. Your conversations will
+open empty, and the first message to each contact quietly re-establishes
+encryption with them. Nothing is lost that was ever on a server: history only
+ever existed on the devices holding it, so a message you want to keep should be
+saved before updating.
+
+### Added
+
+* **Group messages now say when they were said.** A time under each message,
+  the same day dividers a one-to-one chat has, and — for your own messages —
+  whether they arrived
+* **Delivery detail for a group message.** The footer counts how many members
+  received or read it; tapping the count opens a list naming each member and
+  what happened to their copy, with a reason for any that did not arrive
+  ("Their server could not be reached."). If some failed, one button re-sends
+  to exactly those and nobody else
+* **Read receipts in groups**, per person: you see who has read a message, not
+  just who received it. Confirming somebody's newest message confirms their
+  earlier ones too, so nothing is left hanging half-read. The read-receipt
+  setting covers groups as well — with it off, neither status is sent
+* **The group tells you what happened to it**: who joined, who was invited,
+  and — new — when a member's account has ceased to exist, so a member who can
+  never receive anything again is not a silent failure
+
+### Changed
+
+* A message now shows **the time its author wrote it**, rather than the moment
+  it reached this device. In a group those differ per member: a copy delayed
+  by a server outage used to be stamped later for that one person, so the same
+  message read differently for everybody holding it
+* **A server that cannot be reached is no longer an alarm.** It is the most
+  ordinary failure there is — a server can be down, switched off for good, or
+  reused for something else — so it is shown as the dimmed account with its
+  offline badge, and nothing else. Failures worth reading are still shown, now
+  as sentences rather than as technical error text
+
+### Fixed
+
+* **The read-receipts setting did nothing.** Turning it off left both the
+  received and read confirmations being sent as before. Existing marks stay as
+  they are; from now on the switch decides
+* **"Save pictures to the gallery automatically" did nothing** either. It now
+  runs where a received picture first becomes a file
+* Sending a picture into a group with members on different servers failed
+  outright ("recipients for one attachment must share a server"). The picture
+  is uploaded once per recipient server now (`SRV-18`)
+* After sending a picture to a group you saw only your own blurred preview of
+  it, never the full photograph — although everybody else received it
+* Arriving pictures could fail with "downloading attachment failed", and a
+  group transcript containing one could come up **completely empty**
+* "Resend to those it failed for" could sit there doing nothing, and a
+  successful resend delivered the message a second time to members who already
+  had it — which arrived as a flood of notifications
+* Removing a conversation permanently left the secure session with that person
+  in place, so a later message from them could arrive against a session the
+  chat no longer had
+
 ## [0.20.0] — 2026-08-07 (versionCode 24)
 
 ### Added

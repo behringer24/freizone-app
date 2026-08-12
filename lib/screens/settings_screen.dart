@@ -38,6 +38,18 @@ class SettingsScreen extends StatelessWidget {
     }
   }
 
+  /// Carried into every open account, because that is where it is enforced.
+  ///
+  /// The switch is app-wide and the record is per account: the core consults
+  /// its own copy on both the sending and the receiving side, so that a
+  /// background wake -- which never loads these settings -- honours it too.
+  Future<void> _setReadReceiptsEnabled(bool value) async {
+    await settings.setReadReceiptsEnabled(value);
+    for (final session in manager.sessions) {
+      await session.applyReceiptsSetting(value);
+    }
+  }
+
   /// Acts on the flag immediately rather than waiting for the next resume:
   /// turning this off is a privacy decision, so the already-published names
   /// have to go away now, not eventually (APP-15).
@@ -191,7 +203,7 @@ class SettingsScreen extends StatelessWidget {
                   'whether the people you message have read theirs',
                 ),
                 value: settings.readReceiptsEnabled,
-                onChanged: settings.setReadReceiptsEnabled,
+                onChanged: _setReadReceiptsEnabled,
               ),
               SwitchListTile(
                 title: const Text('Save pictures to your gallery'),

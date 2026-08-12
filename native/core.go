@@ -189,6 +189,45 @@ func VerifyAttestation(cReq *C.char) *C.char {
 	return jsonCall(cReq, doVerifyAttestation)
 }
 
+// Shared client core (SRV-23). Unlike everything above, these are stateful:
+// CoreOpen returns a handle standing in for an open account database, and the
+// rest operate on it until CoreClose. The state and the decisions live in
+// freizone-server's pkg/client; client.go here is only the adapter that turns
+// its channels and contexts into something that can cross cgo.
+
+//export CoreOpen
+func CoreOpen(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreOpen)
+}
+
+//export CoreClose
+func CoreClose(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreClose)
+}
+
+//export CoreSetIdentity
+func CoreSetIdentity(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreSetIdentity)
+}
+
+//export CoreStreamStart
+func CoreStreamStart(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreStreamStart)
+}
+
+//export CoreStreamStop
+func CoreStreamStop(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreStreamStop)
+}
+
+// CorePoll blocks for up to the requested timeout. Dart must call it from an
+// isolate -- on the UI thread it would freeze the app for the whole wait.
+//
+//export CorePoll
+func CorePoll(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCorePoll)
+}
+
 // Groups (SRV-01 / APP-16). The state blob these pass back and forth is
 // opaque to the caller -- see group.go for why that matters.
 
@@ -213,3 +252,102 @@ func GroupResolveState(cReq *C.char) *C.char {
 }
 
 func main() {}
+
+// The account API (SRV-23 stage 6). Everything a screen asks for, in the shape
+// it asks for it -- see api.go for why this is coarser than the library it
+// wraps, and why attachment bytes travel as paths rather than through here.
+
+//export CoreChats
+func CoreChats(cReq *C.char) *C.char { return jsonCall(cReq, doCoreChats) }
+
+//export CoreMessages
+func CoreMessages(cReq *C.char) *C.char { return jsonCall(cReq, doCoreMessages) }
+
+// CoreSend touches the network. Dart must call it from an isolate.
+//
+//export CoreSend
+func CoreSend(cReq *C.char) *C.char { return jsonCall(cReq, doCoreSend) }
+
+//export CoreRetryMessage
+func CoreRetryMessage(cReq *C.char) *C.char { return jsonCall(cReq, doCoreRetry) }
+
+//export CoreSetOpenChat
+func CoreSetOpenChat(cReq *C.char) *C.char { return jsonCall(cReq, doCoreSetOpenChat) }
+
+//export CoreMarkRead
+func CoreMarkRead(cReq *C.char) *C.char { return jsonCall(cReq, doCoreMarkRead) }
+
+//export CoreStartConversation
+func CoreStartConversation(cReq *C.char) *C.char { return jsonCall(cReq, doCoreStartConversation) }
+
+//export CoreBlockPeer
+func CoreBlockPeer(cReq *C.char) *C.char { return jsonCall(cReq, doCoreBlockPeer) }
+
+//export CoreUnblockPeer
+func CoreUnblockPeer(cReq *C.char) *C.char { return jsonCall(cReq, doCoreUnblockPeer) }
+
+//export CoreAcceptRequest
+func CoreAcceptRequest(cReq *C.char) *C.char { return jsonCall(cReq, doCoreAcceptRequest) }
+
+//export CoreDeleteChat
+func CoreDeleteChat(cReq *C.char) *C.char { return jsonCall(cReq, doCoreDeleteChat) }
+
+// CoreAttachmentPath downloads on demand, so it blocks and belongs in an
+// isolate. It returns where the file is, never the bytes.
+//
+//export CoreAttachmentPath
+func CoreAttachmentPath(cReq *C.char) *C.char { return jsonCall(cReq, doCoreAttachmentPath) }
+
+//export CoreGroupCreate
+func CoreGroupCreate(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupCreate) }
+
+//export CoreGroupInvite
+func CoreGroupInvite(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupInvite) }
+
+//export CoreGroupAccept
+func CoreGroupAccept(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupAccept) }
+
+//export CoreGroupSetRole
+func CoreGroupSetRole(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupSetRole) }
+
+//export CoreGroupRemove
+func CoreGroupRemove(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupRemove) }
+
+//export CoreGroupLeave
+func CoreGroupLeave(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupLeave) }
+
+//export CoreGroupSetMeta
+func CoreGroupSetMeta(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupSetMeta) }
+
+//export CoreGroupSyncRequest
+func CoreGroupSyncRequest(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupSyncRequest) }
+
+//export CoreForgetPeer
+func CoreForgetPeer(cReq *C.char) *C.char { return jsonCall(cReq, doCoreForgetPeer) }
+
+//export CoreSetReceiptsEnabled
+func CoreSetReceiptsEnabled(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreSetReceiptsEnabled)
+}
+
+//export CoreGroupDissolve
+func CoreGroupDissolve(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupDissolve) }
+
+//export CoreGroupInfo
+func CoreGroupInfo(cReq *C.char) *C.char { return jsonCall(cReq, doCoreGroupInfo) }
+
+// CoreMaintain is the housekeeping a fresh connection should do: top up the
+// prekey pool, settle group facts owed, re-establish broken sessions. Blocking.
+//
+//export CoreMaintain
+func CoreMaintain(cReq *C.char) *C.char { return jsonCall(cReq, doCoreMaintain) }
+
+//export CoreResetSession
+func CoreResetSession(cReq *C.char) *C.char { return jsonCall(cReq, doCoreResetSession) }
+
+// CoreSync drains this device's queued messages the same way the live poll
+// loop handles a stream message, for a caller with no stream open at all --
+// the background push wake (see push_manager.dart). Blocking.
+//
+//export CoreSync
+func CoreSync(cReq *C.char) *C.char { return jsonCall(cReq, doCoreSync) }

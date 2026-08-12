@@ -19,12 +19,14 @@ import '../state/chat_target.dart';
 import '../state/group_conversation.dart';
 import '../state/outgoing_attachment.dart';
 import '../util/avatar_color.dart';
+import '../util/chat_time.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/message_actions.dart';
 import '../util/person_label.dart';
 import '../util/quoted_author.dart';
 import '../widgets/attachment_thumbnail.dart';
+import '../widgets/date_divider.dart';
 import '../widgets/group_delivery_sheet.dart';
 import '../widgets/image_attachment.dart';
 import '../widgets/pattern_background.dart';
@@ -673,9 +675,18 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   List<Widget> _buildBubbles(BuildContext context, GroupConversation chat) {
     final bubbles = <Widget>[];
+    DateTime? lastDay;
     for (var i = 0; i < chat.messages.length; i++) {
       final message = chat.messages[i];
       final previous = i == 0 ? null : chat.messages[i - 1];
+      // The same divider a one-to-one transcript draws, from the same helpers
+      // (util/chat_time.dart) -- the two screens show the same thing and a
+      // reader moving between them should not have to notice which they are in.
+      final day = localDayOf(message.displayTime);
+      if (lastDay == null || day != lastDay) {
+        bubbles.add(DateDivider(label: dayLabel(day)));
+        lastDay = day;
+      }
       // Only the first of a run from one author is labelled -- repeating it
       // on every bubble is noise.
       final showAuthor =
@@ -999,10 +1010,21 @@ class _GroupBubble extends StatelessWidget {
                       // group id: it only ever names the directory the file
                       // lives in, so the download and cache paths need no
                       // group-specific branch at all.
-                      ImageAttachment(
-                        session: session,
-                        chatId: chat.groupId,
-                        message: message,
+                      //
+                      // Given a width here, unlike in a one-to-one bubble, and
+                      // that is not cosmetic: [IntrinsicWidth] below asks this
+                      // column how wide it wants to be, a tight width is the one
+                      // answer a box can give without asking its own child, and
+                      // asking further down is what blanked this transcript
+                      // outright (see ImageAttachment's spinner). The picture
+                      // caps at this width anyway.
+                      SizedBox(
+                        width: 260,
+                        child: ImageAttachment(
+                          session: session,
+                          chatId: chat.groupId,
+                          message: message,
+                        ),
                       ),
                       if (message.text.isNotEmpty) const SizedBox(height: 6),
                     ],
@@ -1013,14 +1035,27 @@ class _GroupBubble extends StatelessWidget {
                       Text(message.text, style: TextStyle(color: onBubble)),
                     if (mine && _skippedAttachmentCount > 0)
                       _buildAttachmentSkipped(context, onBubble),
-                    if (mine)
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          // The counts are the summary; who is who is behind a
-                          // tap, on purpose (APP-16). A message nobody was owed
-                          // a copy of has nothing to list, so it stays inert
-                          // rather than opening an empty sheet.
+                    const SizedBox(height: 2),
+                    // The same footer a one-to-one bubble carries: the clock
+                    // for everybody, the send state only for one's own -- a
+                    // group transcript had neither, which left no way to tell
+                    // when anything was said.
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(
+                          timeLabel(message.displayTime),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: onBubble.withValues(alpha: 0.7),
+                          ),
+                        ),
+                        // The counts are the summary; who is who is behind a
+                        // tap, on purpose (APP-16). A message nobody was owed
+                        // a copy of has nothing to list, so it stays inert
+                        // rather than opening an empty sheet.
+                        if (mine) ...[
+                          const SizedBox(width: 6),
                           GestureDetector(
                             onTap: message.deliveries.isEmpty
                                 ? null
@@ -1034,7 +1069,8 @@ class _GroupBubble extends StatelessWidget {
                             child: _statusFor(context, message, onBubble),
                           ),
                         ],
-                      ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -1168,25 +1204,24 @@ class _GroupBubble extends StatelessWidget {
       ),
       MessageSendState.sent => (Icons.done_all, ''),
     };
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (label.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: color.withValues(alpha: 0.8),
-                ),
+    // No padding of its own: this sits in the bubble's footer row beside the
+    // clock, and anything here would knock the two off the same line.
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (label.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                color: color.withValues(alpha: 0.8),
               ),
             ),
-          Icon(icon, size: 14, color: color.withValues(alpha: 0.8)),
-        ],
-      ),
+          ),
+        Icon(icon, size: 14, color: color.withValues(alpha: 0.8)),
+      ],
     );
   }
 

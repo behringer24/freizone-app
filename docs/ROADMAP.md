@@ -961,3 +961,43 @@ rather than riding along with the publicly-decodable attestation token.
   avoid. `go test ./native/...` caught a real break while wiring this up:
   `attestation_test.go`'s hand-built test token used `attest.Sign`'s old
   signature, fixed alongside
+- 2026-08-09 — SRV-23 stage 6, Dart side: bindings, models and `CoreAccount`
+  over the core's account API, with one rule the shell cannot delegate — **a
+  call that touches the network runs in an isolate, a call that reads local
+  state does not.** That is not an optimisation but the difference between a
+  list that scrolls and an app that freezes: both are one synchronous C call,
+  and only knowing which is which keeps the blocking kind off the UI thread.
+  Tested against the real core from `flutter test`, which is the only place two
+  things can be checked at all — that every exported symbol resolves (a typo in
+  a lookup name compiles, analyses clean, and fails the first time a screen
+  touches it) and that what Go encodes is what Dart decodes. Negative-controlled
+  by renaming one lookup, which fails five tests with "Failed to lookup symbol".
+- 2026-08-09 — **and a correction: the receive loop moved back out of the core
+  for now.** Handing the poll's outcome up instead of the envelope means Dart's
+  own receive path never runs — and while the UI still reads Dart state, that
+  makes messages arrive somewhere nothing draws from. The Flutter suite caught
+  it. Both halves have to land together, so the poll keeps passing envelopes
+  through until the UI reads from the core; `handleIncoming` comes back with
+  that switch. The `openChatID` field stays, unused, because it belongs to the
+  same step
+- 2026-08-10 — the cut, step 1 of 5: `lib/state/core_bridge.dart`, which fills
+  `AppState` from the core. `Conversation`, `GroupConversation` and
+  `StoredMessage` stay as the shapes widgets draw, so the 83 `session.state`
+  call sites are untouched — what changes is where their contents come from.
+  Rebuilt whole rather than merged, because a merge needs a per-field rule about
+  which side wins and the answer is always the core; rebuilding also makes a gap
+  loud instead of letting a stale copy look fine until a reinstall. The chat
+  summary gained pins and the two tick watermarks, which cost nothing extra
+  because the transcript has already been read for the preview. Unused so far:
+  steps 2–5 (stream, `_handleIncoming`, the send path, and stopping
+  `saveProfile`) are what make it live, and they only work together
+- **Stopped deliberately after step 1.** Steps 2–5 cannot be half-applied: the
+  bridge overwrites whatever the Dart send path writes, so a message would
+  appear and then vanish. Started them, then put the stream and the poll back to
+  where they were rather than leave the app not compiling. What is left is a
+  contained piece of work with the shape already established — one handle per
+  account owned by `AppSession` (two would be two clients over one directory,
+  each with its own idea of which envelopes it had processed), `_handleIncoming`
+  becoming a refresh, `sendMessage` going through `CoreAccount`, and
+  `saveProfile` becoming a no-op so the old profile freezes as the fallback
+  rather than being deleted

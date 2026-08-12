@@ -281,9 +281,10 @@ group would change appearance the moment its first message landed.
 user was waiting for it. The lazy fetch in `ImageAttachment` stays — it covers
 history, a failed attempt, and the background push isolate, which deliberately
 writes only the inline thumbnail — but the foreground session now also starts the
-download when the message *arrives* (`IncomingMessageResult.attachmentMessageId`
-→ `_prefetchAttachment`, unawaited so it cannot delay a receipt or a
-notification).
+download when the message *arrives* (`PollOutcome.attachmentMessageId` →
+`_prefetchAttachment`, unawaited so it cannot delay a receipt or a
+notification). The id used to come from the app's own receive path; since the
+core took that over it is named on the outcome the core returns.
 
 That exposed a second-order problem worth recording: `ensureAttachmentDownloaded`
 returns null while an attempt is already in flight, so the widget's own call

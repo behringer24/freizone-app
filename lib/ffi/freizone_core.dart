@@ -8,16 +8,29 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
+import 'core_models.dart';
 import 'freizone_core_bindings.dart';
 import 'freizone_core_exception.dart';
 import 'models.dart';
 
 class FreizoneCore {
-  FreizoneCore._(this._bindings);
+  FreizoneCore._(this._bindings, this.libraryPath);
 
-  factory FreizoneCore() => FreizoneCore._(FreizoneCoreBindings.open());
+  /// [libraryPath] is only for host tests -- see
+  /// [FreizoneCoreBindings.open]. Production callers use `FreizoneCore()`.
+  factory FreizoneCore({String? libraryPath}) =>
+      FreizoneCore._(FreizoneCoreBindings.open(path: libraryPath), libraryPath);
 
   final FreizoneCoreBindings _bindings;
+
+  /// The path this instance was opened from, or null when the platform decided.
+  ///
+  /// Kept because an isolate cannot be handed a [FreizoneCore] -- it holds
+  /// native pointers -- so anything opening the core again inside one has to be
+  /// told the same way this instance was. Forgetting that is invisible on
+  /// Android, where the library is found by name either way, and fails only on
+  /// a development host.
+  final String? libraryPath;
 
   /// Static build/version string from the native core -- useful as a
   /// basic "is the library loaded" sanity check.
@@ -273,8 +286,9 @@ class FreizoneCore {
   /// (hence the same account id and short id) plus a *fresh* device keypair.
   /// Throws [FreizoneCoreException] if the phrase has an unknown word or a
   /// bad checksum.
-  Identity restoreIdentityFromSeed(List<String> words) =>
-      Identity.fromJson(_call(_bindings.restoreIdentityFromSeed, {'words': words}));
+  Identity restoreIdentityFromSeed(List<String> words) => Identity.fromJson(
+    _call(_bindings.restoreIdentityFromSeed, {'words': words}),
+  );
 
   /// The full BIP-39 English wordlist (2048 words), for driving recovery-phrase
   /// autocomplete and per-word validation entirely offline.
@@ -302,7 +316,10 @@ class FreizoneCore {
   /// [FreizoneCoreException] for a wrong key or any tampering -- the
   /// ciphertext is authenticated, so corrupt bytes are never returned as if
   /// they were a picture.
-  Uint8List decryptBlob({required Uint8List key, required Uint8List ciphertext}) {
+  Uint8List decryptBlob({
+    required Uint8List key,
+    required Uint8List ciphertext,
+  }) {
     final data = _call(_bindings.decryptBlob, {
       'key': encodeB64(key),
       'ciphertext': encodeB64(ciphertext),
@@ -411,6 +428,106 @@ class FreizoneCore {
         _call(_bindings.groupResolveState, {'state': state}),
       );
 
+  // --- shared client core (SRV-23) -----------------------------------------
+  //
+  // Stateful, unlike everything above: [coreOpen] returns a handle standing in
+  // for an open account database, and the rest operate on it until
+  // [coreClose]. The state, the persistence and the protocol decisions live in
+  // freizone-server's pkg/client; this is only the typed way across.
+
+  /// Opens (creating and migrating if needed) the account database at [path]
+  /// and returns its handle.
+  int coreOpen(String path) =>
+      _call(_bindings.coreOpen, {'path': path})['handle'] as int;
+
+  /// Closes a handle and stops anything running against it. Closing one that is
+  /// already gone is a no-op, so a teardown racing a hot restart need not be
+  /// careful.
+  void coreClose(int handle) => _call(_bindings.coreClose, {'handle': handle});
+
+  /// Hands this account's key material to the core, which is what lets it sign
+  /// its own requests and hold its own stream before the app's state layer has
+  /// migrated into it.
+  /// Hands the core everything it needs to decrypt, not only to sign requests
+  /// with: [dhIdentityPriv] and [signedPrekeyPriv] are what [sessionDecrypt]'s
+  /// Go-side counterpart (HandleIncoming) opens a first-contact envelope with,
+  /// so leaving them out is not "less identity handed over", it is a core that
+  /// fails every decrypt with "reading own identity key" the moment a real
+  /// envelope arrives -- which is silent right up until it is not, since a
+  /// stream-only handle never touched them before this call carried them.
+  void coreSetIdentity({
+    required int handle,
+    required String accountId,
+    required String server,
+    required Uint8List rootPub,
+    required Uint8List rootPriv,
+    required String deviceId,
+    required Uint8List devicePub,
+    required Uint8List devicePriv,
+    Uint8List? dhIdentityPub,
+    Uint8List? dhIdentityPriv,
+    int signedPrekeyId = 0,
+    Uint8List? signedPrekeyPub,
+    Uint8List? signedPrekeyPriv,
+    int nextSignedPrekeyId = 0,
+    int nextOtpkKeyId = 0,
+    bool recoveryBackupDone = false,
+    String? pushMechanism,
+  }) => _call(_bindings.coreSetIdentity, {
+    'handle': handle,
+    'account_id': accountId,
+    'server': server,
+    'root_pub': encodeB64(rootPub),
+    'root_priv': encodeB64(rootPriv),
+    'device_id': deviceId,
+    'device_pub': encodeB64(devicePub),
+    'device_priv': encodeB64(devicePriv),
+    'dh_identity_pub': ?(dhIdentityPub == null ? null : encodeB64(dhIdentityPub)),
+    'dh_identity_priv': ?(dhIdentityPriv == null
+        ? null
+        : encodeB64(dhIdentityPriv)),
+    if (signedPrekeyId != 0) 'signed_prekey_id': signedPrekeyId,
+    'signed_prekey_pub': ?(signedPrekeyPub == null
+        ? null
+        : encodeB64(signedPrekeyPub)),
+    'signed_prekey_priv': ?(signedPrekeyPriv == null
+        ? null
+        : encodeB64(signedPrekeyPriv)),
+    if (nextSignedPrekeyId != 0) 'next_signed_prekey_id': nextSignedPrekeyId,
+    if (nextOtpkKeyId != 0) 'next_otpk_key_id': nextOtpkKeyId,
+    if (recoveryBackupDone) 'recovery_backup_done': true,
+    'push_mechanism': ?pushMechanism,
+  });
+
+  /// Opens the message stream. Starting one already running is a no-op: a
+  /// second subscriber slot on the server would stop a backgrounded app getting
+  /// push wakes.
+  void coreStreamStart(int handle) =>
+      _call(_bindings.coreStreamStart, {'handle': handle});
+
+  /// Closes the stream and releases this device's subscriber slot, so a message
+  /// arriving afterwards triggers a push wake instead of being delivered into a
+  /// stream nobody is reading.
+  void coreStreamStop(int handle) =>
+      _call(_bindings.coreStreamStop, {'handle': handle});
+
+  /// Waits up to [timeoutMs] for stream activity and returns everything
+  /// buffered behind it in one go.
+  ///
+  /// **Blocks.** Call it from an isolate only -- `CoreStream` in
+  /// lib/net/core_stream.dart owns that loop. A batch rather than one event per
+  /// call because an FFI crossing per message is pure overhead exactly when a
+  /// reconnect has just delivered a backlog.
+  ///
+  /// Returns the raw envelope rather than a typed result on purpose: the typed
+  /// form needs [MessageResponse] from lib/net/, and models.dart is deliberately
+  /// the leaf of the dependency order that lib/net/ builds on. The stream layer
+  /// owns the stream's types.
+  Map<String, dynamic> corePoll({
+    required int handle,
+    required int timeoutMs,
+  }) => _call(_bindings.corePoll, {'handle': handle, 'timeout_ms': timeoutMs});
+
   // --- boilerplate ---------------------------------------------------------
 
   Map<String, dynamic> _callNoArg(Pointer<Utf8> Function() fn) =>
@@ -440,6 +557,129 @@ class FreizoneCore {
       return (env['data'] as Map<String, dynamic>?) ?? const {};
     } finally {
       _bindings.free(resultPtr);
+    }
+  }
+
+  // --- the account API (SRV-23 stage 6) -------------------------------------
+  //
+  // Local reads first, then the raw pass-throughs for everything that blocks.
+  // The raw ones take and return maps on purpose: they are what an isolate
+  // entry point calls, and an isolate cannot be handed anything richer than
+  // plain values (see state/core_account.dart).
+
+  /// The chat list, peers and groups in one list ordered by one clock.
+  List<ChatSummary> coreChats(int handle) =>
+      _callList(_bindings.coreChats, {'handle': handle})
+          .map((e) => ChatSummary.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false);
+
+  /// One chat's whole transcript, in arrival order.
+  List<CoreMessage> coreMessages(int handle, String chatId) =>
+      _callList(_bindings.coreMessages, {'handle': handle, 'chat_id': chatId})
+          .map((e) => CoreMessage.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false);
+
+  GroupInfo coreGroupInfo(int handle, String groupId) => GroupInfo.fromJson(
+    _call(_bindings.coreGroupInfo, {'handle': handle, 'group_id': groupId}),
+  );
+
+  void coreSetOpenChat(int handle, String chatId) =>
+      _call(_bindings.coreSetOpenChat, {'handle': handle, 'chat_id': chatId});
+
+  void coreBlockPeer(int handle, String accountId, String server) => _call(
+    _bindings.coreBlockPeer,
+    {'handle': handle, 'account_id': accountId, 'server': server},
+  );
+
+  void coreUnblockPeer(int handle, String accountId) => _call(
+    _bindings.coreUnblockPeer,
+    {'handle': handle, 'account_id': accountId},
+  );
+
+  void coreAcceptRequest(int handle, String accountId) => _call(
+    _bindings.coreAcceptRequest,
+    {'handle': handle, 'account_id': accountId},
+  );
+
+  void coreDeleteChat(int handle, String chatId) =>
+      _call(_bindings.coreDeleteChat, {'handle': handle, 'chat_id': chatId});
+
+  /// Blocking. Isolate only -- see state/core_account.dart.
+  Map<String, dynamic> coreSendRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreSend, req);
+  Map<String, dynamic> coreRetryRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreRetryMessage, req);
+  Map<String, dynamic> coreMarkReadRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreMarkRead, req);
+  Map<String, dynamic> coreStartConversationRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreStartConversation, req);
+  Map<String, dynamic> coreAttachmentPathRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreAttachmentPath, req);
+  Map<String, dynamic> coreMaintainRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreMaintain, req);
+  Map<String, dynamic> coreResetSessionRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreResetSession, req);
+  /// Blocking. Isolate only -- see state/core_account.dart.
+  Map<String, dynamic> coreSyncRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreSync, req);
+  Map<String, dynamic> coreGroupCreateRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupCreate, req);
+  Map<String, dynamic> coreGroupInviteRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupInvite, req);
+  Map<String, dynamic> coreGroupAcceptRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupAccept, req);
+  Map<String, dynamic> coreGroupSetRoleRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupSetRole, req);
+  Map<String, dynamic> coreGroupRemoveRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupRemove, req);
+  Map<String, dynamic> coreGroupLeaveRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupLeave, req);
+  Map<String, dynamic> coreGroupSetMetaRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupSetMeta, req);
+  Map<String, dynamic> coreGroupSyncRequestRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupSyncRequest, req);
+  Map<String, dynamic> coreForgetPeerRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreForgetPeer, req);
+  Map<String, dynamic> coreSetReceiptsEnabledRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreSetReceiptsEnabled, req);
+  Map<String, dynamic> coreGroupDissolveRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreGroupDissolve, req);
+
+  /// Like [_call] for the calls that answer with a JSON array rather than an
+  /// object -- a list of chats, a transcript.
+  ///
+  /// Its own decode rather than a looser [_decodeEnvelope], so the failure mode
+  /// stays sharp: a call answering the wrong shape says so here instead of
+  /// silently producing an empty list.
+  List<dynamic> _callList(
+    Pointer<Utf8> Function(Pointer<Utf8>) fn,
+    Map<String, dynamic> request,
+  ) {
+    final reqPtr = json.encode(request).toNativeUtf8();
+    try {
+      final resultPtr = fn(reqPtr);
+      try {
+        final env =
+            json.decode(resultPtr.toDartString()) as Map<String, dynamic>;
+        if (env['ok'] != true) {
+          throw FreizoneCoreException(
+            env['error'] as String? ?? 'unknown native core error',
+            code: env['code'] as String?,
+          );
+        }
+        final data = env['data'];
+        if (data == null) return const [];
+        if (data is! List) {
+          throw FreizoneCoreException(
+            'expected a list from the core, got ${data.runtimeType}',
+          );
+        }
+        return data;
+      } finally {
+        _bindings.free(resultPtr);
+      }
+    } finally {
+      malloc.free(reqPtr);
     }
   }
 }

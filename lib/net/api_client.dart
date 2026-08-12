@@ -877,20 +877,9 @@ class ApiClient {
     return LicenseStatus.fromJson(_decodeObject(resp, {200}));
   }
 
-  /// Builds (but does not send) a signed GET request for the long-lived
-  /// SSE stream endpoint -- used by SseClient, which needs the raw
-  /// streamed response rather than a buffered http.Response.
-  http.Request buildStreamRequest(DeviceCredentials creds) {
-    final headers = core.signHTTPRequest(
-      method: 'GET',
-      path: '/v1/messages/stream',
-      deviceId: creds.deviceId,
-      devicePriv: creds.devicePriv,
-    );
-    final req = http.Request('GET', _uri('/v1/messages/stream'));
-    headers.forEach((key, value) => req.headers[key] = value);
-    return req;
-  }
+  // The signed request for GET /v1/messages/stream used to be built here, for
+  // sse_client.dart. The core opens and signs that stream itself now (SRV-23),
+  // so nothing in Dart needs the raw streamed response any more.
 
   void close() => _http.close();
 }

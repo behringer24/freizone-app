@@ -65,6 +65,32 @@ Every account's local state (its keys, conversation history, ratchet sessions) i
    ```
 4. On first launch, the setup wizard asks for a server address (no `https://` or port needed for a normally-deployed server) and walks through whatever that server actually needs — bootstrap, open registration, or an invite code — including scanning an invite QR code instead of typing.
 
+   An address without a scheme is always `https://`, and there is deliberately no fallback to plain HTTP: a connection the user believes is encrypted must never be silently downgraded. A server running **without TLS** — a local instance you started for a trial run, say — is reached by writing the scheme out in full, along with its port:
+
+   ```
+   http://192.168.1.10:18080
+   ```
+
+   The same holds anywhere else an address is typed, including the `id*server` form used to reach someone on another server: `q2xjx*http://192.168.1.10:18080`.
+
+## Running the tests
+
+`flutter test` works out of the box for everything that is pure Dart. Tests that
+exercise `lib/state/` need the native core, and the Android `.so` cannot be
+loaded by a test running on your machine — so build a host copy once:
+
+```powershell
+./native/build_desktop.ps1
+```
+
+This needs a C compiler, because the core is cgo. On Windows:
+`winget install --id BrechtSanders.WinLibs.POSIX.UCRT --source winget`. The
+Android NDK's clang cannot stand in — it only targets Android.
+
+Tests needing the core **skip** rather than fail when it is missing, so a fresh
+checkout is never red; a skipped test says which script to run. Re-run the
+script whenever `native/*.go` changes, same as the Android one.
+
 ## Push notifications
 
 Two independent, non-interfering delivery mechanisms exist; a device uses exactly one at a time per account:

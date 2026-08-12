@@ -1,4 +1,4 @@
-// The client-to-client wire shapes groups add (APP-16 phase 5): `v: 4` group
+﻿// The client-to-client wire shapes groups add (APP-16 phase 5): `v: 4` group
 // chat content and the `v: 5` control envelope. Pure logic, and the contract
 // both the send and receive paths are built on -- a second client has to be
 // able to reproduce exactly this.
@@ -6,7 +6,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:freizone/state/group_control.dart';
 import 'package:freizone/state/message_content.dart';
 
 Map<String, dynamic> asJson(Uint8List bytes) =>
@@ -158,88 +157,6 @@ void main() {
       );
       expect(decoded.text, contains('newer app feature'));
       expect(decoded.id, 'm1');
-    });
-  });
-
-  group('GroupControl', () {
-    test('round-trips a batch of events', () {
-      final encoded = const GroupControl(
-        kind: GroupControlKind.events,
-        groupId: 'p2xjx0000000000000000',
-        stateHash: 'abc123',
-        events: [
-          {'type': 'member_add', 'subject': 'qben000000000000000b'},
-        ],
-      ).encode();
-
-      expect(asJson(encoded)['v'], 5);
-
-      final decoded = GroupControl.tryDecode(encoded)!;
-      expect(decoded.kind, GroupControlKind.events);
-      expect(decoded.groupId, 'p2xjx0000000000000000');
-      expect(decoded.stateHash, 'abc123');
-      // Carried through untouched -- only the core reads inside an event.
-      expect(decoded.events.single['type'], 'member_add');
-    });
-
-    test('a sync request carries no events', () {
-      final encoded = const GroupControl(
-        kind: GroupControlKind.syncRequest,
-        groupId: 'p2xjx0000000000000000',
-      ).encode();
-      expect(asJson(encoded).containsKey('events'), isFalse);
-      expect(GroupControl.tryDecode(encoded)!.events, isEmpty);
-    });
-
-    test('declines anything that is not a control envelope', () {
-      // So the receive path can try each decoder in turn and fall through.
-      for (final bytes in [
-        const MessageContent(id: 'm1', text: 'hallo').encode(),
-        const MessageContent(
-          id: 'm1',
-          text: 'hallo',
-          groupId: 'p2xjx0000000000000000',
-        ).encode(),
-        asBytes({'v': 5, 'kind': 'nonsense', 'group_id': 'p1'}),
-        asBytes({'v': 5, 'kind': 'events'}), // no group to route it to
-        asBytes({'v': 5, 'kind': 'events', 'group_id': ''}),
-        Uint8List.fromList(utf8.encode('not json at all')),
-      ]) {
-        expect(GroupControl.tryDecode(bytes), isNull);
-      }
-    });
-
-    test('a malformed event costs itself, not the envelope', () {
-      // Every fact is individually signed, so nothing here is taken on the
-      // sender's word -- but the good facts in a snapshot still deserve to
-      // arrive.
-      final decoded = GroupControl.tryDecode(
-        asBytes({
-          'v': 5,
-          'kind': 'snapshot',
-          'group_id': 'p2xjx0000000000000000',
-          'events': [
-            'not an object',
-            {'type': 'genesis'},
-            42,
-          ],
-        }),
-      )!;
-      expect(decoded.events, hasLength(1));
-      expect(decoded.events.single['type'], 'genesis');
-    });
-
-    test('an older build renders a control envelope as a placeholder', () {
-      // Not silently mishandled: the accepted cost of the versioning scheme,
-      // and the reason a group message is v: 4 rather than v: 1 plus a field.
-      final decoded = MessageContent.decode(
-        const GroupControl(
-          kind: GroupControlKind.events,
-          groupId: 'p2xjx0000000000000000',
-        ).encode(),
-        fallbackId: 'fallback',
-      );
-      expect(decoded.text, contains('newer app feature'));
     });
   });
 }
