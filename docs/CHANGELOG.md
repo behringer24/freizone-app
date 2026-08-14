@@ -16,6 +16,20 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Added
+
+* **The attachment-storage chart now continues past today**, for a server's own
+  admins. One line is what was measured, up to this moment. A dashed line shows
+  what is left of it as attachments reach the end of their retention — every
+  one of them has a known expiry date, so this is calculated, not estimated, and
+  it is the upper bound: a picture is released as soon as its recipient has it,
+  which only empties the server faster. A third, dimmed line adds uploads
+  continuing at the rate of the last few days, and levels off where storage
+  settles — because attachments are kept for a fixed period, storage cannot grow
+  without end, and that level is the number worth knowing. Today is marked, so
+  it is always clear which part of the chart already happened. Tap or drag
+  either forecast line to read both figures for that day (`SRV-25`, `APP-24`)
+
 ## [0.22.1] — 2026-08-14 (versionCode 27)
 
 ### Fixed

@@ -1042,3 +1042,20 @@ Server Admin, admin-only, reading `SRV-25`'s two endpoints.
   short dates at weekly intervals rather than every point's, and the arrows
   below page the visible window by a whole 28-day span, cut by date so the
   range named between them is the range drawn even where snapshots are missing
+- 2026-08-14 — **the storage chart now continues past today** (`SRV-25`'s
+  forecast). Three lines in one chart rather than a second chart beside it,
+  because they are the same quantity: the measured history in teal, ending on
+  the live reading so it reaches *now* rather than the last snapshot; the exact
+  decay of what is stored, dashed and neutral; and that plus continuing uploads,
+  in dimmed teal, which converges on the level a fixed retention window makes
+  storage settle at. Colours from the scheme, never literals —
+  `colorScheme.outline` for the dashed line and `primary` at reduced alpha for
+  the projection, which is the difference between legible and invisible in dark
+  mode. A dashed vertical line marks today, since otherwise the three read as
+  one continuous picture with nothing saying which part is a record. The two
+  forecast lines share their instants point for point, so touching either pins
+  both and the bubble answers "if nobody reads it" and "if uploads continue"
+  side by side; entries are **named** rather than colour-coded, because the
+  bubble has its own background and a line's colour is not guaranteed legible on
+  it in both themes. Forecast lines are drawn on the newest page only — a
+  projection beside July's data would claim to be about July

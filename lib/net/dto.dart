@@ -370,6 +370,7 @@ class ServerStats {
     required this.diskTotalBytes,
     required this.federationEnabled,
     required this.federationBlocklistCount,
+    this.forecast,
   });
 
   factory ServerStats.fromJson(Map<String, dynamic> j) => ServerStats(
@@ -386,6 +387,9 @@ class ServerStats {
     federationEnabled: j['federation_enabled'] as bool? ?? true,
     federationBlocklistCount:
         (j['federation_blocklist_count'] as num?)?.toInt() ?? 0,
+    forecast: j['forecast'] == null
+        ? null
+        : StorageForecast.fromJson(j['forecast'] as Map<String, dynamic>),
   );
 
   final DateTime capturedAt;
@@ -404,6 +408,72 @@ class ServerStats {
   final int diskTotalBytes;
   final bool federationEnabled;
   final int federationBlocklistCount;
+
+  /// How the stored attachments will drain, and where they settle. Null on a
+  /// server that predates it, which a chart reads as "draw the past only".
+  final StorageForecast? forecast;
+}
+
+/// The `forecast` half of `GET /v1/admin/stats`: what happens to the
+/// attachments this server is holding.
+///
+/// [drain] is not a prediction — every blob carries its own expiry, fixed when
+/// it was uploaded, so today's storage has a known decay. It is an upper bound,
+/// since a recipient releasing its claim after fetching only makes the real
+/// curve fall faster. [withInflow] adds uploads continuing at the measured
+/// [inflowBytesPerDay]; those live one retention window as well, so it flattens
+/// out on [equilibriumBytes] — which is the honest answer to "will this server
+/// run out of room", a fixed retention window meaning storage converges instead
+/// of growing without limit.
+class StorageForecast {
+  StorageForecast({
+    required this.retentionDays,
+    required this.inflowWindowDays,
+    required this.inflowBytesPerDay,
+    required this.equilibriumBytes,
+    required this.drain,
+    required this.withInflow,
+  });
+
+  factory StorageForecast.fromJson(Map<String, dynamic> j) => StorageForecast(
+    retentionDays: (j['retention_days'] as num?)?.toInt() ?? 0,
+    inflowWindowDays: (j['inflow_window_days'] as num?)?.toInt() ?? 0,
+    inflowBytesPerDay: (j['inflow_bytes_per_day'] as num?)?.toInt() ?? 0,
+    equilibriumBytes: (j['equilibrium_bytes'] as num?)?.toInt() ?? 0,
+    drain: _forecastPoints(j['drain']),
+    withInflow: _forecastPoints(j['with_inflow']),
+  );
+
+  final int retentionDays;
+  final int inflowWindowDays;
+  final int inflowBytesPerDay;
+  final int equilibriumBytes;
+
+  /// Both series start at the same moment and value the enclosing
+  /// [ServerStats] reports, so a chart joins its measured line to them without
+  /// a step.
+  final List<StorageForecastPoint> drain;
+  final List<StorageForecastPoint> withInflow;
+}
+
+class StorageForecastPoint {
+  StorageForecastPoint({required this.at, required this.bytes});
+
+  factory StorageForecastPoint.fromJson(Map<String, dynamic> j) =>
+      StorageForecastPoint(
+        at: decodeTime(j['at'] as String),
+        bytes: (j['bytes'] as num?)?.toInt() ?? 0,
+      );
+
+  final DateTime at;
+  final int bytes;
+}
+
+List<StorageForecastPoint> _forecastPoints(dynamic raw) {
+  if (raw is! List) return const [];
+  return raw
+      .map((e) => StorageForecastPoint.fromJson(e as Map<String, dynamic>))
+      .toList();
 }
 
 /// One entry of GET /v1/admin/stats/history -- the same fields as
