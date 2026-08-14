@@ -1001,3 +1001,35 @@ rather than riding along with the publicly-decodable attestation token.
   becoming a refresh, `sendMessage` going through `CoreAccount`, and
   `saveProfile` becoming a no-op so the old profile freezes as the fallback
   rather than being deleted
+
+### APP-24 — Server statistics page in Server Admin
+Status: `done` · Also affects: freizone-server (SRV-25)
+
+Andreas, as an operator, wanted to see how loaded his own server is and
+whether it is healthy — and, more than a single reading, whether the load is
+going anywhere: is storage growing, are registrations climbing. A page under
+Server Admin, admin-only, reading `SRV-25`'s two endpoints.
+
+- 2026-08-14 — shipped. `ServerStats` / `ServerStatsPoint` (`lib/net/dto.dart`)
+  over `GET /v1/admin/stats` and `GET /v1/admin/stats/history`, fetched by
+  `AppSession.refreshServerStats` / `refreshServerStatsHistory`, rendered by
+  `lib/screens/admin_stats_screen.dart` — stat cards plus one line chart per
+  growth figure (`fl_chart`, the app's first chart dependency). Opened from the
+  chart icon in the admin screen's app bar, shown only when `_isAdmin`, since a
+  moderator gets a 403 from both endpoints. Unlike every other refresh in
+  `AppSession`, a failure here does not reach the error banner: an older server
+  without the endpoints is an ordinary, expected answer, and the screen already
+  says "No statistics available" in that case, so the banner would be a second
+  complaint about something already stated where it matters
+- **Details that only showed up on a real phone.** The disk figure states free
+  space alone: "3.2 GB used of 40 GB" reads as Freizone's own usage on a disk
+  it almost always shares with everything else on the host. And fl_chart's
+  built-in touch tooltip clears itself the instant a finger lifts — no hover
+  state to fall back on — so the bubble and its marker are driven from the
+  screen's own state (`showingTooltipIndicators` / `showingIndicators` with
+  `handleBuiltInTouches: false`), which keeps the reading on screen after
+  release while dragging along the line still works, because fl_chart feeds its
+  pan recognizer whenever a `touchCallback` is set at all. The x-axis carries
+  short dates at weekly intervals rather than every point's, and the arrows
+  below page the visible window by a whole 28-day span, cut by date so the
+  range named between them is the range drawn even where snapshots are missing

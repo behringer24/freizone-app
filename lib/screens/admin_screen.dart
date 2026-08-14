@@ -17,6 +17,7 @@ import '../util/role_icon.dart';
 import '../widgets/admin_search_field.dart';
 import '../widgets/verified_badge.dart';
 import 'admin_account_screen.dart';
+import 'admin_stats_screen.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({
@@ -576,7 +577,26 @@ class _AdminScreenState extends State<AdminScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Server Admin')),
+      appBar: AppBar(
+        title: const Text('Server Admin'),
+        // Admin only, matching the server's requireAdmin gate on GET
+        // /v1/admin/stats -- unlike the rest of this screen, moderators get
+        // no read-only view here at all, since usage/capacity figures are
+        // exactly the attack-surface information SRV-22's license status is
+        // also kept away from them.
+        actions: [
+          if (_isAdmin)
+            IconButton(
+              icon: const Icon(Icons.bar_chart),
+              tooltip: 'Server statistics',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => AdminStatsScreen(session: widget.session),
+                ),
+              ),
+            ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null

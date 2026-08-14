@@ -52,6 +52,9 @@ dependencies:
   # Needs the VIEW intents in AndroidManifest's <queries>, or Android 11+
   # hides the browser and launching fails silently.
   url_launcher: ^6.3.2
+  # Line charts for the admin server-statistics page's growth trends
+  # (account/storage history) -- the only chart-shaped widget in the app.
+  fl_chart: ^1.1.1
 
 dev_dependencies:
   flutter_test:
