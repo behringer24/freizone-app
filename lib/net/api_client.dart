@@ -182,23 +182,31 @@ class ApiClient {
     return _send(req);
   }
 
+  /// [rawQuery], when given, is signed exactly as the server splits it
+  /// (method + path + rawQuery, PROTOCOL §3 -- see uploadBlob for the same
+  /// convention on a raw-body request) and appended to the request URL.
   Future<http.Response> _signedRequest(
     String method,
     String path,
     Map<String, dynamic>? body,
-    DeviceCredentials creds,
-  ) async {
+    DeviceCredentials creds, {
+    String rawQuery = '',
+  }) async {
     final bodyBytes = body == null
         ? Uint8List(0)
         : Uint8List.fromList(utf8.encode(json.encode(body)));
     final headers = core.signHTTPRequest(
       method: method,
       path: path,
+      rawQuery: rawQuery,
       body: bodyBytes,
       deviceId: creds.deviceId,
       devicePriv: creds.devicePriv,
     );
-    final req = http.Request(method, _uri(path));
+    final req = http.Request(
+      method,
+      _uri(rawQuery.isEmpty ? path : '$path?$rawQuery'),
+    );
     req.headers['Content-Type'] = 'application/json';
     headers.forEach((key, value) => req.headers[key] = value);
     if (body != null) req.bodyBytes = bodyBytes;
@@ -875,6 +883,36 @@ class ApiClient {
   Future<LicenseStatus> getLicenseStatus(DeviceCredentials creds) async {
     final resp = await _signedRequest('GET', '/v1/admin/license', null, creds);
     return LicenseStatus.fromJson(_decodeObject(resp, {200}));
+  }
+
+  /// This server's current size and load: accounts, devices, stored
+  /// attachments, disk usage, queued messages, federation status. Admin
+  /// only, same gating as [getLicenseStatus].
+  Future<ServerStats> getServerStats(DeviceCredentials creds) async {
+    final resp = await _signedRequest('GET', '/v1/admin/stats', null, creds);
+    return ServerStats.fromJson(_decodeObject(resp, {200}));
+  }
+
+  /// The same figures as [getServerStats], recorded four times a day (every
+  /// six hours) and kept for the last [days] days (server-capped, currently
+  /// ~730 days/2 years), oldest first -- the series a growth chart plots.
+  /// Admin only.
+  Future<List<ServerStatsPoint>> getServerStatsHistory(
+    DeviceCredentials creds, {
+    required int days,
+  }) async {
+    final resp = await _signedRequest(
+      'GET',
+      '/v1/admin/stats/history',
+      null,
+      creds,
+      rawQuery: 'days=$days',
+    );
+    _checkStatus(resp, {200});
+    final list = json.decode(resp.body) as List<dynamic>;
+    return list
+        .map((e) => ServerStatsPoint.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   // The signed request for GET /v1/messages/stream used to be built here, for
