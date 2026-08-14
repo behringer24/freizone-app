@@ -350,6 +350,116 @@ class LicenseStatus {
   );
 }
 
+/// GET /v1/admin/stats (and the shared shape of one GET
+/// /v1/admin/stats/history entry, see [ServerStatsPoint]) -- how large this
+/// server currently is: accounts, devices, stored attachments and their
+/// disk usage, queued messages, federation status. Admin only, for the same
+/// reason [LicenseStatus] is: usage figures are attack-surface information
+/// no unauthenticated endpoint is allowed to reveal.
+class ServerStats {
+  ServerStats({
+    required this.capturedAt,
+    required this.accountCount,
+    required this.activeAccountCount,
+    required this.deviceCount,
+    required this.blobCount,
+    required this.blobBytes,
+    required this.dbBytes,
+    required this.pendingMessageCount,
+    required this.diskFreeBytes,
+    required this.diskTotalBytes,
+    required this.federationEnabled,
+    required this.federationBlocklistCount,
+  });
+
+  factory ServerStats.fromJson(Map<String, dynamic> j) => ServerStats(
+    capturedAt: decodeTime(j['captured_at'] as String),
+    accountCount: (j['account_count'] as num?)?.toInt() ?? 0,
+    activeAccountCount: (j['active_account_count'] as num?)?.toInt() ?? 0,
+    deviceCount: (j['device_count'] as num?)?.toInt() ?? 0,
+    blobCount: (j['blob_count'] as num?)?.toInt() ?? 0,
+    blobBytes: (j['blob_bytes'] as num?)?.toInt() ?? 0,
+    dbBytes: (j['db_bytes'] as num?)?.toInt() ?? 0,
+    pendingMessageCount: (j['pending_message_count'] as num?)?.toInt() ?? 0,
+    diskFreeBytes: (j['disk_free_bytes'] as num?)?.toInt() ?? 0,
+    diskTotalBytes: (j['disk_total_bytes'] as num?)?.toInt() ?? 0,
+    federationEnabled: j['federation_enabled'] as bool? ?? true,
+    federationBlocklistCount:
+        (j['federation_blocklist_count'] as num?)?.toInt() ?? 0,
+  );
+
+  final DateTime capturedAt;
+  final int accountCount;
+  final int activeAccountCount;
+  final int deviceCount;
+  final int blobCount;
+  final int blobBytes;
+  final int dbBytes;
+  final int pendingMessageCount;
+
+  /// Both 0 when the server's host platform has no way to report disk usage
+  /// (internal/diskstat on the server side) -- read that as "unknown", not
+  /// "completely full".
+  final int diskFreeBytes;
+  final int diskTotalBytes;
+  final bool federationEnabled;
+  final int federationBlocklistCount;
+}
+
+/// One entry of GET /v1/admin/stats/history -- the same fields as
+/// [ServerStats], kept as a separate class (rather than reusing it) so the
+/// two endpoints can diverge later without one's shape constraining the
+/// other, mirroring the server's serverStatsResponse/serverStatsPointResponse
+/// split.
+class ServerStatsPoint {
+  ServerStatsPoint({
+    required this.capturedAt,
+    required this.accountCount,
+    required this.activeAccountCount,
+    required this.deviceCount,
+    required this.blobCount,
+    required this.blobBytes,
+    required this.dbBytes,
+    required this.pendingMessageCount,
+    required this.diskFreeBytes,
+    required this.diskTotalBytes,
+    required this.federationEnabled,
+    required this.federationBlocklistCount,
+  });
+
+  factory ServerStatsPoint.fromJson(Map<String, dynamic> j) =>
+      ServerStatsPoint(
+        capturedAt: decodeTime(j['captured_at'] as String),
+        accountCount: (j['account_count'] as num?)?.toInt() ?? 0,
+        activeAccountCount:
+            (j['active_account_count'] as num?)?.toInt() ?? 0,
+        deviceCount: (j['device_count'] as num?)?.toInt() ?? 0,
+        blobCount: (j['blob_count'] as num?)?.toInt() ?? 0,
+        blobBytes: (j['blob_bytes'] as num?)?.toInt() ?? 0,
+        dbBytes: (j['db_bytes'] as num?)?.toInt() ?? 0,
+        pendingMessageCount:
+            (j['pending_message_count'] as num?)?.toInt() ?? 0,
+        diskFreeBytes: (j['disk_free_bytes'] as num?)?.toInt() ?? 0,
+        diskTotalBytes: (j['disk_total_bytes'] as num?)?.toInt() ?? 0,
+        federationEnabled: j['federation_enabled'] as bool? ?? true,
+        federationBlocklistCount:
+            (j['federation_blocklist_count'] as num?)?.toInt() ?? 0,
+      );
+
+  final DateTime capturedAt;
+  final int accountCount;
+  final int activeAccountCount;
+  final int deviceCount;
+  final int blobCount;
+  final int blobBytes;
+  final int dbBytes;
+  final int pendingMessageCount;
+  final int diskFreeBytes;
+  final int diskTotalBytes;
+  final bool federationEnabled;
+  final int federationBlocklistCount;
+}
+
 class AdminAccountSummary {
   AdminAccountSummary({
     required this.id,

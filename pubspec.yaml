@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.21.0+25
+version: 0.22.0+26
 environment:
   sdk: ^3.12.2
 
@@ -52,6 +52,9 @@ dependencies:
   # Needs the VIEW intents in AndroidManifest's <queries>, or Android 11+
   # hides the browser and launching fails silently.
   url_launcher: ^6.3.2
+  # Line charts for the admin server-statistics page's growth trends
+  # (account/storage history) -- the only chart-shaped widget in the app.
+  fl_chart: ^1.1.1
 
 dev_dependencies:
   flutter_test:

@@ -343,6 +343,51 @@ class AppSession extends ChangeNotifier {
     }
   }
 
+  /// This server's current size and load -- accounts, devices, stored
+  /// attachments, disk usage, queued messages, federation status. Admin
+  /// only, same gating and null-on-failure convention as [licenseStatus].
+  ServerStats? serverStats;
+
+  /// The same figures over time, for the admin statistics page's growth
+  /// charts. Null until [refreshServerStatsHistory] has run (or if it
+  /// failed); empty rather than null just means the server hasn't recorded
+  /// a snapshot yet.
+  List<ServerStatsPoint>? serverStatsHistory;
+
+  /// Refreshes [serverStats]. Admin only -- call after confirming [myRole]
+  /// is "admin", same as [refreshLicenseStatus].
+  ///
+  /// Deliberately quiet on failure, unlike most other refreshes here: an
+  /// older server that predates this endpoint (404) is an expected, common
+  /// case, not a "this server is having a problem" the banner should be
+  /// spent on -- the admin stats screen already reads a null [serverStats]
+  /// as "no statistics available" and says so right there.
+  Future<void> refreshServerStats() async {
+    try {
+      serverStats = await api.getServerStats(state.credentials);
+    } catch (e) {
+      serverStats = null;
+      logDiagnostic('checking server stats failed: ${describeError(e)}', name: 'freizone');
+    }
+  }
+
+  /// Refreshes [serverStatsHistory] over the last [days] days. Admin only,
+  /// same gating and quiet-failure reasoning as [refreshServerStats].
+  Future<void> refreshServerStatsHistory({int days = 90}) async {
+    try {
+      serverStatsHistory = await api.getServerStatsHistory(
+        state.credentials,
+        days: days,
+      );
+    } catch (e) {
+      serverStatsHistory = null;
+      logDiagnostic(
+        'checking server stats history failed: ${describeError(e)}',
+        name: 'freizone',
+      );
+    }
+  }
+
   /// Refreshes [registrationPolicy], [federationEnabled] and [ownAttestation]
   /// from the public server-status endpoint (one call covers all three).
   /// Call once after [init] and again whenever the app returns to the
