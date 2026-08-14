@@ -102,7 +102,17 @@ class _AdminStatsScreenState extends State<AdminStatsScreen> {
           history: history,
           valueOf: (p) => p.blobBytes.toDouble(),
           formatValue: (v) => formatByteSize(v.round()),
+          // The live reading joins the recorded ones, so the measured line ends
+          // at "now" rather than at the last snapshot -- which is also where the
+          // forecast starts, and the two have to meet exactly.
+          liveAt: stats.capturedAt,
+          liveValue: stats.blobBytes.toDouble(),
+          forecast: stats.forecast,
         ),
+        if (stats.forecast != null) ...[
+          const SizedBox(height: 8),
+          _ForecastNote(forecast: stats.forecast!),
+        ],
       ],
     );
   }
@@ -168,6 +178,9 @@ class _GrowthChart extends StatefulWidget {
     required this.history,
     required this.valueOf,
     required this.formatValue,
+    this.liveAt,
+    this.liveValue,
+    this.forecast,
   });
 
   final String title;
@@ -175,8 +188,36 @@ class _GrowthChart extends StatefulWidget {
   final double Function(ServerStatsPoint) valueOf;
   final String Function(double) formatValue;
 
+  /// The live reading, appended to the recorded ones so the measured line ends
+  /// at "now" instead of at the last snapshot — which is where [forecast]
+  /// begins, and the two must meet exactly or the join reads as a step.
+  final DateTime? liveAt;
+  final double? liveValue;
+
+  /// When given, two more lines continue past today: the exact decay of what is
+  /// stored now, and the same plus uploads continuing at the measured rate.
+  /// Null for a figure that has no forecast (registrations do not expire) or a
+  /// server that does not report one.
+  final StorageForecast? forecast;
+
   @override
   State<_GrowthChart> createState() => _GrowthChartState();
+}
+
+/// One drawn line: its points, how it is painted, and what to call it in the
+/// bubble. Three of them at most -- measured, drain, drain-plus-inflow.
+class _ChartSeries {
+  _ChartSeries({
+    required this.label,
+    required this.points,
+    required this.color,
+    this.dashed = false,
+  });
+
+  final String label;
+  final List<({DateTime at, double value})> points;
+  final Color color;
+  final bool dashed;
 }
 
 class _GrowthChartState extends State<_GrowthChart> {
@@ -190,17 +231,18 @@ class _GrowthChartState extends State<_GrowthChart> {
   /// 0 is the most recent window.
   int _windowsBack = 0;
 
-  /// The point the bubble is pinned to, as an index into the *visible*
-  /// points of the current window. Null means nothing is marked yet.
-  int? _selectedIndex;
+  /// Which point the bubble is pinned to: the series it belongs to and its
+  /// index within that series' visible points. Null means nothing is marked.
+  ({int series, int index})? _selected;
 
   @override
   void didUpdateWidget(_GrowthChart oldWidget) {
     super.didUpdateWidget(oldWidget);
     // A refresh replaces the series, so an index into the old one means
     // nothing -- drop the marker rather than pin it to a different point.
-    if (widget.history != oldWidget.history) {
-      _selectedIndex = null;
+    if (widget.history != oldWidget.history ||
+        widget.forecast != oldWidget.forecast) {
+      _selected = null;
     }
   }
 
@@ -236,20 +278,63 @@ class _GrowthChartState extends State<_GrowthChart> {
     );
     final windowStart = windowEnd.subtract(const Duration(days: _windowDays));
 
-    final visible = [
+    // The forecast only belongs on the newest page -- older pages are history,
+    // and a projection drawn beside them would claim to be about their time.
+    final forecast = _windowsBack == 0 ? widget.forecast : null;
+    final showsForecast =
+        forecast != null && forecast.drain.length >= 2 && widget.liveAt != null;
+
+    final measured = <({DateTime at, double value})>[
       for (final p in history)
         if (!p.capturedAt.toLocal().isBefore(windowStart) &&
             !p.capturedAt.toLocal().isAfter(windowEnd))
-          p,
+          (at: p.capturedAt.toLocal(), value: widget.valueOf(p)),
+      // Appended last so the line runs right up to now, where the forecast
+      // takes over. Only on the newest page, and only if it is inside it.
+      if (_windowsBack == 0 &&
+          widget.liveAt != null &&
+          widget.liveValue != null &&
+          !widget.liveAt!.toLocal().isBefore(windowStart))
+        (at: widget.liveAt!.toLocal(), value: widget.liveValue!),
     ];
 
+    final series = <_ChartSeries>[
+      _ChartSeries(
+        label: 'Stored',
+        points: measured,
+        color: theme.colorScheme.primary,
+      ),
+      if (showsForecast) ...[
+        _ChartSeries(
+          // Neutral and dashed: this is a calculation, and it must not read as
+          // another measurement. colorScheme.outline rather than a hard-coded
+          // grey, which is the whole difference between working and unreadable
+          // in dark mode.
+          label: 'If unread',
+          points: [
+            for (final p in forecast.drain)
+              (at: p.at.toLocal(), value: p.bytes.toDouble()),
+          ],
+          color: theme.colorScheme.outline,
+          dashed: true,
+        ),
+        _ChartSeries(
+          // Same hue as the measurement, dimmed: it continues that quantity
+          // rather than describing a different one.
+          label: 'If uploads continue',
+          points: [
+            for (final p in forecast.withInflow)
+              (at: p.at.toLocal(), value: p.bytes.toDouble()),
+          ],
+          color: theme.colorScheme.primary.withValues(alpha: 0.45),
+        ),
+      ],
+    ];
+
+    // The drawn range runs past today when a forecast is shown, so the arrows
+    // page a window that is history on the left and calculation on the right.
+    final rightEdge = showsForecast ? forecast.drain.last.at.toLocal() : windowEnd;
     final hasOlder = history.first.capturedAt.toLocal().isBefore(windowStart);
-    final selected =
-        _selectedIndex != null &&
-            _selectedIndex! >= 0 &&
-            _selectedIndex! < visible.length
-        ? _selectedIndex!
-        : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -258,7 +343,7 @@ class _GrowthChartState extends State<_GrowthChart> {
         const SizedBox(height: 8),
         SizedBox(
           height: 180,
-          child: visible.length < 2
+          child: measured.length < 2
               // Paging can legitimately land on a window with nothing in
               // it, which has to say so rather than draw an empty frame the
               // reader would take for "zero".
@@ -268,7 +353,13 @@ class _GrowthChartState extends State<_GrowthChart> {
                     style: theme.textTheme.bodySmall,
                   ),
                 )
-              : _buildChart(context, visible, windowStart, windowEnd, selected),
+              : _buildChart(
+                  context,
+                  series,
+                  windowStart,
+                  rightEdge,
+                  showsForecast ? widget.liveAt!.toLocal() : null,
+                ),
         ),
         Row(
           children: [
@@ -278,13 +369,13 @@ class _GrowthChartState extends State<_GrowthChart> {
               onPressed: hasOlder
                   ? () => setState(() {
                       _windowsBack++;
-                      _selectedIndex = null;
+                      _selected = null;
                     })
                   : null,
             ),
             Expanded(
               child: Text(
-                _formatRange(windowStart, windowEnd),
+                _formatRange(windowStart, rightEdge),
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium,
               ),
@@ -295,46 +386,72 @@ class _GrowthChartState extends State<_GrowthChart> {
               onPressed: _windowsBack > 0
                   ? () => setState(() {
                       _windowsBack--;
-                      _selectedIndex = null;
+                      _selected = null;
                     })
                   : null,
             ),
           ],
         ),
+        if (showsForecast) _ChartLegend(series: series),
       ],
     );
   }
 
+  /// Whether line [candidate] should be pinned when line [touched] was hit. The
+  /// two forecast lines (1 and 2) are index-aligned in time, so they answer
+  /// together; the measured line stands alone.
+  bool _pinsWith(int candidate, int touched) {
+    if (candidate == touched) return true;
+    return touched > 0 && candidate > 0;
+  }
+
   Widget _buildChart(
     BuildContext context,
-    List<ServerStatsPoint> visible,
+    List<_ChartSeries> series,
     DateTime windowStart,
     DateTime windowEnd,
-    int? selected,
+    DateTime? todayAt,
   ) {
     final theme = Theme.of(context);
 
-    // x is the real instant, not a running index, so gaps in the series
-    // show as gaps and the axis dates land where they belong.
-    final bar = LineChartBarData(
-      spots: [
-        for (final p in visible)
-          FlSpot(
-            p.capturedAt.millisecondsSinceEpoch.toDouble(),
-            widget.valueOf(p),
-          ),
-      ],
-      isCurved: false,
-      barWidth: 2,
-      dotData: const FlDotData(show: false),
-      color: theme.colorScheme.primary,
-      showingIndicators: selected == null ? const [] : [selected],
-    );
+    // x is the real instant, not a running index, so gaps in a series show as
+    // gaps, the three lines line up in time, and the axis dates land where they
+    // belong.
+    final bars = <LineChartBarData>[
+      for (var i = 0; i < series.length; i++)
+        LineChartBarData(
+          spots: [
+            for (final p in series[i].points)
+              FlSpot(p.at.millisecondsSinceEpoch.toDouble(), p.value),
+          ],
+          isCurved: false,
+          barWidth: 2,
+          dashArray: series[i].dashed ? const [6, 4] : null,
+          dotData: const FlDotData(show: false),
+          color: series[i].color,
+          showingIndicators: _selected?.series == i ? [_selected!.index] : const [],
+        ),
+    ];
 
     return LineChart(
       LineChartData(
         minX: windowStart.millisecondsSinceEpoch.toDouble(),
         maxX: windowEnd.millisecondsSinceEpoch.toDouble(),
+        // Where measurement ends and arithmetic begins. Without it the three
+        // lines are one continuous picture and nothing says which part is a
+        // record of what happened.
+        extraLinesData: ExtraLinesData(
+          extraLinesOnTop: false,
+          verticalLines: [
+            if (todayAt != null)
+              VerticalLine(
+                x: todayAt.millisecondsSinceEpoch.toDouble(),
+                color: theme.colorScheme.outlineVariant,
+                strokeWidth: 1,
+                dashArray: const [3, 3],
+              ),
+          ],
+        ),
         gridData: const FlGridData(show: false),
         borderData: FlBorderData(show: false),
         titlesData: FlTitlesData(
@@ -372,34 +489,160 @@ class _GrowthChartState extends State<_GrowthChart> {
           // finger lifting -- see the class doc comment.
           handleBuiltInTouches: false,
           touchTooltipData: LineTouchTooltipData(
+            getTooltipColor: (_) => theme.colorScheme.inverseSurface,
             getTooltipItems: (touchedSpots) => [
-              for (final s in touchedSpots)
+              for (var i = 0; i < touchedSpots.length; i++)
                 LineTooltipItem(
-                  '${_formatDateTime(visible[s.spotIndex].capturedAt.toLocal())}\n'
-                  '${widget.formatValue(s.y)}',
+                  // The time once, on the first row, then one named value per
+                  // line that has a point here. Named rather than colour-coded:
+                  // the tooltip has its own background, so a line's colour is
+                  // not guaranteed legible on it in both themes, and "If
+                  // unread" says more than a grey swatch anyway.
+                  '${i == 0 ? '${_formatDateTime(DateTime.fromMillisecondsSinceEpoch(touchedSpots[i].x.toInt()))}\n' : ''}'
+                  '${series[touchedSpots[i].barIndex].label}: '
+                  '${widget.formatValue(touchedSpots[i].y)}',
                   TextStyle(color: theme.colorScheme.onInverseSurface),
+                  textAlign: TextAlign.left,
                 ),
             ],
           ),
           touchCallback: (event, response) {
             final touched = response?.lineBarSpots;
             if (touched == null || touched.isEmpty) return;
-            final index = touched.first.spotIndex;
-            if (index == _selectedIndex) return;
-            setState(() => _selectedIndex = index);
+            final hit = (
+              series: touched.first.barIndex,
+              index: touched.first.spotIndex,
+            );
+            if (hit == _selected) return;
+            setState(() => _selected = hit);
           },
         ),
-        // Pinning the bubble to the marked spot is what keeps it on screen
-        // after release; fl_chart draws these regardless of touch state.
-        showingTooltipIndicators: selected == null
+        // Pinning the bubble is what keeps it on screen after release; fl_chart
+        // draws these regardless of touch state.
+        //
+        // The two forecast lines share their instants point for point, so
+        // touching either pins both and the bubble answers the real question --
+        // "how much if nobody reads it, how much if uploads keep coming" -- side
+        // by side. In the measured part there is only ever one line to pin.
+        showingTooltipIndicators: _selected == null
             ? const []
             : [
                 ShowingTooltipIndicators([
-                  LineBarSpot(bar, 0, bar.spots[selected]),
+                  for (var i = 0; i < bars.length; i++)
+                    if (_pinsWith(i, _selected!.series) &&
+                        _selected!.index < bars[i].spots.length)
+                      LineBarSpot(bars[i], i, bars[i].spots[_selected!.index]),
                 ]),
               ],
-        lineBarsData: [bar],
+        lineBarsData: bars,
       ),
+    );
+  }
+}
+
+/// Names the three lines, because a dashed neutral line and a dimmed teal one
+/// are not self-explanatory and the bubble only speaks when touched.
+class _ChartLegend extends StatelessWidget {
+  const _ChartLegend({required this.series});
+
+  final List<_ChartSeries> series;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        spacing: 16,
+        runSpacing: 4,
+        children: [
+          for (final s in series)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // A short stroke rather than a dot, so a dashed line reads as
+                // dashed in the key too.
+                CustomPaint(
+                  size: const Size(16, 2),
+                  painter: _StrokeSwatch(color: s.color, dashed: s.dashed),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  s.label,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StrokeSwatch extends CustomPainter {
+  _StrokeSwatch({required this.color, required this.dashed});
+
+  final Color color;
+  final bool dashed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2;
+    if (!dashed) {
+      canvas.drawLine(Offset(0, size.height / 2), Offset(size.width, size.height / 2), paint);
+      return;
+    }
+    const dash = 4.0;
+    const gap = 3.0;
+    for (var x = 0.0; x < size.width; x += dash + gap) {
+      canvas.drawLine(
+        Offset(x, size.height / 2),
+        Offset((x + dash).clamp(0, size.width), size.height / 2),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_StrokeSwatch old) =>
+      old.color != color || old.dashed != dashed;
+}
+
+/// The forecast in words, under the chart: the rate it was measured at and the
+/// level storage settles on. The chart shows the shape; this says what it means,
+/// and states the one assumption out loud.
+class _ForecastNote extends StatelessWidget {
+  const _ForecastNote({required this.forecast});
+
+  final StorageForecast forecast;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+
+    if (forecast.inflowBytesPerDay <= 0) {
+      return Text(
+        'Nothing has been uploaded in the last '
+        '${forecast.inflowWindowDays} days, so there is no growth to project. '
+        'Attachments are kept ${forecast.retentionDays} days, then released.',
+        style: style,
+      );
+    }
+    return Text(
+      '${formatByteSize(forecast.inflowBytesPerDay)} per day uploaded over the '
+      'last ${forecast.inflowWindowDays} days. Attachments are kept '
+      '${forecast.retentionDays} days, so at that rate storage settles at about '
+      '${formatByteSize(forecast.equilibriumBytes)} rather than growing without '
+      'limit. The dashed line is the upper bound: what stays if nobody reads '
+      'anything, since a picture is released as soon as its recipient has it.',
+      style: style,
     );
   }
 }
