@@ -16,6 +16,25 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-08-14 (versionCode 27)
+
+### Fixed
+
+* **A picture you have received no longer takes up room on the server for two
+  weeks.** Once it is safely on your device, the copy on the server is released
+  — which is how it was always meant to work, and how it did until an internal
+  rebuild on 2026-08-10 quietly stopped it. Until now every picture stayed in
+  your server storage allowance for the full retention window even after
+  everyone in the chat had it. In a group, the picture is released only once
+  the last member has it, so nobody loses a picture they have not seen yet
+  (`SRV-07`, `APP-04`)
+* **Housekeeping problems are reported again after a background wake.** Things
+  the app tidies up when it reconnects — topping up the keys that let somebody
+  start a conversation while your phone is off, settling group facts,
+  re-sending confirmations — were being checked and then silently discarded on
+  that one path. For an account that is only ever woken by a notification and
+  never opened, that was the only place anything would have said so
+
 ## [0.22.0] — 2026-08-14 (versionCode 26)
 
 ### Added
