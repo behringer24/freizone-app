@@ -72,7 +72,16 @@ media in a message was ruled out; the companion server-side transport shipped as
 SRV-07.
 
 - Done — item 0 (APP-14), and phase 1: pick from gallery, encrypt, upload to the
-  recipient's server, render in the bubble, view full-screen
+  recipient's server, render in the bubble, view full-screen, and release the
+  server copy once the picture is stored locally
+- 2026-08-14 — **that last part had been broken since 2026-08-10.** It lived in
+  `AppSession.ensureAttachmentDownloaded`, which the SRV-23 cut stopped calling
+  (and `f0a1fe8` then deleted, restoring APP-20's gallery-save from the same
+  method but not this). Fixed in the core rather than here: `pkg/client`'s
+  `EnsureAttachment` now releases the claim, so the app inherits it by embedding
+  the core and `ApiClient.deleteBlob` stays unused. Until then every attachment
+  occupied its recipient's quota for the full retention window, even once
+  everyone had it
 - **Open** — camera capture, then video, which is what SRV-11 (resumable uploads)
   and APP-13 are waiting on. Getting a picture back *out* of a transcript — into
   the device gallery — is APP-20

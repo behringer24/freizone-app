@@ -295,6 +295,53 @@ func TestCoreSyncFetchesHandlesAndAcks(t *testing.T) {
 	}
 }
 
+// A background wake runs the same housekeeping a live reconnect does, and has
+// to hand up what failed: it is the only path for an account that is never
+// brought to the foreground, so a silently dropped problem there is a problem
+// nobody ever hears about. Regression test -- the report was assembled and then
+// thrown away, because doCoreSync asserted for a *maintainResponse against a
+// function that returns the value.
+func TestCoreSyncReportsHousekeepingProblems(t *testing.T) {
+	// Refuses everything except the queue, which answers empty: the fetch has
+	// nothing to do and the housekeeping that follows cannot work.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/messages" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `[]`)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	handle := openHandle(t)
+	setIdentity(t, handle, srv.URL)
+
+	// Same reason as TestMaintenanceReportsProblemsRatherThanFailing: without a
+	// signed prekey on file the top-up short-circuits before the network, and
+	// an empty report would then be legitimate rather than the bug.
+	entry, err := lookupHandle(handle)
+	if err != nil {
+		t.Fatalf("lookupHandle: %v", err)
+	}
+	id, err := entry.client.Identity()
+	if err != nil {
+		t.Fatalf("Identity: %v", err)
+	}
+	id.SignedPrekeyPub = make([]byte, 32)
+	if err := entry.client.SetIdentity(id); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+
+	resp, err := doCoreSync(coreHandleRequest{Handle: handle})
+	if err != nil {
+		t.Fatalf("doCoreSync: %v", err)
+	}
+	if got := resp.(coreSyncResponse); len(got.Problems) == 0 {
+		t.Error("housekeeping could not work against this server, so the sync must say so")
+	}
+}
+
 // A clean end is a resume from background or a blip. The app's rule is that only
 // a failed *connect attempt* reaches the user, so "disconnected" must not carry
 // an error the Dart side would show.

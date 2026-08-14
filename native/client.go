@@ -514,9 +514,13 @@ func doCoreSync(req coreHandleRequest) (any, error) {
 	// is exactly the kind of fresh-connection moment it exists for, and the
 	// prekey top-up in particular must run *somewhere* for an account that is
 	// only ever opened by a wake and never brought to the foreground.
+	// A value, not a pointer: doCoreMaintain returns maintainResponse itself.
+	// Asserting for the pointer silently never matched, which left Problems
+	// empty on every background wake -- the one path where nothing else reports
+	// a failed prekey top-up.
 	var problems []string
 	if maintained, err := doCoreMaintain(coreHandleRequest{Handle: req.Handle}); err == nil {
-		if m, ok := maintained.(*maintainResponse); ok {
+		if m, ok := maintained.(maintainResponse); ok {
 			problems = m.Problems
 		}
 	}
