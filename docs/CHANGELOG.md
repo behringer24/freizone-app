@@ -16,6 +16,25 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-08-14 (versionCode 26)
+
+### Added
+
+* **A statistics page for your own server**, for its admins — the chart icon in
+  the top bar of Server Admin. It answers "how busy is my server, and is it
+  healthy": how many accounts and devices exist, how many attachments are
+  stored and how much space they take, how large the database is, how much room
+  is left on the disk, how many messages are waiting to be delivered, and
+  whether federation is on. Nobody but an admin of that server can see any of
+  it (`SRV-25`, `APP-24`)
+* **Growth over time, as charts.** Registered accounts and attachment storage
+  are drawn as lines, so it is visible whether either is trending toward a
+  problem rather than only what today's number is. Tap or drag along a line to
+  read an exact point — the reading stays on screen after you let go — and page
+  the shown period with the arrows underneath. The server records these figures
+  four times a day and keeps two years of them, so the charts fill in over the
+  first days on a newly updated server
+
 ## [0.21.0] — 2026-08-12 (versionCode 25)
 
 **Please read before updating.** The app no longer carries its own copy of the
