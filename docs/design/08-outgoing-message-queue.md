@@ -197,3 +197,14 @@ passed every test and did nothing.
 No server work: send is a plain authenticated `POST`, and nothing here changes
 the protocol.
 
+**Superseded 2026-08-10 (SRV-23's cut, `80171c2`).** Everything above describes
+the Dart-side mechanism as it stood through APP-08: `_deliver`, `flushOutbox`,
+`saveProfile`-driven persistence of pending/failed messages. The send path now
+goes through `CoreAccount.send` via one shared `_sendViaCore` — retry, outbox
+durability and the ratchet-rollback-on-failure rule this document worked out
+all moved into the shared Go core, and `saveProfile` no longer persists
+session/conversation state on the live send path at all. This document's
+*decisions* (optimistic UI, idempotent retries, rolling back a failed
+establishment) still hold; only where they're implemented changed. See
+freizone-server's `docs/ROADMAP.md` SRV-23 for the full timeline.
+

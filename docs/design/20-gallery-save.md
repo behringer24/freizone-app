@@ -74,12 +74,21 @@ refusal leaves the picture where it is, says so, and is re-askable later.
 
 ## What the file's absence means
 
-The on-disk file is already plaintext (`MediaStore.fileFor`, written after
-`core.decryptBlob`), so a save copies bytes and decrypts nothing. But a picture
-whose download has not finished has no file yet — and the file's presence is
-the *only* record of that, by `MediaStore`'s own design. So the actions are
-resolved from disk before the sheet is built (`attachedPictureFile`), and are
-**absent** rather than present and failing.
+The on-disk file is already plaintext, so a save copies bytes and decrypts
+nothing. But a picture whose download has not finished has no file yet — and
+the file's presence is the only record of that. So the actions are resolved
+from disk before the sheet is built, and are **absent** rather than present
+and failing.
+
+**Fixed 2026-08-15 (`1a99d16`).** This section originally named
+`MediaStore.fileFor` as the lookup behind `attachedPictureFile` — that broke
+silently on 2026-08-10 (SRV-23's cut moved where pictures are stored, and
+`MediaStore.fileFor` went on looking in the old place), which is what took
+"Save to gallery" and "Share picture" out of the long-press sheet for five
+days without anyone changing this section. The lookup is now
+`session.coreAccount.attachmentPath(chatId, message.id, localOnly: true)` —
+the core is asked rather than the old Dart-side media tree, and the rest of
+this document's reasoning is unaffected.
 
 ## What was decided while building it, 2026-08-07
 

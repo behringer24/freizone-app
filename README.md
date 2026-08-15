@@ -2,7 +2,7 @@
 
 The Android client for [Freizone](https://github.com/behringer24/freizone-server) — a self-hostable, federated, end-to-end encrypted chat server. No central provider: this app talks directly to whichever Freizone server you (or someone you trust) runs, and every message is encrypted on-device before it ever reaches that server.
 
-**Status:** identity, multi-account support, X3DH + Double Ratchet end-to-end encrypted 1:1 messaging, invite QR codes, push notifications (via [UnifiedPush](https://unifiedpush.org/) or Firebase Cloud Messaging, see [Push notifications](#push-notifications) below), a server admin area, and federation are implemented. Federation is client-direct: a message to someone on a different server is sent straight to that server (not relayed through your own), with both sides independently verifying the other's self-certifying identity. Android only for now; groups/broadcast are the remaining future work, tracked alongside the [server](https://github.com/behringer24/freizone-server)'s own roadmap.
+**Status:** identity, multi-account support, X3DH + Double Ratchet end-to-end encrypted 1:1 and group messaging, invite QR codes, push notifications (via [UnifiedPush](https://unifiedpush.org/) or Firebase Cloud Messaging, see [Push notifications](#push-notifications) below), a server admin area, and federation are implemented. Federation is client-direct: a message to someone on a different server is sent straight to that server (not relayed through your own), with both sides independently verifying the other's self-certifying identity. Android only for now; broadcast is the remaining future work, tracked alongside the [server](https://github.com/behringer24/freizone-server)'s own roadmap.
 
 ## Features
 
