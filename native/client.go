@@ -528,16 +528,30 @@ func doCoreSync(req coreHandleRequest) (any, error) {
 	return coreSyncResponse{Outcomes: outcomes, Problems: problems}, nil
 }
 
-// sendReceiptFor confirms delivery back to whoever is owed it. Best-effort and
-// swallowed on failure: a receipt is a UI nicety on the recipient's side, never
-// something the ratchet or the transcript depends on, and there is nowhere
-// here to retry it from -- see docs/design/23-shared-client-core.md.
+// sendReceiptFor confirms delivery back to whoever is owed it -- and reading,
+// when the message landed in the chat on screen. Best-effort and swallowed on
+// failure: a receipt is a UI nicety on the recipient's side, never something
+// the ratchet or the transcript depends on, and there is nowhere here to retry
+// it from -- see docs/design/23-shared-client-core.md.
+//
+// The read half has to happen here rather than being left to markRead. Read
+// receipts otherwise only go out when a chat is *opened*, and a message
+// arriving into an already-open one is never opened again: the core skips its
+// unread flag precisely because the user is looking at it, so the next
+// enterGroup/enterConversation finds nothing to act on and returns early. The
+// author was left on "Received" for good.
 func sendReceiptFor(ctx context.Context, c *client.Client, res client.ReceiveResult) {
 	if res.Group != nil && res.Group.DeliveredUpTo != nil {
 		_ = c.SendGroupReceipt(ctx, res.Group.GroupID, res.PeerAccountID, client.ReceiptDelivered, *res.Group.DeliveredUpTo)
+		if res.Group.ReadUpTo != nil {
+			_ = c.SendGroupReceipt(ctx, res.Group.GroupID, res.PeerAccountID, client.ReceiptRead, *res.Group.ReadUpTo)
+		}
 		return
 	}
 	if res.DeliveredUpTo != nil {
 		_ = c.SendReceipt(ctx, res.PeerAccountID, client.ReceiptDelivered, *res.DeliveredUpTo)
+		if res.ReadUpTo != nil {
+			_ = c.SendReceipt(ctx, res.PeerAccountID, client.ReceiptRead, *res.ReadUpTo)
+		}
 	}
 }
