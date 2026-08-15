@@ -330,6 +330,19 @@ Future<String> coreStatePath(String accountId) async {
   return '${dir.path}${Platform.pathSeparator}core-$accountId';
 }
 
+/// The pre-cut SQLite file for one account: the same name [coreStatePath]
+/// returns, plus the `.db` suffix it carried while the core was a database.
+///
+/// Nothing opens it any more -- the core stores plain files, and the rename is
+/// why the directory beside it could be created at all. It is still on disk on
+/// any device that upgraded rather than reinstalled: found on the Pixel
+/// 2026-08-15, eleven of them, one per account, all last written the evening
+/// before the cut. Dead weight, but not *empty* dead weight -- that is the
+/// state the core had at the time -- so anything claiming to remove an account
+/// has to remove this too.
+Future<String> legacyCoreDatabasePath(String accountId) async =>
+    '${await coreStatePath(accountId)}.db';
+
 /// Deletes everything the core holds for one account, for account removal.
 ///
 /// Here rather than in account_manager.dart because it belongs beside
@@ -358,5 +371,14 @@ Future<void> deleteCoreState(String accountId) async {
     if (await dir.exists()) await dir.delete(recursive: true);
   } catch (e) {
     logDiagnostic('could not delete core state for $accountId: $e');
+  }
+  // And the database it used to be, for a device that upgraded through the cut
+  // -- see [legacyCoreDatabasePath]. Separately caught, so a failure on one
+  // does not decide the other.
+  try {
+    final legacy = File(await legacyCoreDatabasePath(accountId));
+    if (await legacy.exists()) await legacy.delete();
+  } catch (e) {
+    logDiagnostic('could not delete the pre-cut core database for $accountId: $e');
   }
 }
