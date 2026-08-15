@@ -1012,6 +1012,24 @@ with APP-17, which needs a wire field first.
   one wording, `ChatTarget`-typed) rather than a second copy in the group
   screen, and the group transcript builds eagerly now so the bar can actually
   scroll to an older pin.
+- 2026-08-15 — **all three had been silently reverting since the cut on
+  2026-08-10**, in every chat, groups and one-to-one alike. They still wrote
+  only the Dart mirror that `applyCoreState` rebuilds wholesale from the core,
+  so a pin showed until the next rebuild — the next message in the chat, at
+  the latest the next app start — and then vanished; a message deleted "for
+  me" came back the same way. The systematic sweep for exactly this class
+  (announced when the 08-15 chat-deletion fixes landed) found these two as
+  the only remaining cases: every other mirror write either goes through the
+  core already or owns its field (push registration, the recovery flag, the
+  blocked-list snapshot). Fixed like `clearChat`: three new FFI exports
+  (`CorePinMessage`/`CoreUnpinMessage`/`CoreDeleteMessage`) over the
+  `pkg/client` calls that had existed unwired since stage 1 — the *read*
+  half, pins riding the chat summary, was wired all along, which is why the
+  bug read as flicker rather than as a missing feature. The core also takes
+  a deleted message's stored picture with it now (its half, same date).
+  Tests pin the round trip on the Go side, where a conversation row can be
+  planted without a network; the Dart test pins symbol resolution and the
+  wire field names, and the profile write went out of all three methods
 
 ### APP-22 — Verified-operator badge
 Status: `done` · Also affects: freizone-server (SRV-19)

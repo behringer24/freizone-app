@@ -618,6 +618,27 @@ class FreizoneCore {
   void coreDeleteChat(int handle, String chatId) =>
       _call(_bindings.coreDeleteChat, {'handle': handle, 'chat_id': chatId});
 
+  void coreDeleteMessage(int handle, String chatId, String messageId) =>
+      _call(_bindings.coreDeleteMessage, {
+        'handle': handle,
+        'chat_id': chatId,
+        'message_id': messageId,
+      });
+
+  void corePinMessage(int handle, String chatId, String messageId) =>
+      _call(_bindings.corePinMessage, {
+        'handle': handle,
+        'chat_id': chatId,
+        'message_id': messageId,
+      });
+
+  void coreUnpinMessage(int handle, String chatId, String messageId) =>
+      _call(_bindings.coreUnpinMessage, {
+        'handle': handle,
+        'chat_id': chatId,
+        'message_id': messageId,
+      });
+
   /// Blocking. Isolate only -- see state/core_account.dart.
   Map<String, dynamic> coreSendRaw(Map<String, dynamic> req) =>
       _call(_bindings.coreSend, req);

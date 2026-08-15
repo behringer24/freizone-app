@@ -16,6 +16,19 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Pinning a message sticks again, and "Delete for me" stays deleted.** Both
+  had been quietly undoing themselves since an internal rebuild on 2026-08-10:
+  a pin showed until the next message arrived in that chat — or the next app
+  start — and then vanished; a message deleted from this device came back the
+  same way. Both now take effect where the messages actually live, in every
+  kind of chat (`APP-21`)
+* **Deleting a single message also removes its picture from this device.**
+  Until now the picture's bytes stayed behind where nothing could see or
+  reach them — invisible, but not gone, the same gap 0.23.0 closed for
+  deleting a whole account (`APP-21`, `SRV-23`)
+
 ## [0.23.0] — 2026-08-15 (versionCode 28)
 
 ### Added

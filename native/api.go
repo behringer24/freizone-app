@@ -361,7 +361,9 @@ func readMedia(req coreSendRequest) (*client.OutgoingMedia, error) {
 	return media, nil
 }
 
-type coreRetryRequest struct {
+// coreMessageRequest names one message in one chat -- retry, pin, unpin and
+// delete all address exactly that.
+type coreMessageRequest struct {
 	Handle    int64  `json:"handle"`
 	ChatID    string `json:"chat_id"`
 	MessageID string `json:"message_id"`
@@ -370,7 +372,7 @@ type coreRetryRequest struct {
 // doCoreRetry dispatches on the chat id, same as doCoreSend: a group id and a
 // peer account id share one namespace, so which retry applies is exact rather
 // than a guess.
-func doCoreRetry(req coreRetryRequest) (any, error) {
+func doCoreRetry(req coreMessageRequest) (any, error) {
 	entry, err := lookupHandle(req.Handle)
 	if err != nil {
 		return nil, err
@@ -649,6 +651,39 @@ func doCoreDeleteChat(req coreOpenChatRequest) (any, error) {
 	// deleted here, and throwing it away would make their next message look
 	// like a desync. The block, if any, outlives the conversation too.
 	return struct{}{}, entry.client.DeleteConversation(req.ChatID)
+}
+
+// doCoreDeleteMessage removes one line from this device's own history --
+// with its media, see pkg/client.DeleteMessage. The peer keeps their copy,
+// and the server was never involved: its queue copy went with the ack.
+func doCoreDeleteMessage(req coreMessageRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	return struct{}{}, entry.client.DeleteMessage(req.ChatID, req.MessageID)
+}
+
+// doCorePinMessage and doCoreUnpinMessage keep a purely local display
+// preference -- never sent to the peer, the group or the server. They live
+// here rather than in the shell because the pins ride the transcript
+// (CoreChats reports them on every summary), and a preference stored where
+// the transcript is not would vanish on the next rebuild from the core --
+// which is exactly what it did while the shell kept its own copy.
+func doCorePinMessage(req coreMessageRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	return struct{}{}, entry.client.PinMessage(req.ChatID, req.MessageID)
+}
+
+func doCoreUnpinMessage(req coreMessageRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	return struct{}{}, entry.client.UnpinMessage(req.ChatID, req.MessageID)
 }
 
 // doCoreForgetPeer discards everything this device holds *about* a peer: the

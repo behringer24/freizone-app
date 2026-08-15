@@ -88,6 +88,20 @@ class CoreAccount {
   /// facts are gone: no name, no member list, and a send that fails.
   void deleteChat(String chatId) => core.coreDeleteChat(handle, chatId);
 
+  /// Removes one message from this device's own history, with its stored
+  /// picture. The peer keeps their copy; nothing touches the network.
+  void deleteMessage(String chatId, String messageId) =>
+      core.coreDeleteMessage(handle, chatId, messageId);
+
+  /// Pins ride the transcript in the core, so a pin set anywhere else would
+  /// vanish on the next rebuild -- which is what it did while the shell kept
+  /// its own copy (the cut audit, 2026-08-15).
+  void pinMessage(String chatId, String messageId) =>
+      core.corePinMessage(handle, chatId, messageId);
+
+  void unpinMessage(String chatId, String messageId) =>
+      core.coreUnpinMessage(handle, chatId, messageId);
+
   // --- network -------------------------------------------------------------
 
   /// Sends into a chat, whichever kind it is -- the id says which.

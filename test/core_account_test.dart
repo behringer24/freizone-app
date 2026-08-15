@@ -92,6 +92,36 @@ void main() {
     );
   });
 
+  // The cut audit's regression (2026-08-15): pin, unpin and per-message
+  // deletion must land in the core, because the shell rebuilds its whole view
+  // from the core's summaries -- all three used to write only the Dart mirror,
+  // so a pin showed until the next rebuild and then silently vanished, and a
+  // deleted message came back.
+  //
+  // The full round trip for pins -- act, then read them back off the chat
+  // summary -- is pinned on the Go side (native/api_test.go), because the
+  // summary needs a conversation record and those are only ever created by
+  // the network half. What only this side can check: the symbols resolve, and
+  // the wire field names match -- a misnamed one arrives as an empty id,
+  // which the core refuses loudly rather than filing under "".
+  test('pin, unpin and delete land in the core, not the mirror', () async {
+    const peer = 'qpeeraccountid000000x';
+    // A send writes its transcript line before it touches the network
+    // (pkg/client.SendText), so failing against a dead server still leaves a
+    // real message here to act on.
+    await expectLater(
+      account.send(peer, 'kept locally'),
+      throwsA(isA<Exception>()),
+    );
+    final messageId = account.messages(peer).single.id;
+
+    account.pinMessage(peer, messageId);
+    account.unpinMessage(peer, messageId);
+
+    account.deleteMessage(peer, messageId);
+    expect(account.messages(peer), isEmpty);
+  });
+
   // The isolate half. Running one blocking call proves the whole mechanism:
   // the entry point is reachable, the library is found inside the isolate, and
   // a core failure comes back as a Dart exception rather than a dead isolate.
