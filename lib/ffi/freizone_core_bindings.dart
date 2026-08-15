@@ -79,6 +79,9 @@ class FreizoneCoreBindings {
       coreAcceptRequest = _lookupWithReq(lib, 'CoreAcceptRequest'),
       coreClearChat = _lookupWithReq(lib, 'CoreClearChat'),
       coreDeleteChat = _lookupWithReq(lib, 'CoreDeleteChat'),
+      coreDeleteMessage = _lookupWithReq(lib, 'CoreDeleteMessage'),
+      corePinMessage = _lookupWithReq(lib, 'CorePinMessage'),
+      coreUnpinMessage = _lookupWithReq(lib, 'CoreUnpinMessage'),
       coreAttachmentPath = _lookupWithReq(lib, 'CoreAttachmentPath'),
       coreGroupCreate = _lookupWithReq(lib, 'CoreGroupCreate'),
       coreGroupInvite = _lookupWithReq(lib, 'CoreGroupInvite'),
@@ -180,6 +183,9 @@ class FreizoneCoreBindings {
   final WithReqFn coreAcceptRequest;
   final WithReqFn coreClearChat;
   final WithReqFn coreDeleteChat;
+  final WithReqFn coreDeleteMessage;
+  final WithReqFn corePinMessage;
+  final WithReqFn coreUnpinMessage;
   final WithReqFn coreGroupInfo;
 
   /// Network. Isolate only.

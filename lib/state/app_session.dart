@@ -2253,32 +2253,39 @@ class AppSession extends ChangeNotifier {
   /// Removes a single message from this device's own history only -- every
   /// other member's copy and the (already-deleted-from-queue) server side are
   /// unaffected. A no-op if the id isn't found (already removed).
+  ///
+  /// Through the core ([CoreAccount.deleteMessage]), like every other change
+  /// to a transcript: removing it from the Dart mirror alone was undone by
+  /// the next rebuild, which is what this used to do -- the message came back
+  /// with the next one that arrived in the chat, at the latest on the next
+  /// app start. The core also takes the stored picture with it.
   Future<void> deleteMessageLocally(String chatId, String messageId) async {
-    final chat = chatTarget(chatId);
-    if (chat == null) return;
-    chat.messages.removeWhere((m) => m.id == messageId);
-    chat.pinnedMessageIds.remove(messageId);
-    await LocalStateStore.saveProfile(state);
+    if (chatTarget(chatId) == null) return;
+    coreAccount.deleteMessage(chatId, messageId);
+    applyCoreChat(state, coreAccount, chatId);
     notifyListeners();
   }
 
   /// Pins a message locally -- purely a local display preference, never
-  /// sent to the peer, the group or the server. Appending (rather than
-  /// inserting at the front) keeps "most recently pinned" as the natural last
-  /// element, which is what the sticky bar shows by default.
+  /// sent to the peer, the group or the server. The core appends (rather than
+  /// inserting at the front), which keeps "most recently pinned" as the
+  /// natural last element -- what the sticky bar shows by default -- and
+  /// leaves a re-pinned message's place in the order alone.
+  ///
+  /// Through the core, same reasoning as [deleteMessageLocally]: the bridge
+  /// reads pins off the core's chat summary, so one kept only in the mirror
+  /// showed until the next rebuild and then silently vanished.
   Future<void> pinMessage(String chatId, String messageId) async {
-    final chat = chatTarget(chatId);
-    if (chat == null || chat.pinnedMessageIds.contains(messageId)) return;
-    chat.pinnedMessageIds.add(messageId);
-    await LocalStateStore.saveProfile(state);
+    if (chatTarget(chatId) == null) return;
+    coreAccount.pinMessage(chatId, messageId);
+    applyCoreChat(state, coreAccount, chatId);
     notifyListeners();
   }
 
   Future<void> unpinMessage(String chatId, String messageId) async {
-    final chat = chatTarget(chatId);
-    if (chat == null) return;
-    chat.pinnedMessageIds.remove(messageId);
-    await LocalStateStore.saveProfile(state);
+    if (chatTarget(chatId) == null) return;
+    coreAccount.unpinMessage(chatId, messageId);
+    applyCoreChat(state, coreAccount, chatId);
     notifyListeners();
   }
 

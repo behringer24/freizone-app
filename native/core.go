@@ -295,6 +295,15 @@ func CoreClearChat(cReq *C.char) *C.char { return jsonCall(cReq, doCoreClearChat
 //export CoreDeleteChat
 func CoreDeleteChat(cReq *C.char) *C.char { return jsonCall(cReq, doCoreDeleteChat) }
 
+//export CoreDeleteMessage
+func CoreDeleteMessage(cReq *C.char) *C.char { return jsonCall(cReq, doCoreDeleteMessage) }
+
+//export CorePinMessage
+func CorePinMessage(cReq *C.char) *C.char { return jsonCall(cReq, doCorePinMessage) }
+
+//export CoreUnpinMessage
+func CoreUnpinMessage(cReq *C.char) *C.char { return jsonCall(cReq, doCoreUnpinMessage) }
+
 // CoreAttachmentPath downloads on demand, so it blocks and belongs in an
 // isolate. It returns where the file is, never the bytes.
 //

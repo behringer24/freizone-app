@@ -272,6 +272,72 @@ func TestClearingAChatKeepsItAndDeletingDoesNot(t *testing.T) {
 	}
 }
 
+// A pin and a per-message deletion must land in the core, because the shell
+// rebuilds its whole view from CoreChats/CoreMessages: a preference kept
+// anywhere else shows until the next rebuild and then silently reverts --
+// which is exactly what both did while the shell wrote only its own mirror
+// (found in the cut audit, 2026-08-15). So the assertion here is the round
+// trip: act, then read back through the same calls the shell rebuilds from.
+func TestPinAndDeleteMessageSurviveTheRebuild(t *testing.T) {
+	handle, c := offlineHandle(t)
+	chatID := "qpeeraccountid000000x"
+
+	if err := c.PutConversation(client.Conversation{
+		PeerAccountID: chatID, PeerServer: "https://home.test",
+	}); err != nil {
+		t.Fatalf("PutConversation: %v", err)
+	}
+	for _, id := range []string{"m1", "m2"} {
+		if err := c.AppendMessage(chatID, client.Message{
+			ID: id, Text: "said something", Timestamp: time.Now().UTC(),
+			Kind: client.MessageNormal, SendState: client.SendSent,
+		}); err != nil {
+			t.Fatalf("AppendMessage %s: %v", id, err)
+		}
+	}
+	if err := c.WriteAttachmentFile(chatID, "m1", []byte("a picture")); err != nil {
+		t.Fatalf("WriteAttachmentFile: %v", err)
+	}
+
+	pins := func() []string {
+		t.Helper()
+		raw, err := doCoreChats(coreHandleRequest{Handle: handle})
+		if err != nil {
+			t.Fatalf("doCoreChats: %v", err)
+		}
+		rows := decodeAs[[]chatSummary](t, raw)
+		if len(rows) != 1 {
+			t.Fatalf("want one chat, got %+v", rows)
+		}
+		return rows[0].PinnedMessageIDs
+	}
+
+	if _, err := doCorePinMessage(coreMessageRequest{Handle: handle, ChatID: chatID, MessageID: "m1"}); err != nil {
+		t.Fatalf("doCorePinMessage: %v", err)
+	}
+	if got := pins(); len(got) != 1 || got[0] != "m1" {
+		t.Errorf("the pin must come back on the summary the shell rebuilds from, got %v", got)
+	}
+
+	if _, err := doCoreUnpinMessage(coreMessageRequest{Handle: handle, ChatID: chatID, MessageID: "m1"}); err != nil {
+		t.Fatalf("doCoreUnpinMessage: %v", err)
+	}
+	if got := pins(); len(got) != 0 {
+		t.Errorf("unpinning must clear it from the summary, got %v", got)
+	}
+
+	if _, err := doCoreDeleteMessage(coreMessageRequest{Handle: handle, ChatID: chatID, MessageID: "m1"}); err != nil {
+		t.Fatalf("doCoreDeleteMessage: %v", err)
+	}
+	msgs, err := c.Messages(chatID)
+	if err != nil || len(msgs) != 1 || msgs[0].ID != "m2" {
+		t.Errorf("want only m2 left, got %+v (%v)", msgs, err)
+	}
+	if data, err := c.AttachmentFile(chatID, "m1"); err != nil || data != nil {
+		t.Errorf("a deleted message's picture must go with it, got %d bytes (%v)", len(data), err)
+	}
+}
+
 // Deleting a group takes its facts, which is the only thing that actually
 // removes it from the chat list -- Client.Groups is a directory listing, so
 // clearing the transcript alone leaves the row exactly where it was.
@@ -478,12 +544,12 @@ func TestChatIdsDistinguishGroupsFromPeers(t *testing.T) {
 func TestDoCoreRetryDispatchesOnChatID(t *testing.T) {
 	handle, _ := offlineHandle(t)
 
-	_, err := doCoreRetry(coreRetryRequest{Handle: handle, ChatID: "qpeeraccountid000000x", MessageID: "m1"})
+	_, err := doCoreRetry(coreMessageRequest{Handle: handle, ChatID: "qpeeraccountid000000x", MessageID: "m1"})
 	if err == nil || !strings.Contains(err.Error(), "in the chat with") {
 		t.Errorf("a peer id should dispatch to RetryMessage, got: %v", err)
 	}
 
-	_, err = doCoreRetry(coreRetryRequest{Handle: handle, ChatID: groupIDForTest(t), MessageID: "m1"})
+	_, err = doCoreRetry(coreMessageRequest{Handle: handle, ChatID: groupIDForTest(t), MessageID: "m1"})
 	if err == nil || !strings.Contains(err.Error(), "in group") {
 		t.Errorf("a group id should dispatch to RetryGroupMessage, got: %v", err)
 	}
