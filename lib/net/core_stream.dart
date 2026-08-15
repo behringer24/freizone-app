@@ -26,6 +26,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../ffi/freizone_core.dart';
 import '../ffi/freizone_core_exception.dart';
+import '../util/log.dart';
 
 /// What one blocking `CorePoll` returned.
 class CorePollResult {
@@ -327,4 +328,35 @@ Map<String, dynamic> _pollInIsolate(int handle, String? libraryPath) =>
 Future<String> coreStatePath(String accountId) async {
   final dir = await getApplicationDocumentsDirectory();
   return '${dir.path}${Platform.pathSeparator}core-$accountId';
+}
+
+/// Deletes everything the core holds for one account, for account removal.
+///
+/// Here rather than in account_manager.dart because it belongs beside
+/// [coreStatePath]: a second place that spells out this layout is how the app
+/// spent five days cleaning a directory nothing had written to since the
+/// SRV-23 cut, while the real one grew beside it.
+///
+/// **What this removes is not only storage.** The directory holds the account's
+/// transcripts and pictures, both ratchet sessions per peer, the cached peer
+/// devices, every group's fact set -- and the identity private keys. Leaving it
+/// behind makes `AccountManager.deleteAccount`'s "there is no path back to this
+/// identity afterward" untrue on the one device where it matters most.
+///
+/// The caller must have closed this account's core handle first (AppSession's
+/// dispose does, via coreClose) and deleted its profile, so a background push
+/// wake arriving mid-removal finds no profile, returns, and cannot recreate
+/// what was just deleted.
+///
+/// Reports rather than throws: the account is already gone from the app by the
+/// time this runs, so failing the removal over it would leave a worse state
+/// than the leftover it is complaining about. A failure is worth reading in a
+/// log, which is why it is not swallowed silently either.
+Future<void> deleteCoreState(String accountId) async {
+  try {
+    final dir = Directory(await coreStatePath(accountId));
+    if (await dir.exists()) await dir.delete(recursive: true);
+  } catch (e) {
+    logDiagnostic('could not delete core state for $accountId: $e');
+  }
 }

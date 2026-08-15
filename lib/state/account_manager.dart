@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
+import '../net/core_stream.dart';
 import '../push/push_manager.dart';
 import '../util/server_url.dart';
 import 'app_session.dart';
@@ -169,12 +170,27 @@ class AccountManager extends ChangeNotifier {
     // the local cleanup here.
     await UnifiedPush.unregister(accountId);
 
+    // Closes the core handle, among other things, which is what makes the
+    // directory below safe to delete rather than something still being written.
     session.dispose();
     _sessions.remove(accountId);
     await LocalStateStore.deleteProfile(accountId);
-    // The account's pictures and group fact sets go with it -- both live
-    // outside the profile file, so deleting that alone would leave them
-    // behind forever.
+
+    // Everything the account owns outside its profile file. Deleting the
+    // profile alone would leave all of it behind forever, since nothing else
+    // ever looks at a directory belonging to an account that no longer exists.
+    //
+    // The core's directory is the one that matters and the one that was
+    // missing until 2026-08-15: transcripts, pictures, both ratchet sessions
+    // per peer, the group fact sets -- and the identity private keys. Deleted
+    // after the profile deliberately, so a background push wake arriving in
+    // the middle finds no profile, returns, and cannot recreate what was just
+    // removed (see push_manager.dart's _syncAccount).
+    await deleteCoreState(accountId);
+
+    // The two pre-cut Dart stores, for an install that upgraded rather than
+    // reinstalled. Nothing has written to either since the cut; on a fresh
+    // install they are simply not there.
     try {
       final media = await MediaStore.instance();
       await media.deleteAccountMedia(accountId);

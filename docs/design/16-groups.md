@@ -170,8 +170,11 @@ they were:
   chat (`ClearTranscript` + `DeleteChatMedia`), so nothing outlives its
   reference in the first place. What is left of the old sweep only clears the
   pre-cut Dart tree for installs that upgraded rather than reinstalled.
-- **Account deletion still misses the core's directory** — `core-<accountId>`
-  survives removing an account, keys included. Open, tracked separately.
+- **Account deletion had to learn the same lesson**, and this is where a group's
+  facts were being left behind wholesale: it removed the pre-cut
+  `groups/<account id>/` directory and not `core-<accountId>`, which holds the
+  real fact sets along with everything else the account owns. Fixed 2026-08-15
+  (`deleteCoreState`).
 
 ## Sending: fan-out over a durable outbox
 

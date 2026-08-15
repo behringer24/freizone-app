@@ -937,8 +937,24 @@ the feature and the reason the automatic variant is off by default.
   transcript and media *without* removing the conversation record, which
   `doCoreDeleteChat` takes as well — a decision rather than an oversight to
   patch in passing. **Settled 2026-08-15** — see the note under APP-19, which
-  fixed the chat cases and the rule behind them. The account case is still open:
-  `core-<accountId>` outlives removing an account, keys included
+  fixed the chat cases and the rule behind them
+- 2026-08-15 — **and the third one: removing an account left the core's whole
+  directory on disk.** `AccountManager._removeLocalProfile` deleted the profile
+  file, the pre-cut media tree and the pre-cut group store — two of which are
+  empty on any current install — and never `core-<accountId>`, which after the
+  cut is where everything actually lives: transcripts, pictures, both ratchet
+  sessions per peer, the cached peer devices, every group's fact set, and the
+  account's identity private keys. Not a storage leak but a broken promise:
+  `deleteAccount`'s own doc comment says "there is no path back to this identity
+  afterward", and on the one device where that mattered it was untrue. Fixed
+  with `deleteCoreState` in core_stream.dart — deliberately beside
+  `coreStatePath` rather than in the account manager, since a second place
+  spelling out this layout is exactly how all three of these went wrong. Ordered
+  after the profile is deleted, so a background push wake arriving mid-removal
+  finds no profile, returns, and cannot recreate what was just removed. Three
+  tests, on the real directory shape: nested, so a non-recursive delete cannot
+  pass; a second account untouched, since one device holds several; and removing
+  an account with no core state at all is not an error
 
 ### APP-21 — Pin and delete a message in a group
 Status: `done` · Part of: APP-16 · Related: APP-17
