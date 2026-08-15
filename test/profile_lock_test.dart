@@ -56,7 +56,7 @@ void main() {
       () async {
         final state = (await LocalStateStore.loadProfile('acct1'))!;
         await Future<void>.delayed(const Duration(milliseconds: 30));
-        state.knownPeerIds.add(id);
+        state.blockedPeers[id] = BlockedPeer(peerAccountId: id);
         await LocalStateStore.saveProfile(state);
       },
     );
@@ -64,7 +64,7 @@ void main() {
     await Future.wait([writer('msg-a'), writer('msg-b')]);
 
     final finalState = (await LocalStateStore.loadProfile('acct1'))!;
-    expect(finalState.knownPeerIds, {'msg-a', 'msg-b'});
+    expect(finalState.blockedPeers.keys, unorderedEquals(['msg-a', 'msg-b']));
   });
 
   test('the lock serialises rather than running sequences in parallel', () async {

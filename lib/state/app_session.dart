@@ -851,9 +851,9 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
     _startStream();
     unawaited(refreshMyRole());
-    // Housekeeping, deliberately not awaited: it only touches files no
-    // message points at any more, so nothing depends on it finishing.
-    unawaited(sweepOrphanedMedia());
+    // Housekeeping, deliberately not awaited: it only touches the pre-cut
+    // media tree nothing reads any more, so nothing depends on it finishing.
+    unawaited(sweepLegacyMedia());
     unawaited(refreshRegistrationPolicy());
     unawaited(_registerPush());
     // Anything composed but never sent -- in this run or a previous one --
@@ -1290,10 +1290,6 @@ class AppSession extends ChangeNotifier {
     } else {
       coreAccount.unblockPeer(peerAccountId);
       state.blockedPeers.remove(peerAccountId);
-      // Unblocking is itself a decision to hear from them normally again
-      // -- they shouldn't reappear as an unactioned "message request" the
-      // next time they write.
-      state.knownPeerIds.add(peerAccountId);
     }
     await LocalStateStore.saveProfile(state);
     applyCoreChat(state, coreAccount, peerAccountId);
@@ -1313,7 +1309,6 @@ class AppSession extends ChangeNotifier {
     if (convo == null) return;
     coreAccount.acceptRequest(peerAccountId);
     convo.pendingApproval = false;
-    state.knownPeerIds.add(peerAccountId);
     await LocalStateStore.saveProfile(state);
     applyCoreChat(state, coreAccount, peerAccountId);
     notifyListeners();
@@ -1322,15 +1317,17 @@ class AppSession extends ChangeNotifier {
   /// Empties peerAccountId's message history, keeping the conversation
   /// itself (resolved peer device, alias) -- purely local, since the
   /// server never stored the history in the first place.
+  ///
+  /// Pictures go with the history they belonged to: clearing a chat but leaving
+  /// its images on disk would be both surprising and a slow leak. Both are the
+  /// core's ([CoreAccount.clearChat]) -- emptying the Dart mirror alone was
+  /// undone by the next rebuild from the core, which is what this used to do.
   Future<void> clearConversation(String peerAccountId) async {
     final convo = state.conversations[peerAccountId];
     if (convo == null) return;
-    convo.messages.clear();
     final hadUnread = convo.hasUnread;
-    convo.hasUnread = false;
-    // Pictures go with the history they belonged to -- clearing a chat but
-    // leaving its images on disk would be both surprising and a slow leak.
-    await _deleteChatMedia(peerAccountId);
+    coreAccount.clearChat(peerAccountId);
+    applyCoreChat(state, coreAccount, peerAccountId);
     await LocalStateStore.saveProfile(state);
     if (hadUnread && !hasAnyUnread)
       unawaited(clearMessageNotification(state.accountId));
@@ -1338,7 +1335,7 @@ class AppSession extends ChangeNotifier {
   }
 
   /// Removes peerAccountId's conversation entirely -- history, media and the
-  /// resolved peer device -- while **keeping the ratchet session**.
+  /// conversation record -- while **keeping the ratchet session**.
   ///
   /// The session stays because the peer does not know their chat was deleted on
   /// our end and may keep writing in what looks to them like an ongoing
@@ -1348,23 +1345,31 @@ class AppSession extends ChangeNotifier {
   /// a resumption can be *seen*, which is what makes it the routine action;
   /// [removeConversationPermanently] is the one that takes the session too.
   ///
-  /// The peer is also dropped from [AppState.knownPeerIds], so a resumption
-  /// arrives as a message **request** to accept or decline rather than silently
-  /// reopening the chat. **This reverses an earlier choice** (see
-  /// [acceptConversation], which added them there precisely so a delete would
-  /// not "regress them to an unactioned request"): deleting a chat is now taken
-  /// as a decision about the relationship, so somebody writing again is an event
-  /// worth surfacing rather than a chat quietly reappearing. Decided 2026-08-04,
-  /// recorded in docs/design/19-contacts.md.
+  /// **The known-peer mark stays too, so this can never cost the peer their way
+  /// back.** Their next message simply opens the chat again, with that message
+  /// as its first line -- it does not arrive as a request to accept, and it
+  /// certainly does not arrive nowhere. Deleting a chat is tidying a list, and
+  /// the action for "I do not want to hear from this person" is blocking, which
+  /// is a different thing and stays a different thing.
+  ///
+  /// **This settles two rules that contradicted each other.** design/19-contacts
+  /// (2026-08-04) had a delete drop the peer from `knownPeerIds` so a resumption
+  /// arrived as a message request; `pkg/client`'s `DeleteConversation` kept the
+  /// mark on purpose, so that clearing a chat could not turn a known contact
+  /// back into a stranger. Decided 2026-08-15 for the second: a request the peer
+  /// cannot see is a dead end for both sides -- they go on writing while this
+  /// side cannot reply until it accepts, and follow-ups do not even notify. A
+  /// group is the case where an invitation *is* right, and that is exactly
+  /// because leaving is visible to the group.
   ///
   /// Purely local either way: the account itself is untouched on the server.
   Future<void> deleteConversation(String peerAccountId) async {
-    final removed = state.conversations.remove(peerAccountId);
+    final removed = state.conversations[peerAccountId];
     if (removed == null) return;
     if (_openConversationPeerId == peerAccountId)
       _openConversationPeerId = null;
-    state.knownPeerIds.remove(peerAccountId);
-    await _deleteChatMedia(peerAccountId);
+    coreAccount.deleteChat(peerAccountId);
+    applyCoreChat(state, coreAccount, peerAccountId);
     await LocalStateStore.saveProfile(state);
     if (removed.hasUnread && !hasAnyUnread)
       unawaited(clearMessageNotification(state.accountId));
@@ -1397,37 +1402,22 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Deletes one chat's stored pictures. Best-effort: leftover files
-  /// waste space but break nothing, and this always runs alongside a more
-  /// important deletion that must not fail because of them.
-  Future<void> _deleteChatMedia(String chatId) async {
+  /// Removes pictures left behind by an install that predates the SRV-23 cut.
+  ///
+  /// Housekeeping for one tree only: the Dart-side `<docs>/media/<accountId>`
+  /// one, which nothing has written to since 2026-08-10 and which the core does
+  /// not use. Pictures the core stores are deleted with the chat they belong to
+  /// ([CoreAccount.clearChat] and [CoreAccount.deleteChat]), so there is no
+  /// orphan to sweep there -- a message and its file go together.
+  ///
+  /// This used to sweep by message id, which is why it is worth saying what it
+  /// no longer is: not a safety net for the core's media, and not something to
+  /// extend into one. Kept because those old files are real on any device that
+  /// upgraded rather than reinstalled, and nothing else would ever remove them.
+  Future<void> sweepLegacyMedia() async {
     try {
       final media = await MediaStore.instance();
-      await media.deleteChatMedia(state.accountId, chatId);
-    } catch (_) {
-      // See above.
-    }
-  }
-
-  /// Removes stored pictures that no message refers to any more -- history
-  /// deleted while the app was closed, or a send that failed after its file
-  /// was written. Called once at startup, after state is loaded.
-  Future<void> sweepOrphanedMedia() async {
-    try {
-      final media = await MediaStore.instance();
-      // Every chat, groups included -- a group message's picture is stored
-      // exactly like a one-to-one one, and leaving groups out of this would
-      // sweep away pictures that are still on screen.
-      final live = <String>{};
-      for (final chat in chats) {
-        for (final m in chat.messages) {
-          if (m.hasAttachments) live.add(m.id);
-        }
-      }
-      await media.sweepOrphans(
-        accountId: state.accountId,
-        liveMessageIds: live,
-      );
+      await media.deleteAccountMedia(state.accountId);
     } catch (_) {
       // Housekeeping only -- never worth surfacing or retrying.
     }
@@ -1615,12 +1605,22 @@ class AppSession extends ChangeNotifier {
   /// Forgets a group locally: its facts, its transcript and its pictures.
   ///
   /// Purely local, like deleting a one-to-one conversation. Leaving a group so
-  /// the other members know is a signed event, and a different thing.
+  /// the other members know is a signed event, and a different thing --
+  /// [leaveAndDeleteGroup] is the two together.
+  ///
+  /// **Only for a group this account is already out of**, which is what
+  /// group_actions.dart establishes before offering this: left, removed, or
+  /// dissolved. That is also the founder's route, since a founder cannot leave
+  /// and dissolves instead. While still a member the others keep sending, and
+  /// an arriving message rebuilds a chat whose facts are gone -- no name, no
+  /// member list, and a composer whose send fails.
   Future<void> deleteGroup(String groupId) async {
-    _groupStates.remove(groupId);
-    state.groups.remove(groupId);
+    coreAccount.deleteChat(groupId);
+    // The pre-cut Dart fact store, for an install that upgraded rather than
+    // reinstalled -- the core owns a group's facts now, and this file is not
+    // written any more.
     await GroupStateStore.delete(state.accountId, groupId);
-    await _deleteChatMedia(groupId);
+    applyCoreChat(state, coreAccount, groupId);
     await LocalStateStore.saveProfile(state);
     notifyListeners();
   }
@@ -1737,11 +1737,11 @@ class AppSession extends ChangeNotifier {
   /// freizone-server's pkg/client.LeaveGroup, which the fold treats
   /// identically for an invitee and a joined member.
   ///
-  /// **Known limitation**: unlike the Dart-only implementation this replaces,
-  /// there is not yet a way to make the core forget a group's facts entirely
-  /// (see CoreAccount/native's doCoreDeleteChat, which clears a group's
-  /// transcript and media but deliberately leaves its fact-set directory
-  /// alone). The group may still show up in the chat list until that exists.
+  /// The leave goes first and the removal second, in that order: the broadcast
+  /// reads the member list to know whom to tell, and forgetting the facts is
+  /// what leaves nothing to read. (Until 2026-08-15 the second half could not
+  /// finish at all -- the core had no way to forget a group's facts, so a
+  /// declined group kept its row in the chat list. `pkg/client.ForgetGroup`.)
   Future<void> declineGroupInvite(String groupId) async {
     await coreAccount.leaveGroup(groupId);
     coreAccount.deleteChat(groupId);
@@ -1794,7 +1794,8 @@ class AppSession extends ChangeNotifier {
 
   /// Leaves a group and forgets it locally, as one action.
   ///
-  /// See [declineGroupInvite]'s known limitation -- the same gap applies here.
+  /// Same order and same reason as [declineGroupInvite]: tell the group first,
+  /// then forget what said whom to tell.
   Future<void> leaveAndDeleteGroup(String groupId) async {
     await coreAccount.leaveGroup(groupId);
     coreAccount.deleteChat(groupId);

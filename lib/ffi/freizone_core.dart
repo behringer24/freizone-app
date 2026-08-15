@@ -601,6 +601,9 @@ class FreizoneCore {
     {'handle': handle, 'account_id': accountId},
   );
 
+  void coreClearChat(int handle, String chatId) =>
+      _call(_bindings.coreClearChat, {'handle': handle, 'chat_id': chatId});
+
   void coreDeleteChat(int handle, String chatId) =>
       _call(_bindings.coreDeleteChat, {'handle': handle, 'chat_id': chatId});
 

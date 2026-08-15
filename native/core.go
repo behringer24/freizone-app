@@ -289,6 +289,9 @@ func CoreUnblockPeer(cReq *C.char) *C.char { return jsonCall(cReq, doCoreUnblock
 //export CoreAcceptRequest
 func CoreAcceptRequest(cReq *C.char) *C.char { return jsonCall(cReq, doCoreAcceptRequest) }
 
+//export CoreClearChat
+func CoreClearChat(cReq *C.char) *C.char { return jsonCall(cReq, doCoreClearChat) }
+
 //export CoreDeleteChat
 func CoreDeleteChat(cReq *C.char) *C.char { return jsonCall(cReq, doCoreDeleteChat) }
 

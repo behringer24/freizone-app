@@ -77,6 +77,7 @@ class FreizoneCoreBindings {
       coreBlockPeer = _lookupWithReq(lib, 'CoreBlockPeer'),
       coreUnblockPeer = _lookupWithReq(lib, 'CoreUnblockPeer'),
       coreAcceptRequest = _lookupWithReq(lib, 'CoreAcceptRequest'),
+      coreClearChat = _lookupWithReq(lib, 'CoreClearChat'),
       coreDeleteChat = _lookupWithReq(lib, 'CoreDeleteChat'),
       coreAttachmentPath = _lookupWithReq(lib, 'CoreAttachmentPath'),
       coreGroupCreate = _lookupWithReq(lib, 'CoreGroupCreate'),
@@ -177,6 +178,7 @@ class FreizoneCoreBindings {
   final WithReqFn coreBlockPeer;
   final WithReqFn coreUnblockPeer;
   final WithReqFn coreAcceptRequest;
+  final WithReqFn coreClearChat;
   final WithReqFn coreDeleteChat;
   final WithReqFn coreGroupInfo;
 

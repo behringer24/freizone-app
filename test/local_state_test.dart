@@ -14,25 +14,26 @@ AppState _minimalState() => AppState(
 );
 
 void main() {
-  group('AppState.knownPeerIds / blockedPeers', () {
-    test('default to empty', () {
+  group('AppState.blockedPeers', () {
+    test('defaults to empty', () {
       final state = _minimalState();
-      expect(state.knownPeerIds, isEmpty);
       expect(state.blockedPeers, isEmpty);
     });
 
-    test('omitted from toJson when empty, so they stay compact', () {
+    test('omitted from toJson when empty, so it stays compact', () {
       final json = _minimalState().toJson();
-      expect(json.containsKey('known_peer_ids'), isFalse);
       expect(json.containsKey('blocked_peers'), isFalse);
     });
 
-    test('knownPeerIds round-trips through toJson/fromJson', () {
-      final state = _minimalState();
-      state.knownPeerIds.add('peer1');
-      state.knownPeerIds.add('peer2');
-      final restored = AppState.fromJson(state.toJson());
-      expect(restored.knownPeerIds, {'peer1', 'peer2'});
+    // knownPeerIds was a second copy of a set the core owns, dropped
+    // 2026-08-15. An old profile still carries the key and must load without
+    // complaint -- it is simply not read any more.
+    test('a profile from before the drop still loads, minus that key', () {
+      final original = _minimalState();
+      final json = original.toJson()..['known_peer_ids'] = ['peer1', 'peer2'];
+      final restored = AppState.fromJson(json);
+      expect(restored.accountId, original.accountId);
+      expect(restored.toJson().containsKey('known_peer_ids'), isFalse);
     });
 
     test('blockedPeers round-trips through toJson/fromJson, keyed by id', () {
