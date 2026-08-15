@@ -26,11 +26,14 @@ No breaking format change was needed: the v1 envelope has reserved an
 `attachments` list since it was introduced, so older builds ignore the entry
 and still render the caption. The per-blob key is deliberately NOT
 ratchet-derived, so pictures stay downloadable after a secure-session reset
-(SRV-03). Media files live outside the profile JSON (which is rewritten on
-every message) and are removed with their conversation or account, plus an
-orphan sweep at startup.
+(SRV-03). Media files originally lived outside the profile JSON (which was
+rewritten on every message) and were removed with their conversation or
+account, plus an orphan sweep at startup; since SRV-23's cut (2026-08-10)
+attachment storage and cleanup belong to the shared Go core instead, and the
+Dart-side orphan sweep is dead code.
 
-**Still open:** (1.5) camera capture, saving/sharing
-received pictures, and (2)-(4) video/audio/voice — video will also want
-resumable uploads, which SRV-07 does not do yet.
+**Shipped since:** saving/sharing received pictures (APP-20, 2026-08-07).
+
+**Still open:** (1.5) camera capture, and (2)-(4) video/audio/voice — video
+will also want resumable uploads, which SRV-07 does not do yet.
 

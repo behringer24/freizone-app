@@ -1109,27 +1109,37 @@ rather than riding along with the publicly-decodable attestation token.
   through until the UI reads from the core; `handleIncoming` comes back with
   that switch. The `openChatID` field stays, unused, because it belongs to the
   same step
-- 2026-08-10 — the cut, step 1 of 5: `lib/state/core_bridge.dart`, which fills
-  `AppState` from the core. `Conversation`, `GroupConversation` and
+- 2026-08-10, morning — the cut, step 1 of 5: `lib/state/core_bridge.dart`,
+  which fills `AppState` from the core. `Conversation`, `GroupConversation` and
   `StoredMessage` stay as the shapes widgets draw, so the 83 `session.state`
   call sites are untouched — what changes is where their contents come from.
   Rebuilt whole rather than merged, because a merge needs a per-field rule about
   which side wins and the answer is always the core; rebuilding also makes a gap
   loud instead of letting a stale copy look fine until a reinstall. The chat
   summary gained pins and the two tick watermarks, which cost nothing extra
-  because the transcript has already been read for the preview. Unused so far:
-  steps 2–5 (stream, `_handleIncoming`, the send path, and stopping
-  `saveProfile`) are what make it live, and they only work together
-- **Stopped deliberately after step 1.** Steps 2–5 cannot be half-applied: the
-  bridge overwrites whatever the Dart send path writes, so a message would
-  appear and then vanish. Started them, then put the stream and the poll back to
-  where they were rather than leave the app not compiling. What is left is a
-  contained piece of work with the shape already established — one handle per
-  account owned by `AppSession` (two would be two clients over one directory,
-  each with its own idea of which envelopes it had processed), `_handleIncoming`
-  becoming a refresh, `sendMessage` going through `CoreAccount`, and
-  `saveProfile` becoming a no-op so the old profile freezes as the fallback
-  rather than being deleted
+  because the transcript has already been read for the preview. Stopped
+  deliberately right there: steps 2–5 (stream, `_handleIncoming`, the send
+  path, and stopping `saveProfile`) cannot be half-applied, since the bridge
+  overwrites whatever the Dart send path writes and a message would appear and
+  then vanish
+- 2026-08-10, same day (`80171c2`) — **and steps 2–5 finished a couple of
+  hours later, not left for later as first planned.** `AppSession` now opens a
+  persistent `CoreAccount` in `init()` and keeps it for the session's
+  lifetime: the live stream, every send, every group action and every
+  read-state change go through it instead of Dart's own crypto and
+  `LocalStateStore`. `_handleIncoming` stops decrypting and just refreshes the
+  affected chat from the core's outcome; `sendMessage` and `sendGroupMessage`
+  collapse into one `_sendViaCore`; every `saveProfile` call that persisted
+  session, conversation or group state is gone from the live path. This
+  paragraph is properly SRV-23's, not this item's — APP-23 is the seat-limit
+  warning above it — but its stage 6 Dart bindings are what this log kept
+  growing under, which is exactly how it went stale here for several days
+  while later items (APP-04, APP-16, APP-19, APP-20) went on referring to "the
+  cut" as settled fact. The accurate, complete timeline lives in
+  freizone-server's `docs/ROADMAP.md` under SRV-23: the second Dart protocol
+  implementation deleted outright the next day (`f106e21`, 2026-08-11),
+  0.21.0 released on the new core (2026-08-12), and an audit pass through
+  2026-08-15 (0.21.0–0.23.1) closing the regressions the cut had introduced
 
 ### APP-24 — Server statistics page in Server Admin
 Status: `done` · Also affects: freizone-server (SRV-25)
