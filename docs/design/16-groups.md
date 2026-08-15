@@ -181,6 +181,29 @@ they were:
   creates that directory. The pre-cut trees beside it are cleared by hand, once,
   on the few devices that have them.
 
+**And with it, the Dart-side fold itself (2026-08-15).** Tracing what still
+reached `GroupStateStore` found nothing did, and the trace did not stop there:
+every method that would have used it had lost its own caller at the cut. Gone,
+with the reason each is not missed:
+
+| Removed | What does it now |
+|---|---|
+| `loadGroupStates`, `_storeGroupState`, `GroupStateStore` | the core persists a group's facts, in `groups/<group id>/facts.json` |
+| `_groupStates`, `_refreshGroupName(s)` | `groupState` folds on demand from `CoreAccount.groupInfo`; a row's name arrives with the row (`ChatSummary.title`) |
+| `signGroupEvent`, `applyGroupEvents`, `_groupIdentity` | the core signs, merges and verifies — `CoreAccount.invite`, `setRole`, `leaveGroup` and friends act on an open handle |
+| `group_system_lines.dart` and its test | `pkg/client` has its own `groupStateChangeLines` and writes the lines into the transcript itself (`groups.go`) |
+
+That last one is the one worth pausing on: the narration existed **twice**, in Go
+and in Dart, and only the Go copy has run since the cut. Two implementations of
+one rule that nothing forces to agree is exactly what SRV-23 exists to end, so
+this was less a cleanup than the last piece of the cut being finished.
+
+Still standing deliberately: `FreizoneCore.groupCreate`, `groupSignEvent`,
+`groupApplyEvents` and `groupResolveState` now have no caller in the app either,
+but they are exported C symbols with Go tests, and the FFI surface serves more
+than this one consumer. Narrowing it is a decision about that surface rather
+than leftover cleanup, and is not made here.
+
 ## Sending: fan-out over a durable outbox
 
 **APP-08 step 2 is a hard prerequisite, not a nice-to-have.** A fan-out that

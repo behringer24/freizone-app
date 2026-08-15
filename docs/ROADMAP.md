@@ -975,6 +975,23 @@ the feature and the reason the automatic variant is off by default.
   from) and `GroupStateStore.delete`/`deleteAll` unreferenced. **The rule this
   leaves behind**: an artefact of a migration gets cleared once, by hand; code
   that stays in the app is for the state the app actually writes
+- 2026-08-15 — **and the Dart-side group fold, traced properly rather than
+  assumed.** Nothing reached `GroupStateStore` any more, and following that back
+  found the whole chain above it had lost its caller at the cut:
+  `loadGroupStates`, `signGroupEvent`, `applyGroupEvents`, `_storeGroupState`,
+  `_groupStates`, `_refreshGroupName(s)`, `_groupIdentity`,
+  `_appendGroupSystemLines`, and `group_system_lines.dart` with its test. The
+  last is the one that matters — the core has its own `groupStateChangeLines`
+  and writes those lines into the transcript itself, so the narration existed
+  *twice*, in Go and in Dart, with only the Go copy running. Two implementations
+  of one rule that nothing forces to agree is what SRV-23 exists to end, so this
+  reads less as cleanup than as the cut's last piece. `groupState` stays and is
+  live: it folds on demand from `CoreAccount.groupInfo`, and a chat row's group
+  name arrives with the row. Not touched, and said so in `freizone_core.dart`:
+  the four FFI group calls now have no caller either, but they are exported C
+  symbols with Go tests and a surface meant for `cmd/devclient` and a later bot
+  as well — narrowing it is a decision about the boundary, not leftovers.
+  Details in design/16-groups.md
 
 ### APP-21 — Pin and delete a message in a group
 Status: `done` · Part of: APP-16 · Related: APP-17
