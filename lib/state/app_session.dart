@@ -35,8 +35,6 @@ import 'conversation.dart';
 import 'core_account.dart';
 import 'core_bridge.dart';
 import 'group_conversation.dart';
-import 'group_store.dart';
-import 'group_system_lines.dart';
 import 'message_content.dart';
 import 'outgoing_attachment.dart';
 import 'local_state.dart';
@@ -52,28 +50,6 @@ const String sessionResetMarker = 'Secure session was reset';
 /// didn't do this, and shouldn't be left wondering what they pressed.
 const String automaticRekeyMarker =
     'Secure session was re-established automatically';
-
-/// Appends one batch of "what changed about this group" lines to a transcript,
-/// one second apart.
-///
-/// A transcript renders in insertion order, so the offsets are not what keeps
-/// these in sequence -- they keep the *timestamps* from being identical, since
-/// several changes can land in one batch ("invited" before "joined" is not the
-/// same story as the other way round) and identical stamps would make the day
-/// dividers, and any future ordering by time, arbitrary.
-void _appendGroupSystemLines(
-  GroupConversation chat,
-  List<String> lines, {
-  required DateTime at,
-}) {
-  for (var i = 0; i < lines.length; i++) {
-    chat.messages.add(
-      StoredMessage.system(lines[i], at.add(Duration(seconds: i))),
-    );
-  }
-  if (lines.isNotEmpty) chat.lastActivityAt = at;
-}
-
 
 /// Re-asserts [state]'s DH identity + signed-prekey certificates, using its
 /// already-held key material, unchanged -- never rotates anything, and no
@@ -1414,19 +1390,13 @@ class AppSession extends ChangeNotifier {
   // it, hands it back, and keeps the transcript beside it. Sending and
   // receiving come next -- everything below is local.
 
-  /// Folded views, keyed by group id -- dead since the cut moved group facts
-  /// into the core (see [groupState]); kept only because [loadGroupStates],
-  /// [createGroup] and friends below still reference it, unreachable from any
-  /// live path now.
-  final Map<String, GroupStateResult> _groupStates = {};
-
   /// The screens' one window into a group's membership: name, topic, roles,
   /// who has joined. They ask for `.resolved`, the shape the old Dart-side
   /// fold produced -- kept exactly, so this is the one place that shape is
-  /// still assembled, now from [CoreAccount.groupInfo] instead of from
-  /// [_groupStates]. Null for a group this device holds no facts about yet
-  /// (an invitation whose snapshot has not arrived, or none at all), which is
-  /// the same "nothing to show" the screens already handle.
+  /// still assembled, now from [CoreAccount.groupInfo]. Null for a group this
+  /// device holds no facts about yet (an invitation whose snapshot has not
+  /// arrived, or none at all), which is the same "nothing to show" the screens
+  /// already handle.
   GroupStateResult? groupState(String groupId) {
     GroupInfo info;
     try {
@@ -1468,35 +1438,16 @@ class AppSession extends ChangeNotifier {
 
   GroupConversation? group(String groupId) => state.groups[groupId];
 
-  /// This account's identity, in the shape every signing call over the FFI
-  /// boundary expects.
-  GroupIdentity get _groupIdentity => GroupIdentity(
-    accountId: state.accountId,
-    rootPub: state.rootPub,
-    rootPriv: state.rootPriv,
-    deviceId: state.deviceId,
-    devicePub: state.devicePub,
-    devicePriv: state.devicePriv,
-  );
-
-  /// Reads every group's fact set back at startup.
-  ///
-  /// A group whose file is missing or damaged is skipped rather than fatal:
-  /// the fact set is grow-only and any member can hand back a full snapshot,
-  /// so the cost is a re-sync, and refusing to start an account over one
-  /// group's file would be far worse.
-  Future<void> loadGroupStates() async {
-    final blobs = await GroupStateStore.loadAll(state.accountId);
-    for (final entry in blobs.entries) {
-      try {
-        _groupStates[entry.key] = core.groupResolveState(entry.value);
-      } catch (e) {
-        lastError = 'group ${entry.key} failed to load: ${describeError(e)}';
-      }
-    }
-    _refreshGroupNames();
-    notifyListeners();
-  }
+  // The Dart-side group fold is gone (2026-08-15). Signing an event, merging a
+  // batch into a fact set, keeping the folded view in memory, persisting it and
+  // narrating what changed all moved into the core at the cut, and the copies
+  // here had had no caller since: loadGroupStates, signGroupEvent,
+  // applyGroupEvents, _storeGroupState, _refreshGroupName(s), _groupIdentity,
+  // _appendGroupSystemLines, GroupStateStore and group_system_lines.dart --
+  // the last of which pkg/client now owns line for line (its own
+  // groupStateChangeLines, and appendGroupSystemLines writing them into the
+  // transcript). What a group's screens read comes through [groupState] above
+  // and [applyCoreState]; the group name on a chat row arrives with the row.
 
   /// Founds a group. Local only: nobody else knows about it until somebody is
   /// invited.
@@ -1514,76 +1465,6 @@ class AppSession extends ChangeNotifier {
     applyCoreState(state, coreAccount);
     notifyListeners();
     return state.groups[groupId]!;
-  }
-
-  /// Signs one group event with this account's identity, ready to be applied
-  /// and sent on. Which key signs it is the core's decision, not ours.
-  Map<String, dynamic> signGroupEvent({
-    required String groupId,
-    required String type,
-    String subject = '',
-    String server = '',
-    String role = '',
-    String name = '',
-    String topic = '',
-  }) {
-    final current = _groupStates[groupId];
-    if (current == null) throw StateError('no group state for $groupId');
-    return core.groupSignEvent(
-      identity: _groupIdentity,
-      state: current.state,
-      type: type,
-      subject: subject,
-      server: server,
-      role: role,
-      name: name,
-      topic: topic,
-    );
-  }
-
-  /// Merges events into a group's fact set, whether our own or a peer's, and
-  /// persists the result.
-  ///
-  /// [groupId] may name a group this device has never heard of -- that is how
-  /// an invitation arrives, as a snapshot carrying the genesis. Rejected
-  /// events are reported back rather than thrown: a snapshot from a hostile
-  /// peer must cost only its bad entries.
-  Future<GroupStateResult> applyGroupEvents(
-    String groupId,
-    List<Map<String, dynamic>> events,
-  ) async {
-    // Free here, unlike on the receive path: the folded view is already cached.
-    final before = _groupStates[groupId]?.resolved;
-    final result = core.groupApplyEvents(
-      state: _groupStates[groupId]?.state ?? const <String, dynamic>{},
-      events: events,
-    );
-    // The blob decides its own id: a snapshot for an unknown group carries the
-    // genesis, and the id follows from the key in it rather than from whatever
-    // the sender claimed.
-    final id = result.groupId.isEmpty ? groupId : result.groupId;
-
-    final chat = state.groups.putIfAbsent(
-      id,
-      () => GroupConversation(groupId: id),
-    );
-    // Our own acts get the same lines a peer's do -- an inviter should see "q2xjx
-    // was invited" in the transcript exactly as everyone else does, or the two
-    // sides of the same group read as different histories.
-    _appendGroupSystemLines(
-      chat,
-      groupStateChangeLines(
-        before: before,
-        after: result.resolved,
-        myAccountId: state.accountId,
-        events: events,
-      ),
-      at: DateTime.now().toUtc(),
-    );
-    await _storeGroupState(result, groupId: id);
-    await LocalStateStore.saveProfile(state);
-    notifyListeners();
-    return result;
   }
 
   /// Forgets a group locally: its facts, its transcript and its pictures.
@@ -1960,38 +1841,6 @@ class AppSession extends ChangeNotifier {
       _logGroupDelivery('retried', groupId, messageId);
       notifyListeners();
     }
-  }
-
-  Future<void> _storeGroupState(
-    GroupStateResult result, {
-    String? groupId,
-  }) async {
-    final id = groupId ?? result.groupId;
-    if (id.isEmpty) return;
-    _groupStates[id] = result;
-    _refreshGroupName(id);
-    await GroupStateStore.save(state.accountId, id, result.state);
-  }
-
-  void _refreshGroupNames() {
-    for (final id in state.groups.keys) {
-      _refreshGroupName(id);
-    }
-  }
-
-  /// Copies the folded name onto the transcript, so a chat-list row can be
-  /// drawn without opening every group's file. The one derived value kept
-  /// outside the fact set, and it has exactly one writer.
-  void _refreshGroupName(String groupId) {
-    final conversation = state.groups[groupId];
-    final resolved = _groupStates[groupId]?.resolved;
-    if (conversation == null || resolved == null) return;
-    conversation.displayName = resolved.name.isEmpty ? null : resolved.name;
-
-    // An invitation this account has not accepted yet: listed, but nothing is
-    // sent to us and we send nothing into it.
-    final me = resolved.memberById(state.accountId);
-    conversation.invitePending = me != null && !me.joined;
   }
 
   // The sender's own copy of a picture is written by the core before the

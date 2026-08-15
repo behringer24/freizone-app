@@ -351,6 +351,17 @@ class FreizoneCore {
   // the convergence rules in one place, so a bug on this side cannot produce
   // a group state that disagrees with what another client computes from the
   // same facts.
+  //
+  // **None of the four below has a caller in the app any more** (checked
+  // 2026-08-15). The account API took over -- CoreAccount.createGroup and
+  // friends work on an open handle and let the core hold the facts, where these
+  // hand a blob back and forth for the shell to keep. The Dart side that did
+  // that keeping went with GroupStateStore; these are what it called.
+  //
+  // Left in place rather than removed with it: they are exported C symbols with
+  // Go tests of their own, and the FFI surface is deliberately wider than one
+  // consumer -- cmd/devclient and a later bot are the others SRV-23 exists for.
+  // Removing them is a decision about that surface, not leftover cleanup.
 
   /// Founds a group. The group root key is derived from this account's root
   /// key and a nonce stored in the genesis event, so it survives total device
