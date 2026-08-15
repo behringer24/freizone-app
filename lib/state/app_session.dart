@@ -708,7 +708,17 @@ class AppSession extends ChangeNotifier {
     // other two call sites).
     unawaited(flushOutbox());
     if (_openConversationPeerId != null) {
-      unawaited(enterConversation(_openConversationPeerId!));
+      final open = _openConversationPeerId!;
+      // A group id has to go to enterGroup: enterConversation looks it up in
+      // state.conversations, finds nothing, and returns before it can re-open
+      // the chat or confirm anything read -- so a group left on screen across
+      // a background trip stayed unread, and its authors untold, until the
+      // user navigated away and back.
+      if (state.groups.containsKey(open)) {
+        unawaited(enterGroup(open));
+      } else {
+        unawaited(enterConversation(open));
+      }
     }
   }
 
