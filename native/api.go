@@ -582,6 +582,48 @@ func doCoreAcceptRequest(req corePeerRequest) (any, error) {
 	return struct{}{}, entry.client.MarkPeerKnown(req.AccountID)
 }
 
+// doCoreClearChat empties a chat's history and its pictures, keeping the chat.
+//
+// The other half of doCoreDeleteChat, and separate for the one difference that
+// matters: this keeps the conversation record (a peer) or the fact set (a
+// group), so the chat stays in the list and the next message lands in it. The
+// shell offers both actions side by side and they mean different things --
+// "clear" is about the history, "delete" is about the chat.
+func doCoreClearChat(req coreOpenChatRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	if err := entry.client.ClearTranscript(req.ChatID); err != nil {
+		return nil, err
+	}
+	if err := entry.client.DeleteChatMedia(req.ChatID); err != nil {
+		return nil, err
+	}
+
+	// An emptied chat has nothing left to be unread, so the flag goes too --
+	// otherwise the list shows an unread badge over a chat with no messages in
+	// it, and only opening it would clear it.
+	//
+	// Cleared here rather than by marking the chat read, deliberately: that
+	// confirms to the sender that their message was read, and clearing a chat
+	// says nothing to anybody. Nothing below touches the network.
+	if client.IsGroupID(req.ChatID) {
+		chat, err := entry.client.GroupChat(req.ChatID)
+		if err != nil || chat == nil {
+			return struct{}{}, err
+		}
+		chat.HasUnread = false
+		return struct{}{}, entry.client.PutGroupChat(*chat)
+	}
+	convo, err := entry.client.Conversation(req.ChatID)
+	if err != nil || convo == nil {
+		return struct{}{}, err
+	}
+	convo.HasUnread = false
+	return struct{}{}, entry.client.PutConversation(*convo)
+}
+
 func doCoreDeleteChat(req coreOpenChatRequest) (any, error) {
 	entry, err := lookupHandle(req.Handle)
 	if err != nil {
@@ -594,7 +636,14 @@ func doCoreDeleteChat(req coreOpenChatRequest) (any, error) {
 		return nil, err
 	}
 	if client.IsGroupID(req.ChatID) {
-		return struct{}{}, nil
+		// The facts go too, which is what actually takes the group off the
+		// list -- Client.Groups is a directory listing, so a group whose facts
+		// are still here is still a row, however long ago one left it. Only
+		// ever right for a group this account is out of; the caller that
+		// offers the action is what enforces that (freizone-app's
+		// group_actions.dart), because once the facts are gone nothing here
+		// can tell "left" from "never joined".
+		return struct{}{}, entry.client.ForgetGroup(req.ChatID)
 	}
 	// The session deliberately stays: the peer does not know their chat was
 	// deleted here, and throwing it away would make their next message look

@@ -32,6 +32,18 @@ each of which links the full design document.
 
 ### Fixed
 
+* **Clearing and deleting a chat now actually clears and deletes it.** Both had
+  stopped taking effect after an internal rebuild on 2026-08-10: the chat
+  vanished from the list and came back with its whole history, at the latest the
+  next time the app started. The same applies to removing a group you have left
+  or that was dissolved — including the one you founded, which you dissolve
+  first and can now remove like anybody else. Pictures go with the history they
+  belonged to, as they always should have (`APP-19`)
+* **Deleting a chat no longer changes what happens if that person writes
+  again.** They can always reach you — the chat simply opens again, with their
+  new message as its first line. Nothing about deleting a chat has ever been a
+  way to stop somebody contacting you; blocking is, and it is unchanged. This
+  had been specified both ways internally and is now settled one way (`APP-19`)
 * **Saving and sharing a picture from a chat works again.** Press and hold a
   picture in a conversation or a group and the sheet offers "Save to gallery"
   and "Share picture" as it should — both entries had been missing since an

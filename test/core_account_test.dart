@@ -81,6 +81,7 @@ void main() {
     );
     account.unblockPeer('qpeeraccountid000000x');
     account.acceptRequest('qpeeraccountid000000x');
+    account.clearChat('qpeeraccountid000000x');
     account.deleteChat('qpeeraccountid000000x');
 
     // Reading a group we hold no facts about is a refusal with a reason, not a

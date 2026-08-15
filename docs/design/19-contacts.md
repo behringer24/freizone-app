@@ -310,7 +310,9 @@ ranks above tidy storage, so it is what the routine action is built around.
   about the relationship, so a resumption is an event, not a chat quietly
   reappearing), but the old rationale was deliberate and is now written into
   `deleteConversation`'s doc comment beside the new one, so nobody rediscovers
-  only half of it.
+  only half of it. **Reversed again on 2026-08-15 — see the note in section 2.
+  The older rationale was the right one, and this bullet is kept because the
+  argument was made twice and should not be made a third time.**
 - The verdict is **five-valued, not a boolean**. `gone`, `noActiveDevice` and
   `notAFreizoneServer` are definite absences; `unknown` and `present` both keep
   `couldStillLoseMessages` true. A boolean would have invited exactly the
@@ -332,9 +334,31 @@ keeping it that narrow is what makes it safe to use freely.
 
 ### 2. Delete a chat — local cleanup that cannot lose anything
 
-Drops the conversation, its history and its media, and takes the peer out of
-`AppState.knownPeerIds` so a resumption arrives as a message **request** to accept
-or decline rather than silently reopening the chat.
+Drops the conversation, its history and its media. **The peer stays known**, so
+their next message simply opens the chat again with that message as its first
+line — it does not arrive as a request to accept, and it certainly does not
+arrive nowhere.
+
+**Settled 2026-08-15, reversing what this section said before.** It had the
+delete drop the peer from `knownPeerIds` so that a resumption arrived as a
+message request. That was never in force after the SRV-23 cut — `pkg/client`'s
+`DeleteConversation` keeps the known mark on purpose, with its own written
+reason ("clearing a chat must not turn a known contact back into a stranger"),
+and the app's copy of the set had stopped being read at all. Two opposing rules,
+one of them silently winning. The decision now:
+
+> **A deleted chat may never cost a peer their way back.** Blocking is the
+> action for not wanting to hear from someone, and it stays a separate thing.
+
+Given that, the request variant loses on its own merits rather than on
+convenience: **a one-to-one peer cannot see that anything happened.** They go on
+writing, while this side cannot reply until it accepts and — by the receive
+path's own rule — is not even notified about their follow-ups. A group is the
+case where an invitation *is* the right answer, and precisely because leaving is
+visible there: the admin sees the empty seat and re-invites deliberately.
+
+The cost, stated plainly: someone tidied out of the list can reappear in it
+silently. That is what blocking is for, and it is the cheaper failure of the two.
 
 **The ratchet session is kept, invisibly.** That is the point rather than an
 oversight: it is the only arrangement in which the peer's next message is still
@@ -364,8 +388,17 @@ exists to avoid, for a peer who happens to write on day N+1.
 
 ### 3. Remove permanently — for a peer who is actually gone
 
-The durable removal an orphaned chat needs: conversation, history, media,
-`knownPeerIds`, **and the ratchet session**. Nothing is left.
+The durable removal an orphaned chat needs: conversation, history, media, the
+cached peer device, **and both ratchet sessions**. Nothing that could decrypt or
+address anything is left.
+
+The known-peer mark is the one thing that stays, since 2026-08-15 — a single id
+in a set, kept for the same reason section 2 keeps it. It decides exactly one
+question, whether a message from somebody with no conversation opens a chat or a
+request, and this action is for a peer who by construction has no message left to
+send. If the evidence turns out to have been wrong and they do come back, the
+chat opens normally rather than as a request, which is the same answer as
+everywhere else.
 
 What makes this safe is that it is **evidence-based rather than a guess**. The
 public account directory answers definitively, needs no authentication, and needs

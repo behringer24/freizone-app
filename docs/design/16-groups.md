@@ -152,6 +152,27 @@ message on the next startup. It now walks `AppSession.chats`, which is both
 kinds. The same reasoning applies to account deletion, which now removes the
 group directory alongside the profile and the media.
 
+**Superseded by the SRV-23 cut (2026-08-10), recorded 2026-08-15.** Everything
+in this section describes storage the app no longer owns: a group's facts live
+in the core, under `groups/<group id>/` beside its held events and per-member
+sync state, and its transcript under `chats/<group id>/` like any other chat's.
+Three consequences worth having written down, because each was a live bug until
+they were:
+
+- **Removing a group is `CoreAccount.deleteChat`**, which for a group id also
+  calls `pkg/client`'s `ForgetGroup`. That last part is what actually takes it
+  off the list: `Client.Groups` is a directory listing, so a group whose facts
+  are still on disk is still a row — however long ago one left it. Between the
+  cut and 2026-08-15 there was no way to remove those facts at all, carried as a
+  written-down known limitation rather than fixed.
+- **There is no orphan sweep any more, and none is needed.** A picture is
+  deleted with the message it belongs to (`Client.DeleteMessage`) or with the
+  chat (`ClearTranscript` + `DeleteChatMedia`), so nothing outlives its
+  reference in the first place. What is left of the old sweep only clears the
+  pre-cut Dart tree for installs that upgraded rather than reinstalled.
+- **Account deletion still misses the core's directory** — `core-<accountId>`
+  survives removing an account, keys included. Open, tracked separately.
+
 ## Sending: fan-out over a durable outbox
 
 **APP-08 step 2 is a hard prerequisite, not a nice-to-have.** A fan-out that
@@ -633,7 +654,9 @@ place for both.
 
 A deleted message's picture is *not* deleted with it, in a group no more than in
 a one-to-one chat: `sweepOrphanedMedia` already collects every file whose
-message is gone, groups included, on the next start.
+message is gone, groups included, on the next start. (Since the cut it goes the
+other way and sooner — `Client.DeleteMessage` takes the line's attachments with
+it, so there is nothing left over to collect later.)
 
 ### Replying in a group, shipped 2026-08-04 (APP-17)
 

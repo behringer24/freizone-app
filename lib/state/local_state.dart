@@ -75,14 +75,12 @@ class AppState {
     this.nextOtpkKeyId = 0,
     Map<String, Conversation>? conversations,
     Map<String, GroupConversation>? groups,
-    Set<String>? knownPeerIds,
     Map<String, BlockedPeer>? blockedPeers,
     this.recoveryBackupDone = false,
     this.pushRegisteredAt,
     this.pushMechanism,
   }) : conversations = conversations ?? {},
        groups = groups ?? {},
-       knownPeerIds = knownPeerIds ?? {},
        blockedPeers = blockedPeers ?? {};
 
   factory AppState.fromJson(Map<String, dynamic> j) => AppState(
@@ -115,9 +113,10 @@ class AppState {
       (k, v) =>
           MapEntry(k, GroupConversation.fromJson(v as Map<String, dynamic>)),
     ),
-    knownPeerIds: (j['known_peer_ids'] as List<dynamic>?)
-        ?.cast<String>()
-        .toSet(),
+    // 'known_peer_ids' is read by nothing now (see the note beside
+    // blockedPeers): the core holds that set. An old profile still carries the
+    // key and is simply left alone -- rewriting one to drop it would cost a
+    // full profile write per account for a field nobody looks at.
     blockedPeers: (j['blocked_peers'] as List<dynamic>?)
         ?.map((v) => BlockedPeer.fromJson(v as Map<String, dynamic>))
         .fold<Map<String, BlockedPeer>>({}, (m, p) {
@@ -165,13 +164,14 @@ class AppState {
   /// profile rewritten in full on every single message.
   Map<String, GroupConversation> groups;
 
-  /// Every peer account id ever accepted (message request Accept) or
-  /// reached out to ourselves (AppSession.startConversation) -- i.e. "not
-  /// a stranger," independent of whether a Conversation for them still
-  /// exists. Deliberately outlives AppSession.deleteConversation, so
-  /// clearing a chat's history never regresses an already-known contact
-  /// back to an unactioned "message request" the next time they write.
-  Set<String> knownPeerIds;
+  // knownPeerIds -- "every peer ever accepted or reached out to" -- lived here
+  // until 2026-08-15. The core owns that set now (pkg/client's MarkPeerKnown,
+  // read in exactly one place: the receive path, to decide whether a message
+  // from somebody with no conversation starts a request). This copy was still
+  // being written on accept and unblock and read by nothing, which is how it
+  // could quietly claim the opposite rule from the one actually in force.
+  // Dropped rather than kept in step: two records of one fact is what this
+  // whole layer stopped doing at the cut.
 
   /// Every peer blocked locally, keyed by account id -- see [BlockedPeer].
   /// Deliberately outlives AppSession.deleteConversation, for the same
@@ -228,7 +228,6 @@ class AppState {
       'conversations': conversations.map((k, v) => MapEntry(k, v.toJson())),
     if (groups.isNotEmpty)
       'groups': groups.map((k, v) => MapEntry(k, v.toJson())),
-    if (knownPeerIds.isNotEmpty) 'known_peer_ids': knownPeerIds.toList(),
     if (blockedPeers.isNotEmpty)
       'blocked_peers': blockedPeers.values.map((p) => p.toJson()).toList(),
     if (recoveryBackupDone) 'recovery_backup_done': true,

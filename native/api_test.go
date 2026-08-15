@@ -206,6 +206,117 @@ func TestOneToOneAttachmentFetchesFromOwnServerNotTheSenders(t *testing.T) {
 	}
 }
 
+// Clearing a chat and deleting one differ in exactly one thing: whether the
+// chat is still there afterwards. Both empty the history and the pictures.
+//
+// The shell offers them side by side and they promise different outcomes, so
+// this pins the difference rather than either half: "clear" must leave a row
+// the next message lands in, "delete" must leave nothing to land in.
+func TestClearingAChatKeepsItAndDeletingDoesNot(t *testing.T) {
+	handle, c := offlineHandle(t)
+	chatID := "qpeeraccountid000000x"
+
+	fill := func() {
+		t.Helper()
+		if err := c.PutConversation(client.Conversation{
+			PeerAccountID: chatID, PeerServer: "https://home.test", HasUnread: true,
+		}); err != nil {
+			t.Fatalf("PutConversation: %v", err)
+		}
+		if err := c.AppendMessage(chatID, client.Message{
+			ID: "m1", Text: "said something", Timestamp: time.Now().UTC(),
+			Kind: client.MessageNormal, SendState: client.SendSent,
+		}); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+		if err := c.WriteAttachmentFile(chatID, "m1", []byte("a picture")); err != nil {
+			t.Fatalf("WriteAttachmentFile: %v", err)
+		}
+	}
+	rows := func() []chatSummary {
+		t.Helper()
+		raw, err := doCoreChats(coreHandleRequest{Handle: handle})
+		if err != nil {
+			t.Fatalf("doCoreChats: %v", err)
+		}
+		return decodeAs[[]chatSummary](t, raw)
+	}
+
+	fill()
+	if _, err := doCoreClearChat(coreOpenChatRequest{Handle: handle, ChatID: chatID}); err != nil {
+		t.Fatalf("doCoreClearChat: %v", err)
+	}
+	got := rows()
+	if len(got) != 1 || got[0].ChatID != chatID {
+		t.Fatalf("clearing must keep the chat, got %+v", got)
+	}
+	// An emptied chat has nothing left to be unread, and a badge over a chat
+	// with no messages in it would only be clearable by opening it.
+	if got[0].HasUnread {
+		t.Error("an emptied chat cannot still be unread")
+	}
+	msgs, err := c.Messages(chatID)
+	if err != nil || len(msgs) != 0 {
+		t.Errorf("want an empty transcript, got %d (%v)", len(msgs), err)
+	}
+	if data, err := c.AttachmentFile(chatID, "m1"); err != nil || data != nil {
+		t.Errorf("the pictures go with the history they belonged to, got %d bytes (%v)", len(data), err)
+	}
+
+	fill()
+	if _, err := doCoreDeleteChat(coreOpenChatRequest{Handle: handle, ChatID: chatID}); err != nil {
+		t.Fatalf("doCoreDeleteChat: %v", err)
+	}
+	if got := rows(); len(got) != 0 {
+		t.Errorf("deleting must leave no chat behind, got %+v", got)
+	}
+}
+
+// Deleting a group takes its facts, which is the only thing that actually
+// removes it from the chat list -- Client.Groups is a directory listing, so
+// clearing the transcript alone leaves the row exactly where it was.
+//
+// This is what freizone-app's "remove from this device" needs, and it is only
+// ever offered for a group this account is out of (group_actions.dart). Until
+// pkg/client.ForgetGroup existed there was no way to finish the job, and the
+// gap was carried as a known limitation in AppSession.declineGroupInvite.
+func TestDeletingAGroupForgetsItsFacts(t *testing.T) {
+	handle, c := offlineHandle(t)
+	// A derived id, not a hand-written one: the group branch is chosen by
+	// IsGroupID, so a made-up string would be deleted as a peer and quietly
+	// prove nothing.
+	groupID := groupIDForTest(t)
+
+	// A group chat state is enough to make the row exist: it lives in the
+	// group's own directory, and the listing is that directory's existence.
+	if err := c.PutGroupChat(client.GroupChat{GroupID: groupID}); err != nil {
+		t.Fatalf("PutGroupChat: %v", err)
+	}
+	if err := c.AppendMessage(groupID, client.Message{
+		ID: "g1", Text: "in the group", Timestamp: time.Now().UTC(),
+		SenderAccountID: "qsomebodyelse0000000x",
+		Kind:            client.MessageNormal, SendState: client.SendSent,
+	}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	if _, err := doCoreDeleteChat(coreOpenChatRequest{Handle: handle, ChatID: groupID}); err != nil {
+		t.Fatalf("doCoreDeleteChat: %v", err)
+	}
+
+	raw, err := doCoreChats(coreHandleRequest{Handle: handle})
+	if err != nil {
+		t.Fatalf("doCoreChats: %v", err)
+	}
+	if chats := decodeAs[[]chatSummary](t, raw); len(chats) != 0 {
+		t.Errorf("the group must be gone from the list, got %+v", chats)
+	}
+	groups, err := c.Groups()
+	if err != nil || len(groups) != 0 {
+		t.Errorf("want no group facts left, got %v (%v)", groups, err)
+	}
+}
+
 // A local-only path lookup answers from disk or answers empty -- it never
 // reaches for the network.
 //

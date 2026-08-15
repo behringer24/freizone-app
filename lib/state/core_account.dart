@@ -66,9 +66,26 @@ class CoreAccount {
   void acceptRequest(String accountId) =>
       core.coreAcceptRequest(handle, accountId);
 
-  /// Deletes a chat locally. The secure session deliberately survives: the peer
-  /// does not know their chat was deleted here, and discarding it would make
-  /// their next message look like a desync.
+  /// Empties a chat's history and its pictures, keeping the chat itself.
+  ///
+  /// The difference from [deleteChat] is what survives: the conversation (or,
+  /// for a group, its fact set) stays, so the chat keeps its place in the list
+  /// and the next message lands in it rather than starting it over.
+  void clearChat(String chatId) => core.coreClearChat(handle, chatId);
+
+  /// Deletes a chat locally: history, pictures, and the record of the chat
+  /// itself -- for a group its facts, for a peer the conversation.
+  ///
+  /// The secure session deliberately survives, and so does the known-peer mark:
+  /// the peer does not know their chat was deleted here, discarding the session
+  /// would make their next message look like a desync, and a chat one tidied
+  /// away must not turn a known contact back into a stranger. Their next message
+  /// simply opens the chat again, with that message as its first line.
+  ///
+  /// For a group, only ever right once this account is out of it -- see
+  /// group_actions.dart, which is what enforces that. While still a member the
+  /// others keep sending, and an arriving message would rebuild a chat whose
+  /// facts are gone: no name, no member list, and a send that fails.
   void deleteChat(String chatId) => core.coreDeleteChat(handle, chatId);
 
   // --- network -------------------------------------------------------------

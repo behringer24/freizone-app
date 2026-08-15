@@ -857,6 +857,27 @@ this person**, so I do not write to someone from an identity they cannot place.
   APP-16 found four real problems each — those were on the receive and storage
   paths, where several accounts on one device and a background isolate make the
   state genuinely hard; this is a store with one writer and screens that read it.
+- 2026-08-15 — **none of the three deletions had reached the core since
+  2026-08-10, and the rule behind them was decided the other way.** Clearing a
+  chat, deleting one and removing a group all emptied the Dart mirror that
+  `applyCoreState` rebuilds wholesale from the core on the next refresh — so a
+  deleted chat came back with its full history at the latest on the next app
+  start, against a dialog promising "permanently removes … this cannot be
+  undone". Fixed by routing all three through the core: a new `clear_chat`
+  (transcript, media and the unread flag, keeping the chat) beside the existing
+  `delete_chat`, which now also calls `pkg/client`'s new `ForgetGroup` for a
+  group id — a group's row is its facts directory, so leaving one never removed
+  it and the gap was carried as a known limitation in `declineGroupInvite`. That
+  also makes the founder's route work: dissolve, then remove like anybody else.
+  **The rule underneath was reversed back**, and section 2 of the design
+  document has the argument: `knownPeerIds` was a second copy of a set the core
+  owns, the app's copy said a delete turns a peer back into a message request,
+  the core's said it must not, and the core's was silently winning. Kept the
+  core's — a deleted chat may never cost a peer their way back, blocking is the
+  action for that, and a one-to-one request the peer cannot see leaves them
+  writing while this side may not reply and is not notified.
+  `AppState.knownPeerIds` is gone rather than corrected; an old profile's key is
+  simply ignored
 
 ### APP-20 — Save a picture from a transcript to the device gallery
 Status: `done` · Part of: APP-04
@@ -912,10 +933,12 @@ the feature and the reason the automatic variant is off by default.
   a deleted chat keeps its pictures inside the core, and a removed account
   keeps its whole `core-<accountId>` directory — transcripts, media, ratchet
   sessions and identity keys included, since nothing deletes that directory at
-  all. Not fixed here: the chat cases need a core call that clears one chat's
-  media without also clearing its transcript (today's `doCoreDeleteChat` does
-  both plus the conversation record), which is a decision, not an oversight to
-  patch in passing
+  all. Not fixed here: the chat cases need a core call that clears a chat's
+  transcript and media *without* removing the conversation record, which
+  `doCoreDeleteChat` takes as well — a decision rather than an oversight to
+  patch in passing. **Settled 2026-08-15** — see the note under APP-19, which
+  fixed the chat cases and the rule behind them. The account case is still open:
+  `core-<accountId>` outlives removing an account, keys included
 
 ### APP-21 — Pin and delete a message in a group
 Status: `done` · Part of: APP-16 · Related: APP-17
