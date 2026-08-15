@@ -15,9 +15,7 @@ import '../push/push_manager.dart';
 import '../util/server_url.dart';
 import 'app_session.dart';
 import 'app_settings.dart';
-import 'group_store.dart';
 import 'local_state.dart';
-import 'media_store.dart';
 
 class AccountManager extends ChangeNotifier {
   AccountManager._(this._sessions, this._activeAccountId, this._settings);
@@ -176,28 +174,21 @@ class AccountManager extends ChangeNotifier {
     _sessions.remove(accountId);
     await LocalStateStore.deleteProfile(accountId);
 
-    // Everything the account owns outside its profile file. Deleting the
-    // profile alone would leave all of it behind forever, since nothing else
-    // ever looks at a directory belonging to an account that no longer exists.
+    // Everything the account owns outside its profile file, which since the
+    // SRV-23 cut is one directory: transcripts, pictures, both ratchet sessions
+    // per peer, the cached peer devices, the group fact sets -- and the
+    // identity private keys. Deleting the profile alone left all of it behind
+    // forever, since nothing else ever looks at a directory belonging to an
+    // account that no longer exists.
     //
-    // The core's directory is the one that matters and the one that was
-    // missing until 2026-08-15: transcripts, pictures, both ratchet sessions
-    // per peer, the group fact sets -- and the identity private keys. Deleted
-    // after the profile deliberately, so a background push wake arriving in
-    // the middle finds no profile, returns, and cannot recreate what was just
+    // After the profile deliberately, so a background push wake arriving in the
+    // middle finds no profile, returns, and cannot recreate what was just
     // removed (see push_manager.dart's _syncAccount).
+    //
+    // The two pre-cut Dart stores this used to clear as well went with the
+    // code that cleared them: both are absent on any install made since the
+    // cut, so the cleanup was permanent code for a temporary artefact.
     await deleteCoreState(accountId);
-
-    // The two pre-cut Dart stores, for an install that upgraded rather than
-    // reinstalled. Nothing has written to either since the cut; on a fresh
-    // install they are simply not there.
-    try {
-      final media = await MediaStore.instance();
-      await media.deleteAccountMedia(accountId);
-    } catch (_) {
-      // Best effort, like the rest of this cleanup.
-    }
-    await GroupStateStore.deleteAll(accountId);
 
     if (_activeAccountId == accountId) {
       _activeAccountId = _sessions.keys.isEmpty ? null : _sessions.keys.first;

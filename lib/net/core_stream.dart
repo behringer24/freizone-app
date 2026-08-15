@@ -330,19 +330,6 @@ Future<String> coreStatePath(String accountId) async {
   return '${dir.path}${Platform.pathSeparator}core-$accountId';
 }
 
-/// The pre-cut SQLite file for one account: the same name [coreStatePath]
-/// returns, plus the `.db` suffix it carried while the core was a database.
-///
-/// Nothing opens it any more -- the core stores plain files, and the rename is
-/// why the directory beside it could be created at all. It is still on disk on
-/// any device that upgraded rather than reinstalled: found on the Pixel
-/// 2026-08-15, eleven of them, one per account, all last written the evening
-/// before the cut. Dead weight, but not *empty* dead weight -- that is the
-/// state the core had at the time -- so anything claiming to remove an account
-/// has to remove this too.
-Future<String> legacyCoreDatabasePath(String accountId) async =>
-    '${await coreStatePath(accountId)}.db';
-
 /// Deletes everything the core holds for one account, for account removal.
 ///
 /// Here rather than in account_manager.dart because it belongs beside
@@ -365,20 +352,18 @@ Future<String> legacyCoreDatabasePath(String accountId) async =>
 /// time this runs, so failing the removal over it would leave a worse state
 /// than the leftover it is complaining about. A failure is worth reading in a
 /// log, which is why it is not swallowed silently either.
+///
+/// Scope is the live directory and nothing else, deliberately. A device that
+/// upgraded through the cut also has a `core-<accountId>.db` beside it -- the
+/// SQLite file the core was before it stored plain files -- and this briefly
+/// deleted that too. Taken back out: an install made since 2026-08-10 never has
+/// one, so the code would be permanent and the artefact is not, and a test
+/// group of one device is better served by clearing those by hand once.
 Future<void> deleteCoreState(String accountId) async {
   try {
     final dir = Directory(await coreStatePath(accountId));
     if (await dir.exists()) await dir.delete(recursive: true);
   } catch (e) {
     logDiagnostic('could not delete core state for $accountId: $e');
-  }
-  // And the database it used to be, for a device that upgraded through the cut
-  // -- see [legacyCoreDatabasePath]. Separately caught, so a failure on one
-  // does not decide the other.
-  try {
-    final legacy = File(await legacyCoreDatabasePath(accountId));
-    if (await legacy.exists()) await legacy.delete();
-  } catch (e) {
-    logDiagnostic('could not delete the pre-cut core database for $accountId: $e');
   }
 }

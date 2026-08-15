@@ -168,13 +168,18 @@ they were:
 - **There is no orphan sweep any more, and none is needed.** A picture is
   deleted with the message it belongs to (`Client.DeleteMessage`) or with the
   chat (`ClearTranscript` + `DeleteChatMedia`), so nothing outlives its
-  reference in the first place. What is left of the old sweep only clears the
-  pre-cut Dart tree for installs that upgraded rather than reinstalled.
+  reference in the first place. `sweepOrphanedMedia` is gone rather than
+  narrowed: what was left of it only cleared the pre-cut Dart tree, which is an
+  artefact of the migration and not something worth running at every start
+  forever. `media_store.dart` went with it, having had no other caller since
+  the cut, and so did `GroupStateStore`'s two deletions.
 - **Account deletion had to learn the same lesson**, and this is where a group's
   facts were being left behind wholesale: it removed the pre-cut
   `groups/<account id>/` directory and not `core-<accountId>`, which holds the
   real fact sets along with everything else the account owns. Fixed 2026-08-15
-  (`deleteCoreState`).
+  (`deleteCoreState`) — and that one *is* permanent code, because every install
+  creates that directory. The pre-cut trees beside it are cleared by hand, once,
+  on the few devices that have them.
 
 ## Sending: fan-out over a durable outbox
 

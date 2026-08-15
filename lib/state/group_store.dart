@@ -85,23 +85,14 @@ class GroupStateStore {
     await tmp.rename(file.path);
   }
 
-  static Future<void> delete(String accountId, String groupId) async {
-    try {
-      final file = await _file(accountId, groupId);
-      if (file.existsSync()) await file.delete();
-    } catch (_) {
-      // Best effort: a leftover file wastes a few kilobytes and is ignored on
-      // load, and the caller is mid-deletion of something more important.
-    }
-  }
-
-  /// Removes every group file for an account, for account deletion.
-  static Future<void> deleteAll(String accountId) async {
-    try {
-      final dir = await _accountDir(accountId);
-      if (dir.existsSync()) await dir.delete(recursive: true);
-    } catch (_) {
-      // See above.
-    }
-  }
+  // delete/deleteAll were removed on 2026-08-15 along with the rest of the
+  // pre-cut cleanup: this store has had no writer on any live path since the
+  // core took over a group's facts, so an install made since the cut has no
+  // directory here to remove and the deletions were permanent code for an
+  // artefact that only exists on a device that upgraded through the cut.
+  //
+  // What is left of this file is on the same footing -- see AppSession's
+  // _groupStates, which its own doc comment already calls dead. Removing it
+  // properly means tracing those paths rather than assuming, which is its own
+  // pass and not this one.
 }
