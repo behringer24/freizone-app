@@ -32,6 +32,13 @@ each of which links the full design document.
 
 ### Fixed
 
+* **Deleting an account now removes everything it held on this device.** Its
+  messages, its pictures, its groups and the encryption keys that belong to it
+  all go with it. Until now the app deleted the account's settings file and left
+  the rest behind, where nothing could reach it and nothing would ever clean it
+  up — invisible, but not gone, on a phone that might be sold, handed on or
+  lost. This applies both to deleting an account properly and to removing one
+  from this device when its server can no longer be reached (`APP-20`)
 * **Clearing and deleting a chat now actually clears and deletes it.** Both had
   stopped taking effect after an internal rebuild on 2026-08-10: the chat
   vanished from the list and came back with its whole history, at the latest the
