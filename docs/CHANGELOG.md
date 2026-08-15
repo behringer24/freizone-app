@@ -16,6 +16,12 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.23.1] — 2026-08-15 (versionCode 29)
+
+Two fixes from an audit rather than a report: a check of everything the
+internal rebuild on 2026-08-10 might have left behind. Both are actions that
+looked like they worked and then quietly undid themselves.
+
 ### Fixed
 
 * **Pinning a message sticks again, and "Delete for me" stays deleted.** Both
