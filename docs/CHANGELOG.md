@@ -16,6 +16,8 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-08-15 (versionCode 28)
+
 ### Added
 
 * **The attachment-storage chart now continues past today**, for a server's own
@@ -58,6 +60,23 @@ each of which links the full design document.
   went on looking in the old place and found nothing. The full-screen view's
   buttons were never affected, so that was the only way to get a picture out in
   the meantime (`APP-20`)
+* **A message that arrives while you are looking at the chat now counts as
+  read.** The sender was told it had been delivered, never that it had been
+  read — so their message sat on "Received" indefinitely, and in a group the
+  "read by" count could never reach everyone. Reading a chat has always sent
+  that confirmation when you *open* it, and a message landing in a chat you
+  already had open was never opened again, so nothing ever sent one. Opening
+  it again later did not help either. A chat nobody is looking at still
+  confirms nothing
+* **New messages appear in an open chat again after the connection drops.**
+  If the live connection to your server failed once — a restart at the other
+  end is enough — it was never re-established for as long as the app kept
+  running. Messages still arrived and still raised notifications, but the chat
+  in front of you went on showing the old conversation, which made it look as
+  though the notification was for a message that never came. Switching away
+  from the app and back was the only cure. The connection now comes back on
+  its own, and while it is down the app checks for waiting messages once a
+  minute rather than waiting quietly
 
 ## [0.22.1] — 2026-08-14 (versionCode 27)
 
