@@ -21,6 +21,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 
 import 'package:path_provider/path_provider.dart';
 
@@ -199,6 +200,20 @@ class CoreStream {
 
   bool _closed = false;
 
+  /// Backoff for a poll that threw, doubling to [_pollRetryMax]. Deliberately
+  /// slower than the core's own connect retry (3s to 30s): the core is
+  /// retrying a *network* attempt, whereas a throw here means the poll itself
+  /// failed, which is rarer and less likely to clear immediately.
+  static const _pollRetryInitial = Duration(seconds: 2);
+  static const _pollRetryMax = Duration(seconds: 60);
+
+  /// +-20%, so several accounts on one device do not all come back at once.
+  static Duration _jitter(Duration d) => Duration(
+    milliseconds: (d.inMilliseconds * (0.8 + _rand.nextDouble() * 0.4)).round(),
+  );
+
+  static final _rand = Random();
+
   /// Opens the stream and calls [onMessage] for every message, [onConnected]
   /// once per successful (re)connect, and [onError] for a connect attempt that
   /// never came up. Runs until [close].
@@ -214,6 +229,7 @@ class CoreStream {
     void Function()? onConnected,
   }) async {
     _closed = false;
+    var pollBackoff = _pollRetryInitial;
 
     // Captured before the loop because the isolate cannot be handed `core`
     // itself -- it holds native pointers -- so it has to open the library the
@@ -232,12 +248,30 @@ class CoreStream {
         final Map<String, dynamic> raw;
         try {
           raw = await Isolate.run(() => _pollInIsolate(handle, libraryPath));
+          pollBackoff = _pollRetryInitial;
         } catch (e) {
-          // A poll that throws must not take the stream down silently. Report
-          // it and stop, so the caller sees the account as unreachable rather
-          // than as connected-but-eternally-quiet.
-          if (!_closed) onError?.call(e);
-          break;
+          // A poll that throws used to end the loop for good, and that is a
+          // far worse state than it sounds: the core keeps retrying only for
+          // as long as something is reading it, so the account then has no
+          // live connection at all for the rest of the session. Everything
+          // arrives by push wake instead -- into the *background isolate*,
+          // which cannot reach the UI -- so an open chat silently stops
+          // showing new messages while still raising notifications for them.
+          // Observed 2026-08-15: one 502 from the reverse proxy (a server
+          // restart) blinded a running app for hours.
+          //
+          // So: report it, wait, and go round again. Backed off to a minute,
+          // because whatever makes a poll throw is not usually gone in a
+          // second, and jittered so several accounts on one device do not
+          // retry in lockstep.
+          if (_closed) break;
+          onError?.call(e);
+          await Future<void>.delayed(_jitter(pollBackoff));
+          if (_closed) break;
+          pollBackoff = pollBackoff * 2 > _pollRetryMax
+              ? _pollRetryMax
+              : pollBackoff * 2;
+          continue;
         }
         if (_closed) break;
 
