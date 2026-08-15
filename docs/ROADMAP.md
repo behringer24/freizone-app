@@ -954,7 +954,16 @@ the feature and the reason the automatic variant is off by default.
   finds no profile, returns, and cannot recreate what was just removed. Three
   tests, on the real directory shape: nested, so a non-recursive delete cannot
   pass; a second account untouched, since one device holds several; and removing
-  an account with no core state at all is not an error
+  an account with no core state at all is not an error. **Checking the fix
+  against the real device turned up a second leftover**: `core-<accountId>.db`,
+  the SQLite file the core was before it stored plain files — eleven of them on
+  the Pixel, one per account, all last written the evening before the cut. The
+  rename to a suffix-less directory is what let the new one be created beside
+  the old, and nothing has opened a `.db` since; they are dead, but they are
+  dead *core state*, so `deleteCoreState` takes them too. **Still standing for
+  accounts that were not removed** — sweeping those at startup is a decision
+  about deleting data nobody asked to delete, so it is Andreas's call rather
+  than something to fold in here
 
 ### APP-21 — Pin and delete a message in a group
 Status: `done` · Part of: APP-16 · Related: APP-17

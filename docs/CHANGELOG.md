@@ -37,7 +37,8 @@ each of which links the full design document.
   all go with it. Until now the app deleted the account's settings file and left
   the rest behind, where nothing could reach it and nothing would ever clean it
   up — invisible, but not gone, on a phone that might be sold, handed on or
-  lost. This applies both to deleting an account properly and to removing one
+  lost. The storage an older version of the app used for the same account goes
+  with it. This applies both to deleting an account properly and to removing one
   from this device when its server can no longer be reached (`APP-20`)
 * **Clearing and deleting a chat now actually clears and deletes it.** Both had
   stopped taking effect after an internal rebuild on 2026-08-10: the chat

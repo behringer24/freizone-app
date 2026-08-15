@@ -55,13 +55,30 @@ void main() {
     return root;
   }
 
+  /// What a device that upgraded through the cut still has beside the
+  /// directory: the SQLite file the core used to be. Same name plus `.db`,
+  /// which is a sibling rather than something inside the directory -- so a
+  /// delete of the directory alone leaves it exactly where it was.
+  Future<File> populateLegacyDatabase(String accountId) async {
+    final file = File(await legacyCoreDatabasePath(accountId));
+    await file.writeAsString('a pre-cut SQLite database');
+    return file;
+  }
+
   test('deleting an account takes the core directory with it', () async {
     final dir = await populateCoreState('acct1');
+    final legacy = await populateLegacyDatabase('acct1');
     expect(dir.existsSync(), isTrue, reason: 'the fixture must exist first');
+    expect(legacy.existsSync(), isTrue);
 
     await deleteCoreState('acct1');
 
     expect(dir.existsSync(), isFalse);
+    expect(
+      legacy.existsSync(),
+      isFalse,
+      reason: 'the database the core used to be is state too, not a stray file',
+    );
     // Nothing at all, not just the top-level files: a non-recursive delete
     // would leave the sessions and the transcripts exactly where they were.
     expect(
@@ -73,7 +90,9 @@ void main() {
 
   test('one account is removed without touching another', () async {
     final mine = await populateCoreState('acct1');
+    await populateLegacyDatabase('acct1');
     final other = await populateCoreState('acct2');
+    final otherLegacy = await populateLegacyDatabase('acct2');
 
     await deleteCoreState('acct1');
 
@@ -83,6 +102,9 @@ void main() {
       5,
       reason: 'a device holds several accounts; only the named one goes',
     );
+    // The one that would go wrong by prefix rather than by name: acct1's
+    // database and acct2's directory are siblings whose names share a stem.
+    expect(otherLegacy.existsSync(), isTrue);
   });
 
   test('removing an account that has no core state is not an error', () async {
