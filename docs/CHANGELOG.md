@@ -30,6 +30,16 @@ each of which links the full design document.
   it is always clear which part of the chart already happened. Tap or drag
   either forecast line to read both figures for that day (`SRV-25`, `APP-24`)
 
+### Fixed
+
+* **Saving and sharing a picture from a chat works again.** Press and hold a
+  picture in a conversation or a group and the sheet offers "Save to gallery"
+  and "Share picture" as it should — both entries had been missing since an
+  internal rebuild on 2026-08-10 moved where pictures are stored, and the sheet
+  went on looking in the old place and found nothing. The full-screen view's
+  buttons were never affected, so that was the only way to get a picture out in
+  the meantime (`APP-20`)
+
 ## [0.22.1] — 2026-08-14 (versionCode 27)
 
 ### Fixed

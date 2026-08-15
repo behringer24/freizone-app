@@ -890,6 +890,32 @@ the feature and the reason the automatic variant is off by default.
   persist a per-chat flag and the decision that actually matters (do pictures
   leave the sandbox at all) is global. Worth revisiting if anyone wants one
   chat's pictures in the gallery and not another's
+- 2026-08-15 — **two of the three routes had been dead since 2026-08-10.**
+  `message_actions.dart`'s `attachedPictureFile` still resolved a picture
+  through `MediaStore.fileFor` — the Dart-side media tree the SRV-23 cut
+  (`80171c2`) stopped writing to — so it answered "no picture" for every
+  picture there is, and both sheets left their save and share entries out
+  without any error to notice. The app bar's two buttons were unaffected, being
+  handed the file the viewer had already opened, which is why this looked like
+  a menu decision rather than a broken lookup. Now asked of the core like every
+  other attachment lookup, with a new `local_only` flag on `attachment_path`:
+  the sheet decides what to *offer*, so it must not put a download in front of
+  a menu (up to `callTimeout` for a picture whose earlier download failed), and
+  "not here" is the answer that leaves the entries out. Found while auditing
+  the cut — see the note under APP-04 for the other thing that audit turned up.
+  **The same audit found three more places that still clean or sweep the dead
+  Dart tree** and are silent no-ops there: `AppSession._deleteChatMedia`
+  (clearing or deleting a chat, and `deleteGroup`),
+  `AppSession.sweepOrphanedMedia`, and `AccountManager._removeLocalProfile`'s
+  `deleteAccountMedia`. Nothing writes to that tree any more, so each of them
+  deletes an empty directory and reports success. Their real targets survive:
+  a deleted chat keeps its pictures inside the core, and a removed account
+  keeps its whole `core-<accountId>` directory — transcripts, media, ratchet
+  sessions and identity keys included, since nothing deletes that directory at
+  all. Not fixed here: the chat cases need a core call that clears one chat's
+  media without also clearing its transcript (today's `doCoreDeleteChat` does
+  both plus the conversation record), which is a decision, not an oversight to
+  patch in passing
 
 ### APP-21 — Pin and delete a message in a group
 Status: `done` · Part of: APP-16 · Related: APP-17

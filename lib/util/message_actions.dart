@@ -13,7 +13,6 @@ import 'package:share_plus/share_plus.dart';
 
 import '../state/app_session.dart';
 import '../state/chat_target.dart';
-import '../state/media_store.dart';
 import 'gallery.dart';
 
 /// Asks before dropping a message from this device's own history, and drops it
@@ -60,8 +59,20 @@ Future<void> confirmAndDeleteMessage(
 /// leave the save/share entries *out* of a menu rather than showing entries
 /// that would fail: no attachment, an attachment that is not a picture, a
 /// system line, or -- the case worth naming -- a picture whose download has
-/// not finished, since the file is the only record that it has (see
-/// MediaStore's header).
+/// not finished, since the file is the only record that it has.
+///
+/// Asked of the core, like every other attachment lookup since the SRV-23 cut
+/// (see [ImageAttachment] and [ImageViewScreen], which open the same file).
+/// This used to derive the path itself, in the Dart-side media tree the app
+/// stopped writing to on 2026-08-10 -- so from that day it answered "no
+/// picture" for every picture there is, and both entries were simply absent
+/// from every sheet, with nothing failing anywhere to say so.
+///
+/// `localOnly` because this decides what a menu contains rather than what a
+/// screen shows: the core would otherwise download a picture that has not
+/// arrived, and the sheet would open when that finished instead of at once.
+/// A file is what it takes to save or share, so no file means no entries --
+/// exactly what the paragraph above promises.
 Future<File?> attachedPictureFile(
   AppSession session, {
   required String chatId,
@@ -70,13 +81,18 @@ Future<File?> attachedPictureFile(
   if (message.kind != StoredMessageKind.normal) return null;
   if (!message.hasAttachments) return null;
   if (!message.attachments.first.isImage) return null;
-  final media = await MediaStore.instance();
-  final file = media.fileFor(
-    accountId: session.state.accountId,
-    chatId: chatId,
-    messageId: message.id,
-  );
-  return await file.exists() ? file : null;
+  try {
+    final path = await session.coreAccount.attachmentPath(
+      chatId,
+      message.id,
+      localOnly: true,
+    );
+    return path.isEmpty ? null : File(path);
+  } catch (_) {
+    // A lookup that failed is a picture we cannot offer, not a long-press
+    // that should fail: the rest of the sheet is still worth showing.
+    return null;
+  }
 }
 
 /// Whether a picture in [message] may be saved to the gallery.

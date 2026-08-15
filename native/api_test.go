@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -202,6 +203,63 @@ func TestOneToOneAttachmentFetchesFromOwnServerNotTheSenders(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "home.test") {
 		t.Errorf("want the fetch aimed at this side's own server (home.test), got: %v", err)
+	}
+}
+
+// A local-only path lookup answers from disk or answers empty -- it never
+// reaches for the network.
+//
+// What the long-press sheet needs (see message_actions.dart's
+// attachedPictureFile): it decides whether to *offer* saving and sharing, so a
+// picture that is not here yet has to read as "no entries" at once rather than
+// as a menu that opens whenever a download finishes or times out.
+func TestALocalOnlyAttachmentPathNeverDownloads(t *testing.T) {
+	handle, c := offlineHandle(t)
+	chatID := "qpeeraccountid000000x"
+
+	// A real blob id, so the ordinary lookup would genuinely try to fetch --
+	// against a server that does not exist, which is what makes the difference
+	// between the two answers below visible.
+	if err := c.AppendMessage(chatID, client.Message{
+		ID: "m1", Text: "look", Timestamp: time.Now().UTC(),
+		Kind: client.MessageNormal, SendState: client.SendSent,
+		Attachments: []client.Attachment{{
+			Kind: "image", BlobID: "blob-1", Key: []byte("key"),
+			MimeType: "image/jpeg", Width: 800, Height: 600,
+		}},
+	}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	req := coreAttachmentRequest{Handle: handle, ChatID: chatID, MessageID: "m1", LocalOnly: true}
+	raw, err := doCoreAttachmentPath(req)
+	if err != nil {
+		t.Fatalf("a local-only lookup must not fail on a picture that is not here: %v", err)
+	}
+	if decodeAs[attachmentPathResponse](t, raw).Path != "" {
+		t.Error("nothing has been downloaded, so there is nothing to point at")
+	}
+	// The proof that it stayed local: without the flag the same call reaches
+	// the network and fails there.
+	if _, err := doCoreAttachmentPath(coreAttachmentRequest{Handle: handle, ChatID: chatID, MessageID: "m1"}); err == nil {
+		t.Fatal("want the ordinary lookup to attempt a download and fail")
+	}
+
+	// Once the file is here it is answered for, which is the case the sheet
+	// actually shows its entries for.
+	if err := c.WriteAttachmentFile(chatID, "m1", []byte("decrypted picture bytes")); err != nil {
+		t.Fatalf("WriteAttachmentFile: %v", err)
+	}
+	raw, err = doCoreAttachmentPath(req)
+	if err != nil {
+		t.Fatalf("doCoreAttachmentPath: %v", err)
+	}
+	path := decodeAs[attachmentPathResponse](t, raw).Path
+	if path == "" {
+		t.Fatal("a picture on disk must be answered for without any download")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the answered path must be a file that exists: %v", err)
 	}
 }
 
