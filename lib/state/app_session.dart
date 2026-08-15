@@ -147,8 +147,7 @@ class AppSession extends ChangeNotifier {
   /// from a path, because an isolate is told the same way (see
   /// FreizoneCore.libraryPath, and CoreAccount's construction in [init] --
   /// it passes this instance's path on) and by name it would find nothing.
-  AppSession(this.state, {FreizoneCore? core})
-    : core = core ?? FreizoneCore() {
+  AppSession(this.state, {FreizoneCore? core}) : core = core ?? FreizoneCore() {
     api = ApiClient(baseUrl: state.server, core: this.core);
   }
 
@@ -174,7 +173,6 @@ class AppSession extends ChangeNotifier {
   /// conversation's peer server rarely changes. [api] itself stays the
   /// one used for anything on this session's own server.
   final Map<String, ApiClient> _peerApiClients = {};
-
 
   /// The ApiClient to use for a peer whose home server is [server] --
   /// this session's own [api] if null or the same server, otherwise a
@@ -246,6 +244,19 @@ class AppSession extends ChangeNotifier {
   /// the core's quick retry) without flickering the whole account grey.
   static const _reachabilityGrace = Duration(seconds: 2);
   Timer? _reachabilityGraceTimer;
+
+  /// See [_startFallbackPolling].
+  static const _fallbackPollInterval = Duration(seconds: 60);
+  Timer? _fallbackPollTimer;
+
+  /// Backoff for restarting a stream whose read loop ended -- see the
+  /// whenComplete in [_startStream]. Backed off because one of the ways the
+  /// loop can end is the core reporting it has stopped streaming, and
+  /// restarting that immediately would spin.
+  static const _streamRestartInitial = Duration(seconds: 2);
+  static const _streamRestartMax = Duration(seconds: 60);
+  Duration _streamRestartDelay = _streamRestartInitial;
+  Timer? _streamRestartTimer;
 
   /// Result of the most recent push registration (see push_manager). The
   /// chat-list one-time hint uses this to tell "pick a distributor" apart
@@ -342,7 +353,10 @@ class AppSession extends ChangeNotifier {
       serverStats = await api.getServerStats(state.credentials);
     } catch (e) {
       serverStats = null;
-      logDiagnostic('checking server stats failed: ${describeError(e)}', name: 'freizone');
+      logDiagnostic(
+        'checking server stats failed: ${describeError(e)}',
+        name: 'freizone',
+      );
     }
   }
 
@@ -678,6 +692,11 @@ class AppSession extends ChangeNotifier {
       // long as the app is backgrounded, which is exactly the opposite of
       // what a background notification is for.
       coreAccount.setOpenChat(null);
+      // Nothing to keep up to date while there is no screen, and Android is
+      // about to freeze us anyway.
+      _stopFallbackPolling();
+      _streamRestartTimer?.cancel();
+      _streamRestartTimer = null;
       // Tear down the live SSE stream. Holding it open in the background keeps
       // this device registered as a live subscriber on the server, and the
       // server only sends a push wake when NO subscriber is connected (see
@@ -831,7 +850,9 @@ class AppSession extends ChangeNotifier {
     // Before anything can confirm or record anything: the switch is app-wide
     // and the core keeps its own per-account copy, so a session that never
     // passed it on would honour whatever the last one happened to leave there.
-    unawaited(applyReceiptsSetting((await AppSettings.load()).readReceiptsEnabled));
+    unawaited(
+      applyReceiptsSetting((await AppSettings.load()).readReceiptsEnabled),
+    );
 
     notifyListeners();
     _startStream();
@@ -984,11 +1005,38 @@ class AppSession extends ChangeNotifier {
     // it. A background resume reconnects in well under a second (the core's
     // quick retry), so the grey never shows.
     reachability = ServerReachability.connecting;
+    _startFallbackPolling();
     _reachabilityGraceTimer = Timer(_reachabilityGrace, () {
       _reachabilityGraceTimer = null;
       reachability = ServerReachability.unreachable;
       notifyListeners();
     });
+  }
+
+  /// Polls the queue while the stream is down and this app is on screen.
+  ///
+  /// Without it, a device whose SSE never comes up is not merely slower -- it
+  /// is blind. The server sends a push wake only to a device with no stream,
+  /// and a wake is handled by the *background isolate*, which drives the same
+  /// core but cannot reach this session or its UI. So an open chat goes on
+  /// showing an old transcript while notifications for the missing messages
+  /// keep arriving, until something backgrounds and foregrounds the app.
+  /// Observed 2026-08-15 on a device whose stream had died hours earlier.
+  ///
+  /// A minute is deliberately slow: this is a safety net for a broken stream,
+  /// not a second delivery path, and it stops the moment one connects.
+  void _startFallbackPolling() {
+    if (_fallbackPollTimer != null || !_appInForeground) return;
+    _fallbackPollTimer = Timer.periodic(_fallbackPollInterval, (_) {
+      if (!_appInForeground || _sse == null) return;
+      if (reachability == ServerReachability.online) return;
+      unawaited(_drainQueue());
+    });
+  }
+
+  void _stopFallbackPolling() {
+    _fallbackPollTimer?.cancel();
+    _fallbackPollTimer = null;
   }
 
   /// A (re)connect succeeded: cancel any pending grace escalation and go
@@ -997,6 +1045,10 @@ class AppSession extends ChangeNotifier {
   void _markStreamConnected() {
     _reachabilityGraceTimer?.cancel();
     _reachabilityGraceTimer = null;
+    // The net is only for while there is no stream, and onConnected already
+    // drains once by itself.
+    _stopFallbackPolling();
+    _streamRestartDelay = _streamRestartInitial;
     final wasOffline = reachability != ServerReachability.online;
     if (wasOffline) {
       reachability = ServerReachability.online;
@@ -1011,45 +1063,74 @@ class AppSession extends ChangeNotifier {
 
   void _startStream() {
     if (_sse != null) return; // already streaming (or restarted before stop)
-    _sse = CoreStream(core: core, handle: coreAccount.handle);
+    final stream = CoreStream(core: core, handle: coreAccount.handle);
+    _sse = stream;
     unawaited(
-      _sse!.connect(
-        onMessage: _handleIncoming,
-        onError: (e) {
-          // A connect that timed out or was refused is what _markStreamDropped
-          // is for: the offline badge, the grace period, and the retry loop.
-          // Only a stream failing for some *other* reason reaches the banner.
-          _noteFailure('stream error', e);
-          _markStreamDropped();
-        },
-        onConnected: () {
-          _markStreamConnected();
-          // Everything a fresh connection should settle, in one call: drain
-          // whatever is queued for this device, then top up the prekey pool,
-          // pay any group snapshot debts and re-establish sessions the
-          // evidence says are broken (see CoreAccount.sync, which does
-          // maintain's work after the drain).
-          //
-          // Replaces three separate Dart-side calls (topUpOneTimePrekeysIfNeeded,
-          // an implicit snapshot-debt sweep, _recoverDesyncedSessions) that each
-          // read and wrote state the core owns exclusively now.
-          //
-          // The drain is not belt-and-braces: the stream discards events rather
-          // than let a slow consumer stall the connection, nothing re-pushes
-          // what it discarded, and the server only wakes a device that has *no*
-          // stream open -- so without a fetch here an envelope dropped that way
-          // waited for an app restart. See CoreAccount.sync.
-          unawaited(_drainQueue());
-          // Re-register push on every (re)connect: a server that was down at
-          // startup (or when the endpoint first arrived) never got this
-          // account's push target otherwise, and would stay push-less until
-          // the next app start. registerForPush is idempotent.
-          unawaited(_registerPush());
-          // Pick up a server-status change (e.g. federation toggled) on every
-          // (re)connect -- covers long-lived sessions and network changes.
-          unawaited(refreshRegistrationPolicy());
-        },
-      ),
+      stream
+          .connect(
+            onMessage: _handleIncoming,
+            onError: (e) {
+              // A connect that timed out or was refused is what
+              // _markStreamDropped is for: the offline badge, the grace
+              // period, and the fallback below. Only a stream failing for
+              // some *other* reason reaches the banner.
+              _noteFailure('stream error', e);
+              _markStreamDropped();
+            },
+            onConnected: () {
+              _markStreamConnected();
+              // Everything a fresh connection should settle, in one call: drain
+              // whatever is queued for this device, then top up the prekey pool,
+              // pay any group snapshot debts and re-establish sessions the
+              // evidence says are broken (see CoreAccount.sync, which does
+              // maintain's work after the drain).
+              //
+              // Replaces three separate Dart-side calls
+              // (topUpOneTimePrekeysIfNeeded, an implicit snapshot-debt sweep,
+              // _recoverDesyncedSessions) that each read and wrote state the
+              // core owns exclusively now.
+              //
+              // The drain is not belt-and-braces: the stream discards events
+              // rather than let a slow consumer stall the connection, nothing
+              // re-pushes what it discarded, and the server only wakes a device
+              // that has *no* stream open -- so without a fetch here an
+              // envelope dropped that way waited for an app restart. See
+              // CoreAccount.sync.
+              unawaited(_drainQueue());
+              // Re-register push on every (re)connect: a server that was down at
+              // startup (or when the endpoint first arrived) never got this
+              // account's push target otherwise, and would stay push-less until
+              // the next app start. registerForPush is idempotent.
+              unawaited(_registerPush());
+              // Pick up a server-status change (e.g. federation toggled) on
+              // every (re)connect -- covers long-lived sessions and network
+              // changes.
+              unawaited(refreshRegistrationPolicy());
+            },
+          )
+          .whenComplete(() {
+            // The read loop can end for two reasons other than close(): a poll
+            // that kept throwing, and the core reporting it has stopped
+            // streaming. Either way, leaving _sse set would make every later
+            // _startStream a silent no-op, and this session would spend the
+            // rest of its life with no live connection -- taking everything by
+            // push wake into the background isolate, which cannot reach this
+            // UI. So drop the handle and come back, backed off, because "the
+            // core says it is not streaming" restarted immediately would spin.
+            if (!identical(_sse, stream)) return;
+            _sse = null;
+            if (!_appInForeground) return;
+            _startFallbackPolling();
+            _streamRestartTimer?.cancel();
+            _streamRestartTimer = Timer(_streamRestartDelay, () {
+              _streamRestartTimer = null;
+              if (_appInForeground) _startStream();
+            });
+            final doubled = _streamRestartDelay * 2;
+            _streamRestartDelay = doubled > _streamRestartMax
+                ? _streamRestartMax
+                : doubled;
+          }),
     );
   }
 
@@ -1062,6 +1143,8 @@ class AppSession extends ChangeNotifier {
   /// call when no stream is open. Leaves this account's core handle open --
   /// [coreAccount] outlives the stream, see its own doc comment.
   void _stopStream() {
+    _streamRestartTimer?.cancel();
+    _streamRestartTimer = null;
     _sse?.close();
     _sse = null;
   }
@@ -1889,7 +1972,6 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-
   /// Discards the ratchet session with [peerAccountId] so a fresh X3DH runs as
   /// initiator, carrying an `initial` the peer's receive path accepts in
   /// place of their stale session. Recovers a conversation whose Double
@@ -1910,7 +1992,6 @@ class AppSession extends ChangeNotifier {
     applyCoreChat(state, coreAccount, peerAccountId);
     notifyListeners();
   }
-
 
   /// Encrypts and sends text to peerAccountId's conversation, through the
   /// core (SRV-23, the cut). If [replyToId] names a message still in local
@@ -2097,8 +2178,7 @@ class AppSession extends ChangeNotifier {
     String? thumbPath;
     if (attachment != null) {
       final dir = await getTemporaryDirectory();
-      final base =
-          '${dir.path}${Platform.pathSeparator}${generateMessageId()}';
+      final base = '${dir.path}${Platform.pathSeparator}${generateMessageId()}';
       mediaPath = '$base.img';
       await File(mediaPath).writeAsBytes(attachment.bytes);
       final thumb = attachment.thumb;
@@ -2155,7 +2235,6 @@ class AppSession extends ChangeNotifier {
         height: attachment.height,
         thumb: attachment.thumb,
       );
-
 
   // Sending a receipt, and re-firing one that silently failed, are the core's
   // now: pkg/client.SendReceipt advances its own "already told them" marker
@@ -2225,6 +2304,8 @@ class AppSession extends ChangeNotifier {
   @override
   void dispose() {
     _reachabilityGraceTimer?.cancel();
+    _fallbackPollTimer?.cancel();
+    _streamRestartTimer?.cancel();
     _sse?.close();
     core.coreClose(coreAccount.handle);
     api.close();
@@ -2234,4 +2315,3 @@ class AppSession extends ChangeNotifier {
     super.dispose();
   }
 }
-
