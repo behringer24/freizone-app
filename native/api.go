@@ -630,6 +630,15 @@ type coreAttachmentRequest struct {
 	ChatID    string `json:"chat_id"`
 	MessageID string `json:"message_id"`
 	Thumb     bool   `json:"thumb,omitempty"`
+
+	// LocalOnly answers from disk or not at all -- never downloading.
+	//
+	// For a caller that has to decide something *about* a picture rather than
+	// show it, and cannot wait: the long-press sheet leaves its save and share
+	// entries out when there is no file, and asking the network first would
+	// mean a menu that opens after a download instead of at once (up to
+	// callTimeout, on a picture whose earlier download already failed).
+	LocalOnly bool `json:"local_only,omitempty"`
 }
 
 type attachmentPathResponse struct {
@@ -664,6 +673,12 @@ func doCoreAttachmentPath(req coreAttachmentRequest) (any, error) {
 		if _, err := os.Stat(path); err == nil {
 			return attachmentPathResponse{Path: path}, nil
 		}
+	}
+	// Everything below downloads. An empty answer is the honest one for a
+	// caller that said it would not wait -- and the same empty answer it
+	// already gets for a picture there is nothing to fetch for.
+	if req.LocalOnly {
+		return attachmentPathResponse{}, nil
 	}
 
 	msgs, err := entry.client.Messages(req.ChatID)

@@ -137,10 +137,16 @@ class CoreAccount {
   /// Where a message's picture is on disk, downloading it first if it has not
   /// been downloaded. Empty when there is nothing to show yet, which is the
   /// normal state of a picture nobody has looked at and not an error.
+  ///
+  /// [localOnly] asks the same question without the download: answer from disk
+  /// or answer empty. For deciding something *about* a picture rather than
+  /// showing it -- see [attachedPictureFile], which builds a menu and cannot
+  /// wait on a network round trip to do it.
   Future<String> attachmentPath(
     String chatId,
     String messageId, {
     bool thumb = false,
+    bool localOnly = false,
   }) async {
     final raw = await _run({
       'call': 'attachment_path',
@@ -148,6 +154,7 @@ class CoreAccount {
       'chat_id': chatId,
       'message_id': messageId,
       'thumb': thumb,
+      'local_only': localOnly,
     });
     return raw['path'] as String? ?? '';
   }

@@ -124,4 +124,18 @@ void main() {
     final path = await account.attachmentPath('qpeeraccountid000000x', 'nope');
     expect(path, isEmpty);
   });
+
+  // The same question asked the way the long-press sheet asks it. What this
+  // pins is the flag *crossing*: `local_only` reaching Go as false would put a
+  // download in front of a menu, and nothing on this side would say so --
+  // whether it then declines to download is native/api_test.go's to check,
+  // since only Go can build the state where the two answers differ.
+  test('a local-only path crosses and answers without an error', () async {
+    final path = await account.attachmentPath(
+      'qpeeraccountid000000x',
+      'nope',
+      localOnly: true,
+    );
+    expect(path, isEmpty);
+  });
 }
