@@ -37,7 +37,6 @@ import 'core_bridge.dart';
 import 'group_conversation.dart';
 import 'group_store.dart';
 import 'group_system_lines.dart';
-import 'media_store.dart';
 import 'message_content.dart';
 import 'outgoing_attachment.dart';
 import 'local_state.dart';
@@ -851,9 +850,6 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
     _startStream();
     unawaited(refreshMyRole());
-    // Housekeeping, deliberately not awaited: it only touches the pre-cut
-    // media tree nothing reads any more, so nothing depends on it finishing.
-    unawaited(sweepLegacyMedia());
     unawaited(refreshRegistrationPolicy());
     unawaited(_registerPush());
     // Anything composed but never sent -- in this run or a previous one --
@@ -1402,26 +1398,14 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Removes pictures left behind by an install that predates the SRV-23 cut.
-  ///
-  /// Housekeeping for one tree only: the Dart-side `<docs>/media/<accountId>`
-  /// one, which nothing has written to since 2026-08-10 and which the core does
-  /// not use. Pictures the core stores are deleted with the chat they belong to
-  /// ([CoreAccount.clearChat] and [CoreAccount.deleteChat]), so there is no
-  /// orphan to sweep there -- a message and its file go together.
-  ///
-  /// This used to sweep by message id, which is why it is worth saying what it
-  /// no longer is: not a safety net for the core's media, and not something to
-  /// extend into one. Kept because those old files are real on any device that
-  /// upgraded rather than reinstalled, and nothing else would ever remove them.
-  Future<void> sweepLegacyMedia() async {
-    try {
-      final media = await MediaStore.instance();
-      await media.deleteAccountMedia(state.accountId);
-    } catch (_) {
-      // Housekeeping only -- never worth surfacing or retrying.
-    }
-  }
+  // There is no media housekeeping here any more, and none is needed. A
+  // picture is deleted with the message it belongs to (the core's
+  // DeleteMessage) or with the chat (clearChat / deleteChat), so nothing ever
+  // outlives its reference -- which is what the old sweepOrphanedMedia existed
+  // to repair. The pre-cut `<docs>/media/<accountId>` tree it swept has had no
+  // writer since 2026-08-10 and is absent on any install made since; clearing
+  // it on the few devices that upgraded through the cut is a one-off, not a
+  // reason to run housekeeping at every start forever.
 
   // --- Groups (APP-16) -----------------------------------------------------
   //
@@ -1616,10 +1600,6 @@ class AppSession extends ChangeNotifier {
   /// member list, and a composer whose send fails.
   Future<void> deleteGroup(String groupId) async {
     coreAccount.deleteChat(groupId);
-    // The pre-cut Dart fact store, for an install that upgraded rather than
-    // reinstalled -- the core owns a group's facts now, and this file is not
-    // written any more.
-    await GroupStateStore.delete(state.accountId, groupId);
     applyCoreChat(state, coreAccount, groupId);
     await LocalStateStore.saveProfile(state);
     notifyListeners();

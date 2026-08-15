@@ -959,11 +959,22 @@ the feature and the reason the automatic variant is off by default.
   the SQLite file the core was before it stored plain files — eleven of them on
   the Pixel, one per account, all last written the evening before the cut. The
   rename to a suffix-less directory is what let the new one be created beside
-  the old, and nothing has opened a `.db` since; they are dead, but they are
-  dead *core state*, so `deleteCoreState` takes them too. **Still standing for
-  accounts that were not removed** — sweeping those at startup is a decision
-  about deleting data nobody asked to delete, so it is Andreas's call rather
-  than something to fold in here
+  the old, and nothing has opened a `.db` since
+- 2026-08-15 — **and the reclassification that followed, which is the part worth
+  keeping.** Raised by Andreas: is this a permanently missing deletion, or
+  clearing up after a migration? Both were tangled together, and only one thing
+  is permanent — `core-<accountId>`, which every install creates and nothing
+  removed. Everything else here only exists on a device that upgraded through
+  the cut: the `.db` files, the `<docs>/media/<accountId>` tree and the pre-cut
+  group store. Permanent code for a temporary artefact, and with a test group of
+  one device it buys nothing that clearing those by hand once does not. So the
+  `.db` deletion went back out, `sweepLegacyMedia` went out of startup entirely,
+  and the two legacy calls went out of account removal — which left
+  `media_store.dart` with no live caller at all (213 lines and its test; the
+  last real use had been `attachedPictureFile`, i.e. the bug this audit started
+  from) and `GroupStateStore.delete`/`deleteAll` unreferenced. **The rule this
+  leaves behind**: an artefact of a migration gets cleared once, by hand; code
+  that stays in the app is for the state the app actually writes
 
 ### APP-21 — Pin and delete a message in a group
 Status: `done` · Part of: APP-16 · Related: APP-17
