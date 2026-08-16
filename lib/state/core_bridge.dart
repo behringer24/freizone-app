@@ -96,6 +96,7 @@ Conversation _toConversation(ChatSummary chat, List<StoredMessage> messages) =>
       pinnedMessageIds: List<String>.from(chat.pinnedMessageIds),
       blocked: chat.blocked,
       pendingApproval: chat.pendingApproval,
+      peerGone: chat.peerGone,
       peerDeliveredUpTo: chat.peerDeliveredUpTo,
       peerReadUpTo: chat.peerReadUpTo,
     );

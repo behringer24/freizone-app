@@ -32,6 +32,7 @@ class Conversation extends ChatTarget {
     super.pinnedMessageIds,
     this.blocked = false,
     this.pendingApproval = false,
+    this.peerGone = false,
     this.peerDeliveredUpTo,
     this.peerReadUpTo,
     this.sentDeliveredReceiptUpTo,
@@ -60,6 +61,7 @@ class Conversation extends ChatTarget {
         .toList(),
     blocked: j['blocked'] as bool? ?? false,
     pendingApproval: j['pending_approval'] as bool? ?? false,
+    peerGone: j['peer_gone'] as bool? ?? false,
     peerDeliveredUpTo: j['peer_delivered_up_to'] == null
         ? null
         : decodeTime(j['peer_delivered_up_to'] as String),
@@ -118,6 +120,14 @@ class Conversation extends ChatTarget {
   /// _handleIncoming.
   bool pendingApproval;
 
+  /// True once the peer's *account*, not merely a device, was confirmed gone
+  /// by asking their server (SRV-29) -- the send path refuses on its own once
+  /// this is set, so the only thing the UI has to do with it is stop
+  /// offering a retry that can never succeed. Never cleared: an account id
+  /// is derived from the key material behind it, so a deleted account never
+  /// returns under the same id.
+  bool peerGone;
+
   /// How far the PEER has confirmed receiving/reading MY messages -- one
   /// marker per conversation, not one per message (see receipt_signal
   /// .dart): a message of mine with `timestamp <= peerReadUpTo` is
@@ -165,6 +175,7 @@ class Conversation extends ChatTarget {
     }
     if (blocked) j['blocked'] = blocked;
     if (pendingApproval) j['pending_approval'] = pendingApproval;
+    if (peerGone) j['peer_gone'] = peerGone;
     if (peerDeliveredUpTo != null) {
       j['peer_delivered_up_to'] = encodeTime(peerDeliveredUpTo!);
     }
