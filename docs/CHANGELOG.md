@@ -16,6 +16,23 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Added
+
+* **A chat now tells you when the other person's account no longer exists.**
+  Until now a message to an account that had been deleted simply failed, over
+  and over, with nothing saying why — and every retry failed the same way. The
+  chat now says so once, in the conversation itself, and the message field is
+  replaced by a note instead of accepting messages that could never be
+  delivered. Everything already in the chat stays readable, and this is only
+  ever shown after their server has actually confirmed the account is gone —
+  never because it was briefly unreachable (`SRV-29`)
+
+### Fixed
+
+* **Error messages no longer start with a piece of internal jargon.** Failures
+  reported by the app's protocol core reached the screen with a `client:`
+  prefix in front of the actual sentence
+
 ## [0.23.1] — 2026-08-15 (versionCode 29)
 
 Two fixes from an audit rather than a report: a check of everything the

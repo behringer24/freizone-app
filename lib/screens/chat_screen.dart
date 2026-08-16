@@ -679,6 +679,7 @@ class _ChatScreenState extends State<ChatScreen> {
           final peerBlocked = widget.session.isBlocked(convo.peerAccountId);
           final composerAvailable =
               !peerBlocked &&
+              !convo.peerGone &&
               !convo.pendingApproval &&
               !unreachable &&
               !federationLocked;
@@ -705,6 +706,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 _buildAttachmentComposerBar(context, _pendingAttachment!),
               if (peerBlocked)
                 _buildBlockedBar(context, convo)
+              // Before the three below, because it outranks them: an offline
+              // server or a federation switch is a "not right now", and this
+              // is the only one of the five that can never change back. A
+              // "try again later" bar in front of an account that is gone for
+              // good would be the wrong promise.
+              else if (convo.peerGone)
+                _buildPeerGoneBar(context)
               else if (convo.pendingApproval)
                 _buildPendingRequestBar(context, convo)
               else if (unreachable)
@@ -910,6 +918,44 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Text(
                 'Federation is turned off on your server, so you can\'t message '
                 'contacts on other servers.',
+                style: TextStyle(color: colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Replaces the message composer once this peer's account is confirmed gone
+  /// (SRV-29). Same shape as the federation-locked bar, and for the same
+  /// reason: nothing the user can do here changes it. The difference is that
+  /// this one is permanent -- every other bar states a condition that can
+  /// lift, so this is the only one where accepting a message would mean
+  /// taking something the app already knows it will never deliver.
+  ///
+  /// The transcript above says this too, once, at the point it was
+  /// established. That line is the record; this bar is why the input is gone.
+  Widget _buildPeerGoneBar(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        color: colorScheme.surfaceContainerHighest,
+        child: Row(
+          children: [
+            Icon(
+              Icons.person_off_outlined,
+              size: 18,
+              color: colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'This account no longer exists, so you can no longer send '
+                'anything here.',
                 style: TextStyle(color: colorScheme.onSurfaceVariant),
               ),
             ),
@@ -1134,6 +1180,28 @@ class _MessageBubble extends StatelessWidget {
   /// and the navigator -- and deliberately never resolves on its own.
   final void Function(LinkSpan span) onOpenAddress;
 
+  /// The inside of the failed-send chip, shared by its tappable and its
+  /// inert form so the two cannot drift apart in padding or colour -- only
+  /// in the one thing that differs, the label.
+  Widget _failureChipBody(ColorScheme colorScheme, String label) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.error_outline, size: 13, color: colorScheme.onErrorContainer),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: colorScheme.onErrorContainer,
+          ),
+        ),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -1230,39 +1298,38 @@ class _MessageBubble extends StatelessWidget {
                         // chip carrying its own errorContainer colours,
                         // because bare error red would sit on top of the
                         // bubble's primary fill with no guaranteed contrast.
-                        Material(
-                          color: colorScheme.errorContainer,
-                          borderRadius: BorderRadius.circular(10),
-                          child: InkWell(
-                            onTap: onRetry,
+                        //
+                        // Two shapes, keyed off whether a retry can actually
+                        // achieve anything (SRV-29: it cannot once the peer's
+                        // account is gone). The failure keeps the same weight
+                        // either way -- it did fail, and hiding that would be
+                        // worse -- but an unretryable one drops the button,
+                        // rather than offering one that silently does nothing
+                        // when tapped.
+                        if (onRetry != null)
+                          Material(
+                            color: colorScheme.errorContainer,
                             borderRadius: BorderRadius.circular(10),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.error_outline,
-                                    size: 13,
-                                    color: colorScheme.onErrorContainer,
-                                  ),
-                                  const SizedBox(width: 3),
-                                  Text(
-                                    'Tap to retry',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                      color: colorScheme.onErrorContainer,
-                                    ),
-                                  ),
-                                ],
+                            child: InkWell(
+                              onTap: onRetry,
+                              borderRadius: BorderRadius.circular(10),
+                              child: _failureChipBody(
+                                colorScheme,
+                                'Tap to retry',
                               ),
                             ),
+                          )
+                        else
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: colorScheme.errorContainer,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: _failureChipBody(
+                              colorScheme,
+                              'Not delivered',
+                            ),
                           ),
-                        ),
                       ] else if (deliveryStatus != null) ...[
                         const SizedBox(width: 4),
                         Icon(
