@@ -67,6 +67,32 @@ void main() {
       );
     });
 
+    test('the core package prefix does not reach the reader', () {
+      expect(
+        describeError(
+          FreizoneCoreException(
+            "client: this contact's account no longer exists, so nothing can "
+            'be sent to them',
+          ),
+        ),
+        "This contact's account no longer exists, so nothing can be sent to "
+        'them',
+        reason:
+            'every pkg/client error carries "client: ", so it classifies '
+            'nothing for the reader -- it is a Go package name in front of a '
+            'sentence written for them',
+      );
+    });
+
+    test('the word client is only stripped as the leading prefix', () {
+      expect(
+        describeError(
+          FreizoneCoreException('the client: something else entirely'),
+        ),
+        'the client: something else entirely',
+      );
+    });
+
     test('an unreachable server gets the one sentence that helps', () {
       expect(
         describeError(

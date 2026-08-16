@@ -25,7 +25,22 @@ String describeError(Object e) {
   // eventually, and "FreizoneCoreException: client: POST /v1/..." is not a
   // sentence. The core's own message is written to be read; the wrapper name
   // is what makes it look like a crash report.
-  if (e is FreizoneCoreException) return e.message;
+  //
+  // The `client:` package prefix goes too, and for the same reason: every
+  // error pkg/client raises carries it, so it is not a classification the
+  // reader can use -- it is the Go package's own name, in front of a sentence
+  // written for them. Only the leading one, and only with its space, so a
+  // message that happens to contain the word elsewhere is untouched.
+  if (e is FreizoneCoreException) {
+    const prefix = 'client: ';
+    if (!e.message.startsWith(prefix)) return e.message;
+    // Capitalised as it is uncovered, because a Go error string starts
+    // lower-case by convention -- that reads as deliberate behind `client:`
+    // and as a typo at the start of a sentence in a chat window.
+    final sentence = e.message.substring(prefix.length);
+    if (sentence.isEmpty) return sentence;
+    return sentence[0].toUpperCase() + sentence.substring(1);
+  }
   // StateError carries an already user-facing message (e.g. the self-chat and
   // federation-disabled guards in AppSession.startConversation) -- show it
   // directly rather than Dart's "Bad state: ..." toString() prefix.

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:freizone/ffi/core_models.dart';
 import 'package:freizone/state/contact_store.dart';
 import 'package:freizone/state/conversation.dart';
 import 'package:freizone/state/message_content.dart';
@@ -35,6 +36,62 @@ void main() {
         'has_unread': false,
       });
       expect(restored.pendingApproval, isFalse);
+    });
+  });
+
+  // SRV-29. The field decides whether a failed message still offers a retry,
+  // and every way of getting it wrong produces a silent `false` -- which looks
+  // exactly like the peer being fine, so nothing about it is self-announcing.
+  group('Conversation.peerGone', () {
+    test('defaults to false when constructed directly', () {
+      expect(Conversation(peerAccountId: 'abc123').peerGone, isFalse);
+    });
+
+    test('round-trips through toJson/fromJson when true', () {
+      final convo = Conversation(peerAccountId: 'abc123', peerGone: true);
+      expect(Conversation.fromJson(convo.toJson()).peerGone, isTrue);
+    });
+
+    test('omitted from toJson when false, so it stays compact', () {
+      final convo = Conversation(peerAccountId: 'abc123');
+      expect(convo.toJson().containsKey('peer_gone'), isFalse);
+    });
+
+    // The name the core actually writes (pkg/client's conversationFile and
+    // native/api.go's chatSummary both say `peer_gone`). Pinned as a literal
+    // rather than round-tripped, because a round trip through our own encoder
+    // agrees with itself whatever the key is called -- and the only symptom of
+    // disagreeing with the core would be a retry button that never goes away.
+    test('the wire name matches what the core writes', () {
+      expect(
+        Conversation.fromJson({
+          'peer_account_id': 'abc123',
+          'messages': [],
+          'last_activity_at': '2026-01-01T00:00:00.000Z',
+          'has_unread': false,
+          'peer_gone': true,
+        }).peerGone,
+        isTrue,
+      );
+    });
+  });
+
+  group('ChatSummary.peerGone crosses the FFI boundary', () {
+    test('reads the core\'s peer_gone field', () {
+      expect(
+        ChatSummary.fromJson({'chat_id': 'abc123', 'peer_gone': true}).peerGone,
+        isTrue,
+      );
+    });
+
+    // Absent means present-and-fine, which is also what an older core sends:
+    // the field is `omitempty` on the Go side, so "no such key" is the normal
+    // encoding of false rather than an error.
+    test('defaults to false when the core omits it', () {
+      expect(
+        ChatSummary.fromJson({'chat_id': 'abc123'}).peerGone,
+        isFalse,
+      );
     });
   });
 
