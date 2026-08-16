@@ -30,6 +30,7 @@ class ChatSummary {
     this.previewSender = '',
     this.blocked = false,
     this.pendingApproval = false,
+    this.peerGone = false,
     this.members = 0,
     this.invited = false,
     this.dissolved = false,
@@ -51,6 +52,7 @@ class ChatSummary {
     previewSender: j['preview_sender'] as String? ?? '',
     blocked: j['blocked'] as bool? ?? false,
     pendingApproval: j['pending_approval'] as bool? ?? false,
+    peerGone: j['peer_gone'] as bool? ?? false,
     members: j['members'] as int? ?? 0,
     invited: j['invited'] as bool? ?? false,
     dissolved: j['dissolved'] as bool? ?? false,
@@ -78,6 +80,11 @@ class ChatSummary {
 
   final bool blocked;
   final bool pendingApproval;
+
+  /// SRV-29: the peer's account, not merely a device, was confirmed gone by
+  /// asking their server. One-to-one only -- a group expresses this in its
+  /// member list instead.
+  final bool peerGone;
 
   /// Members counts only those who accepted, which is what a header shows.
   final int members;

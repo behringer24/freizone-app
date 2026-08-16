@@ -64,6 +64,12 @@ type chatSummary struct {
 	Blocked         bool `json:"blocked,omitempty"`
 	PendingApproval bool `json:"pending_approval,omitempty"`
 
+	// PeerGone (SRV-29): the peer's account, not merely a device, was
+	// confirmed gone by asking their server. One-to-one only, like the two
+	// watermarks below -- a group expresses this as a fact in the member
+	// list instead (see freizone-server's recordMemberGone).
+	PeerGone bool `json:"peer_gone,omitempty"`
+
 	// Members and Invited describe a group at a glance. Joined counts only
 	// members who accepted, which is what a header shows.
 	Members int  `json:"members,omitempty"`
@@ -103,6 +109,7 @@ func doCoreChats(req coreHandleRequest) (any, error) {
 			ChatID: convo.PeerAccountID, PeerServer: convo.PeerServer,
 			HasUnread: convo.HasUnread, Blocked: convo.Blocked,
 			PendingApproval:   convo.PendingApproval,
+			PeerGone:          convo.PeerGone,
 			LastActivityAt:    formatOptional(convo.LastActivityAt),
 			PeerDeliveredUpTo: formatOptional(convo.PeerDeliveredUpTo),
 			PeerReadUpTo:      formatOptional(convo.PeerReadUpTo),

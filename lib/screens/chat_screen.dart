@@ -519,7 +519,12 @@ class _ChatScreenState extends State<ChatScreen> {
           onTapQuote: m.replyToId == null
               ? null
               : () => _scrollToMessage(m.replyToId!),
-          onRetry: m.hasFailed ? () => _retrySend(m.id) : null,
+          // A retry that can never succeed is worse than none: once the peer
+          // is confirmed gone (SRV-29), the send path refuses on its own, so
+          // offering the button at all would just be a tap that always fails.
+          onRetry: m.hasFailed && !convo.peerGone
+              ? () => _retrySend(m.id)
+              : null,
           onOpenAddress: _openTappedAddress,
         ),
       );
