@@ -10,6 +10,7 @@ Each item has a short **reference code** used to discuss it:
 - `APP-` — freizone-app (this file)
 - `SRV-` — freizone-server
 - `GAW-` — freizone-gateway
+- `BOT-` — freizone-bot
 
 Status values: `planned` · `in progress` · `done` · `deferred`.
 
