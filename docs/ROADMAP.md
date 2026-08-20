@@ -1190,3 +1190,65 @@ Server Admin, admin-only, reading `SRV-25`'s two endpoints.
   bubble has its own background and a line's colour is not guaranteed legible on
   it in both themes. Forecast lines are drawn on the newest page only — a
   projection beside July's data would claim to be about July
+
+### APP-25 — Keep the Dart address parser honest, do not replace it
+Status: `planned` · Also affects: freizone-server (SRV-31)
+
+`SRV-31` gave the `id*server` address format one home in Go, and this item was
+opened to ask the obvious follow-up: should Dart stop parsing addresses and call
+through `native/api.go` instead?
+
+**No — and looking properly is what says so.** The reasons are worth writing
+down, because "there is one implementation now, so everything should use it" is
+the sort of argument that sounds finished:
+
+- **21 files** call `parseFreizoneAddress`, `normalizeAccountId`,
+  `normalizeServerUrl`, `sameServer`, `buildFreizoneAddress` or
+  `formatAccountIdForDisplay`. That is a large blast radius on a path that is
+  device-tested, for a change that fixes nothing currently broken.
+- **`link_detection.dart` runs per message while a transcript renders**, so that
+  addresses in message text become tappable. An FFI round trip per message per
+  rebuild is a different performance profile from parsing once on paste, and the
+  parsing is a few string operations.
+- **Three tests are pure Dart today** — `freizone_address_test.dart`,
+  `link_detection_test.dart`, `server_url_test.dart`. Going through the core
+  would give them the dependency `core_account_test.dart` has, which throws
+  unless `native/build_desktop.ps1` has been run. Trading three fast tests for
+  three that need a built native library is a real cost, paid on every machine.
+
+The concern this item was opened to check — that some path handles an address
+before the core is loaded — turned out **not** to exist. The `freizone://`
+URIs are QR payloads (`invite_uri.dart`), not OS deep links: there is no
+`freizone://` intent-filter in `AndroidManifest.xml`, so a scan always happens
+inside a running app. Worth recording as a *reason not needed* rather than
+leaving it as a plausible-sounding one.
+
+**What to do instead: shared vectors, which this project already does for
+exactly this problem.** `pkg/conformance` exists because the protocol layer was
+written twice and the cryptography could not diverge while every decision around
+it could. Address parsing is now in the same position. A JSON file of address
+cases -- input, expected id, expected server, expected canonical rendering,
+expected refusal -- generated from the Go implementation and read by both
+`pkg/address`'s tests and `freizone_address_test.dart`. Then a divergence fails a
+test, instead of surviving until somebody reads both files side by side, which
+is how all of the following were found:
+
+- **Dart's parse does not validate the charset**, deliberately, leaving it to
+  the resolution path. Go's `Parse` refuses a non-charset id, because a prefix
+  carries no checksum and that check is the only thing between a pasted fragment
+  of something else and a lookup treating it as an id.
+- **Dart has no `ParseFull`.** Nothing on that side distinguishes "a person is
+  typing, complete the prefix" from "this value is final, a truncated id must
+  fail" -- the distinction that `SRV-31` made explicit in two names.
+- **`normalizeServerUrl('https://')` returns `'https:'`** — a scheme with
+  nothing behind it, passed on as if it were a server. Go's `Parse` refuses it,
+  since further down it becomes a request against a nonsense URL and reads as an
+  unreachable server rather than as an address nobody could have meant.
+- **`normalizeServerUrl` does not know the `local` form**; only
+  `parseFreizoneAddress` does. So `sameServer('local', '')` is false in Dart
+  while `SameServer` is true in Go, and the two spellings of "our own server"
+  are one server in one implementation and two in the other.
+
+Each of those is small. The point is that there were four of them, none was
+noticed by anything failing, and the same reading a week later would find a
+different four.
