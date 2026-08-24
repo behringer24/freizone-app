@@ -16,17 +16,22 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-08-24 (versionCode 30)
+
+Inviting somebody, mostly. It is the one thing in this app you do *for* another
+person — usually while they are standing next to you — and it was the thing
+buried deepest. Plus a chat that finally says out loud when the account on the
+other side is gone.
+
 ### Changed
 
 * **Inviting somebody is one tap now, not three (`APP-26`).** The chat list has a
   QR icon for "Invite to chat" — the screen behind it leads with a code to be
   scanned — and, where the server allows it, a person icon for "Invite to
   server". Both left the overflow menu, and the contacts icon moved along to sit
-  beside them. A group's own app bar has an invite
-  icon for anybody who may invite, while the group info screen keeps its entry
-  -- a second door to one room, not a move. Inviting is the one thing here you do
-  for somebody else, usually while they are standing next to you, which is the
-  worst moment to be opening a menu
+  beside them. A group's own app bar has an invite icon for anybody who may
+  invite, while the group info screen keeps its entry — a second door to one
+  room, not a move
 
 ### Added
 
