@@ -834,16 +834,34 @@ class _ChatListScreenState extends State<ChatListScreen> {
           // Shown on the same terms the menu entry used: on an open server
           // anybody may invite, on an invite-only one this is an
           // admin-or-moderator power.
-          if (_canInvite(session))
-            IconButton(
-              icon: const Icon(Icons.person_add_alt),
-              tooltip: 'Invite to server',
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => InviteScreen(session: session),
-                ),
-              ),
-            ),
+          //
+          // Listening explicitly, because this AppBar is built outside the
+          // ListenableBuilder that wraps the body -- so it does not rebuild
+          // when the session does. Both facts this depends on arrive
+          // *after* the first frame: registrationPolicy and myRole are fetched
+          // when the session starts, and until they land this reads as "may
+          // not invite".
+          //
+          // The menu entry this replaced never showed the problem, because
+          // itemBuilder runs when the menu is opened rather than when the bar
+          // is built, and by then the answers had long arrived. Moving it to an
+          // icon turned a lazy read into an eager one and made a staleness that
+          // was always here visible: the icon appeared only after some later
+          // rebuild, such as switching accounts.
+          ListenableBuilder(
+            listenable: session,
+            builder: (context, _) => _canInvite(session)
+                ? IconButton(
+                    icon: const Icon(Icons.person_add_alt),
+                    tooltip: 'Invite to server',
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => InviteScreen(session: session),
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
           // Last of the icons, next to the menu. Its own icon rather than an
           // overflow entry (APP-19): the contacts area is the one screen here
           // that is *not* about the selected account, and burying it would make
