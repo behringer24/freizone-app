@@ -1301,3 +1301,36 @@ opening a menu and reading it.
   Checked rather than assumed: `flutter analyze` reports the same 29 pre-existing
   issues before and after, and all 382 tests pass. The **visual** check is
   Andreas' — this is a change nobody can verify by reading a diff.
+
+- 2026-08-23 — **the server-invite icon did not appear until you switched
+  accounts**, though the role badges beside it updated on open. Reported from the
+  device, which is the only place it shows.
+
+  `ChatListScreen.build` reads `widget.session` and builds the `AppBar` *outside*
+  the `ListenableBuilder` that wraps the body — so the bar does not rebuild when
+  the session notifies, only when the whole widget is rebuilt for some other
+  reason. Switching accounts is such a reason. The badges were never affected:
+  they live in the account-switcher strip, which listens to the manager.
+
+  What the icon depends on arrives after the first frame. `registrationPolicy`
+  and `myRole` are both fetched when a session starts, and until they land
+  `_canInvite` reads as "may not". So the icon was correct at build time and
+  stale a moment later.
+
+  **The menu entry it replaced never showed this**, because `itemBuilder` runs
+  when the menu is opened rather than when the bar is built, and by then the
+  answers had long arrived. Moving it to an icon turned a lazy read into an eager
+  one and made a staleness that was always there visible — which is the useful
+  half of the report: the bug is older than the change that surfaced it.
+
+  Fixed by listening explicitly around that one action. Swept for the same shape
+  afterwards: the group chat's new invite icon sits inside its screen's
+  `ListenableBuilder`, and the two other app bars with a session-dependent
+  conditional (`contact_detail_screen`, `peer_profile_screen`) do too. This was
+  the only one, because it is the only screen whose builder wraps the body rather
+  than the whole `Scaffold`.
+
+  Not covered by a test: pinning it needs an `AppSession`, `AccountManager`,
+  `AppSettings` and `ContactStore` standing up in a widget test, and the fault is
+  structural rather than logical — a widget not listening, not a rule computed
+  wrongly. Saying so rather than writing a test that would pass either way.
