@@ -1263,12 +1263,22 @@ opening a menu and reading it.
 
 - 2026-08-23 — three app-bar actions, and two menu entries retired.
 
-  **Chat list, for everybody: "Invite to chat"** (`Icons.person_add_alt`), which
-  opens the address screen. **Chat list, where the server allows it: "Invite to
-  server"** (`Icons.confirmation_number_outlined`), on exactly the terms the menu
-  entry used — anybody on an open server, admin or moderator on an invite-only
-  one. A ticket rather than a key for that one, deliberately: in an app this full
-  of encryption, a key glyph already means something else.
+  **Chat list, for everybody: "Invite to chat"** (`Icons.qr_code_2`), which opens
+  the address screen. **Chat list, where the server allows it: "Invite to
+  server"** (`Icons.person_add_alt`), on exactly the terms the menu entry used —
+  anybody on an open server, admin or moderator on an invite-only one.
+
+  Order in the bar is the two invitations, then contacts, then the menu: an
+  invitation is an errand with somebody standing there waiting on it, and the
+  contacts list is not.
+
+  The QR glyph is the honest one for the address screen, because that screen
+  *leads* with a code to be scanned — so the icon predicts what is behind it
+  rather than restating its label. It also pairs with the scanner glyph used in
+  setup and in the scan button: one shows a code, the other reads one. My first
+  attempt used a ticket for the server invitation and a person for the chat one,
+  which had the two the wrong way round — a person is what you add to a server,
+  and a ticket was a glyph this app had never used for anything.
 
   **The group's own app bar: "Invite someone to this group"**, shown to a
   moderator, which is the same gate the info screen uses. That gate is politeness

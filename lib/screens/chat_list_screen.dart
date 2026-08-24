@@ -811,10 +811,46 @@ class _ChatListScreenState extends State<ChatListScreen> {
             : Colors.grey.shade100,
         bottom: widget.appBarBottom,
         actions: [
-          // Its own icon rather than an overflow entry (APP-19): the contacts
-          // area is the one screen here that is *not* about the selected
-          // account, and burying it would make "which of my accounts talks to
-          // this person" something you have to already know to look for.
+          // The two invitations come first, then contacts, then the menu. They
+          // get icons rather than overflow entries because they are the two
+          // things a person does *for somebody else* -- both while that person
+          // is standing next to them, which is the worst moment to be opening a
+          // menu and reading it. Everything left in the overflow is about your
+          // own account.
+          //
+          // A QR glyph rather than a person: the screen behind it leads with a
+          // QR code to be scanned, so this predicts what you are about to see.
+          // It also pairs with the scanner glyph used in setup and in the scan
+          // button -- one shows a code, the other reads one.
+          IconButton(
+            icon: const Icon(Icons.qr_code_2),
+            tooltip: 'Invite to chat',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => MyAddressScreen(session: session),
+              ),
+            ),
+          ),
+          // Shown on the same terms the menu entry used: on an open server
+          // anybody may invite, on an invite-only one this is an
+          // admin-or-moderator power.
+          if (_canInvite(session))
+            IconButton(
+              icon: const Icon(Icons.person_add_alt),
+              tooltip: 'Invite to server',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => InviteScreen(session: session),
+                ),
+              ),
+            ),
+          // Last of the icons, next to the menu. Its own icon rather than an
+          // overflow entry (APP-19): the contacts area is the one screen here
+          // that is *not* about the selected account, and burying it would make
+          // "which of my accounts talks to this person" something you have to
+          // already know to look for. It sits after the invitations because
+          // those are the errands with somebody waiting on them; this one is
+          // yours to do whenever.
           IconButton(
             icon: const Icon(Icons.contacts_outlined),
             tooltip: 'Contacts',
@@ -828,34 +864,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
               ),
             ),
           ),
-          // The two invitations get their own icons rather than an overflow
-          // entry, because they are the two things a person does *for somebody
-          // else* -- and both are done while the other person is standing next
-          // to you, which is the worst moment to be opening a menu and reading
-          // it. Everything left in the overflow is about your own account.
-          IconButton(
-            icon: const Icon(Icons.person_add_alt),
-            tooltip: 'Invite to chat',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => MyAddressScreen(session: session),
-              ),
-            ),
-          ),
-          // Shown on the same terms the menu entry used: on an open server
-          // anybody may invite, on an invite-only one this is an
-          // admin-or-moderator power. A ticket rather than a key, since a key
-          // in this app means an encryption key and nothing else.
-          if (_canInvite(session))
-            IconButton(
-              icon: const Icon(Icons.confirmation_number_outlined),
-              tooltip: 'Invite to server',
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => InviteScreen(session: session),
-                ),
-              ),
-            ),
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'admin') {
