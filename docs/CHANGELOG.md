@@ -16,6 +16,16 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+### Changed
+
+* **Inviting somebody is one tap now, not three (`APP-26`).** The chat list has
+  an icon for "Invite to chat" and, where the server allows it, one for "Invite
+  to server"; both left the overflow menu. A group's own app bar has an invite
+  icon for anybody who may invite, while the group info screen keeps its entry
+  -- a second door to one room, not a move. Inviting is the one thing here you do
+  for somebody else, usually while they are standing next to you, which is the
+  worst moment to be opening a menu
+
 ### Added
 
 * **A chat now tells you when the other person's account no longer exists.**
