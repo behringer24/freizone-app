@@ -1252,3 +1252,42 @@ is how all of the following were found:
 Each of those is small. The point is that there were four of them, none was
 noticed by anything failing, and the same reading a week later would find a
 different four.
+
+### APP-26 — The two invitations get their own icons
+Status: `done`
+
+Inviting somebody was three taps behind an overflow menu in every place it is
+offered. It is also the one thing in this app you do **for somebody else**,
+usually while they are standing next to you — which is the worst moment to be
+opening a menu and reading it.
+
+- 2026-08-23 — three app-bar actions, and two menu entries retired.
+
+  **Chat list, for everybody: "Invite to chat"** (`Icons.person_add_alt`), which
+  opens the address screen. **Chat list, where the server allows it: "Invite to
+  server"** (`Icons.confirmation_number_outlined`), on exactly the terms the menu
+  entry used — anybody on an open server, admin or moderator on an invite-only
+  one. A ticket rather than a key for that one, deliberately: in an app this full
+  of encryption, a key glyph already means something else.
+
+  **The group's own app bar: "Invite someone to this group"**, shown to a
+  moderator, which is the same gate the info screen uses. That gate is politeness
+  rather than protection — an unauthorized invite has no effect anywhere, because
+  every device folds the fact set independently and ignores it. The info screen
+  **keeps** its entry: this is a second door to one room, not a move. Inviting is
+  the one group action that is not *about* an existing member, so it is also the
+  one that never fitted the per-member menus the member list is built from.
+
+  What made this more than three IconButtons: the invite flow was a private
+  method on the info screen, and it is not a button — it warns when a group is
+  getting large, it accepts every spelling of an address, and it hands the
+  address over whole because what gets *signed* has to be the canonical id.
+  Copying that into the app bar would have produced two versions that agree today
+  and disagree in a month. It moved to `showGroupInvite` in
+  `util/group_actions.dart`, next to the removal dialog that is shared from two
+  places for exactly the same reason.
+
+  Two dead branches in the chat list's `onSelected` went with the menu entries.
+  Checked rather than assumed: `flutter analyze` reports the same 29 pre-existing
+  issues before and after, and all 382 tests pass. The **visual** check is
+  Andreas' — this is a change nobody can verify by reading a diff.

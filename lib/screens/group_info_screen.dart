@@ -218,11 +218,15 @@ class GroupInfoScreen extends StatelessWidget {
     }
     // Moderator is an admin's to give.
     if (me.isAdmin && !member.isAdmin) {
-      actions[member.role == 'moderator' ? 'revoke_moderator' : 'grant_moderator'] =
-          member.role == 'moderator' ? 'Remove as moderator' : 'Make moderator';
+      actions[member.role == 'moderator'
+          ? 'revoke_moderator'
+          : 'grant_moderator'] = member.role == 'moderator'
+          ? 'Remove as moderator'
+          : 'Make moderator';
     }
     // Removing needs at least moderator, and a strictly lower target.
-    final canRemove = me.isFounder ||
+    final canRemove =
+        me.isFounder ||
         (me.isAdmin && !member.isAdmin) ||
         (me.isModerator && !member.isModerator);
     if (canRemove) actions['remove'] = 'Remove from group';
@@ -238,19 +242,40 @@ class GroupInfoScreen extends StatelessWidget {
     try {
       switch (action) {
         case 'grant_admin':
-          await session.setGroupRole(groupId, member.accountId, 'admin', grant: true);
+          await session.setGroupRole(
+            groupId,
+            member.accountId,
+            'admin',
+            grant: true,
+          );
         case 'revoke_admin':
-          await session.setGroupRole(groupId, member.accountId, 'admin', grant: false);
+          await session.setGroupRole(
+            groupId,
+            member.accountId,
+            'admin',
+            grant: false,
+          );
         case 'grant_moderator':
-          await session.setGroupRole(groupId, member.accountId, 'moderator', grant: true);
+          await session.setGroupRole(
+            groupId,
+            member.accountId,
+            'moderator',
+            grant: true,
+          );
         case 'revoke_moderator':
-          await session.setGroupRole(groupId, member.accountId, 'moderator', grant: false);
+          await session.setGroupRole(
+            groupId,
+            member.accountId,
+            'moderator',
+            grant: false,
+          );
         case 'remove':
           if (!context.mounted) return;
           final confirmed = await _confirm(
             context,
             title: 'Remove from group?',
-            body: 'They will stop receiving this group\'s messages. Their copy '
+            body:
+                'They will stop receiving this group\'s messages. Their copy '
                 'of the history stays on their device -- end-to-end encryption '
                 'leaves no way to take it back.',
             action: 'Remove',
@@ -339,69 +364,18 @@ class GroupInfoScreen extends StatelessWidget {
     }
   }
 
-  /// Where a group stops being cheap. There is no group key and no server-side
-  /// fan-out: every message is encrypted and delivered once per member, and every
-  /// membership change is its own envelope to each of them. So the cost of one
-  /// more member is linear in a way a group chat's UI does not hint at, and past
-  /// roughly this many it is worth saying out loud once rather than letting
-  /// somebody discover it as slowness.
-  static const _largeGroupThreshold = 50;
-
-  Future<void> _invite(BuildContext context, GroupResolved resolved) async {
-    if (resolved.members.length >= _largeGroupThreshold) {
-      final proceed = await _confirm(
+  /// The same flow the group's own app bar offers, so the two cannot drift --
+  /// see showGroupInvite in util/group_actions.dart, which also carries the
+  /// reasoning about where a group stops being cheap. This entry point stays:
+  /// the member list is where you already are when you notice somebody is
+  /// missing from it.
+  Future<void> _invite(BuildContext context, GroupResolved resolved) =>
+      showGroupInvite(
         context,
-        title: 'This group is getting large',
-        body:
-            'It already has ${resolved.members.length} members. Every message is '
-            'encrypted and sent separately to each of them, so each additional '
-            'member makes sending slower and uses more data for everyone. Invite '
-            'anyway?',
-        action: 'Invite anyway',
+        session: session,
+        groupId: groupId,
+        resolved: resolved,
       );
-      if (proceed != true || !context.mounted) return;
-    }
-
-    final controller = TextEditingController();
-    final entered = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Invite someone'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Address',
-            hintText: 'id, short id, id*server or id*local',
-          ),
-          onSubmitted: (v) => Navigator.pop(context, v.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Invite'),
-          ),
-        ],
-      ),
-    );
-    if (entered == null || entered.isEmpty || !context.mounted) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      // Handed over whole: parsing the address (an `id*server` names a member
-      // on another server, `id*local` or a bare id/prefix one on ours) and
-      // resolving it to the canonical full id belongs with the invite itself,
-      // since what gets *signed* has to be that canonical id -- see
-      // AppSession.inviteToGroup.
-      await session.inviteToGroup(groupId, entered);
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(describeError(e))));
-    }
-  }
 
   Future<void> _editMeta(BuildContext context, GroupResolved resolved) async {
     final nameController = TextEditingController(text: resolved.name);
@@ -455,7 +429,8 @@ class GroupInfoScreen extends StatelessWidget {
     final confirmed = await _confirm(
       context,
       title: 'Leave this group?',
-      body: 'You will stop receiving its messages. Rejoining needs a new '
+      body:
+          'You will stop receiving its messages. Rejoining needs a new '
           'invitation from a moderator.',
       action: 'Leave',
     );
@@ -474,7 +449,8 @@ class GroupInfoScreen extends StatelessWidget {
     final confirmed = await _confirm(
       context,
       title: 'Dissolve this group?',
-      body: 'Nobody will be able to send into it again. Everyone keeps their '
+      body:
+          'Nobody will be able to send into it again. Everyone keeps their '
           'copy of the history -- end-to-end encryption leaves no way to take '
           'it back. This cannot be undone.',
       action: 'Dissolve',

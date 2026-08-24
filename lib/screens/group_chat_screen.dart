@@ -22,6 +22,7 @@ import '../util/avatar_color.dart';
 import '../util/chat_time.dart';
 import '../util/errors.dart';
 import '../util/freizone_address.dart';
+import '../util/group_actions.dart';
 import '../util/message_actions.dart';
 import '../util/person_label.dart';
 import '../util/quoted_author.dart';
@@ -331,7 +332,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(chat.titleFor(widget.session.state.server, widget.contacts)),
+                  Text(
+                    chat.titleFor(widget.session.state.server, widget.contacts),
+                  ),
                   if (resolved != null)
                     Text(
                       _subtitleFor(resolved),
@@ -340,15 +343,40 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 ],
               ),
             ),
+            actions: [
+              // Inviting is the one group action that is *not* about an
+              // existing member, so it is the one that does not belong in the
+              // member list's per-row menus -- and noticing somebody is missing
+              // happens here, reading the conversation, not on the info screen.
+              // The info screen keeps its entry too: this is a second door to
+              // one room, not a move.
+              //
+              // Shown only to a moderator, matching the gate the info screen
+              // uses. That is politeness rather than protection: an
+              // unauthorized invite has no effect anywhere, because every
+              // device folds the fact set independently and simply ignores it.
+              if (resolved != null &&
+                  (resolved
+                          .memberById(widget.session.state.accountId)
+                          ?.isModerator ??
+                      false))
+                IconButton(
+                  icon: const Icon(Icons.person_add_alt),
+                  tooltip: 'Invite someone to this group',
+                  onPressed: () => showGroupInvite(
+                    context,
+                    session: widget.session,
+                    groupId: widget.groupId,
+                    resolved: resolved,
+                  ),
+                ),
+            ],
           ),
           body: Column(
             children: [
               // Above the transcript rather than inside it, so it stays put
               // while the list scrolls beneath -- ChatScreen's own bar, shared.
-              PinnedMessageBar(
-                chat: chat,
-                onJumpToMessage: _scrollToMessage,
-              ),
+              PinnedMessageBar(chat: chat, onJumpToMessage: _scrollToMessage),
               Expanded(child: _buildTranscript(context, chat)),
               if (chat.invitePending && resolved != null)
                 _buildInviteBar(context, resolved)
@@ -793,7 +821,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 decoration: InputDecoration(
                   hintText: 'Message',
                   filled: true,
-                  fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  fillColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainerHighest,
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 12,
@@ -1224,5 +1254,4 @@ class _GroupBubble extends StatelessWidget {
       ],
     );
   }
-
 }

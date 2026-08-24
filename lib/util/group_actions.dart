@@ -13,6 +13,7 @@
 // it explains that dissolving is the way out.
 import 'package:flutter/material.dart';
 
+import '../ffi/models.dart';
 import '../state/app_session.dart';
 import '../state/group_conversation.dart';
 import 'errors.dart';
@@ -81,7 +82,9 @@ Future<bool> showRemoveGroupDialog(
           ),
           onPressed: () => Navigator.of(context).pop(true),
           child: Text(
-            stillIn ? (pending ? 'Decline and remove' : 'Leave and remove') : 'Remove',
+            stillIn
+                ? (pending ? 'Decline and remove' : 'Leave and remove')
+                : 'Remove',
           ),
         ),
       ],
@@ -122,3 +125,94 @@ String _bodyFor({required bool stillIn, required bool pending}) {
       'pictures are then deleted from this device. This cannot be undone, and '
       'rejoining needs a new invitation from a moderator.';
 }
+
+/// Asks who to invite to [resolved], then invites them.
+///
+/// Shared for the same reason the removal dialog above is: it is offered from
+/// the group's app bar *and* from the member list behind the title, and the
+/// flow is more than a button -- it warns when a group is getting large, it
+/// accepts every spelling of an address, and it hands the address over whole
+/// rather than resolving it first. Two copies would agree today and disagree
+/// in a month, and the half that drifts is the half nobody is looking at.
+///
+/// Callers decide *who* may invite; this only asks the question.
+Future<void> showGroupInvite(
+  BuildContext context, {
+  required AppSession session,
+  required String groupId,
+  required GroupResolved resolved,
+}) async {
+  if (resolved.members.length >= _largeGroupThreshold) {
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('This group is getting large'),
+        content: Text(
+          'It already has ${resolved.members.length} members. Every message is '
+          'encrypted and sent separately to each of them, so each additional '
+          'member makes sending slower and uses more data for everyone. Invite '
+          'anyway?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Invite anyway'),
+          ),
+        ],
+      ),
+    );
+    if (proceed != true || !context.mounted) return;
+  }
+
+  final controller = TextEditingController();
+  final entered = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Invite someone'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(
+          labelText: 'Address',
+          hintText: 'id, short id, id*server or id*local',
+        ),
+        onSubmitted: (v) => Navigator.pop(context, v.trim()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, controller.text.trim()),
+          child: const Text('Invite'),
+        ),
+      ],
+    ),
+  );
+  if (entered == null || entered.isEmpty || !context.mounted) return;
+
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    // Handed over whole: parsing the address (an `id*server` names a member on
+    // another server, `id*local` or a bare id/prefix one on ours) and resolving
+    // it to the canonical full id belongs with the invite itself, since what
+    // gets *signed* has to be that canonical id -- see
+    // AppSession.inviteToGroup.
+    await session.inviteToGroup(groupId, entered);
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(describeError(e))));
+  }
+}
+
+/// Where a group stops being cheap. There is no group key and no server-side
+/// fan-out: every message is encrypted and delivered once per member, and every
+/// membership change is its own envelope to each of them. So the cost of one
+/// more member is linear in a way a group chat's UI does not hint at, and past
+/// roughly this many it is worth saying out loud once rather than letting
+/// somebody discover it as slowness.
+const _largeGroupThreshold = 50;

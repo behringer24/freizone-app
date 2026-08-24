@@ -610,48 +610,49 @@ class _ChatListScreenState extends State<ChatListScreen> {
         return _withBanners(
           [error, nudge, chips],
           CustomScrollView(
-          slivers: [
-            if (pending.isNotEmpty)
-              SliverToBoxAdapter(
-                child: Container(
-                  color: requestsSurface,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                        child: Text(
-                          'Message requests',
-                          style: Theme.of(context).textTheme.labelLarge
-                              ?.copyWith(
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
+            slivers: [
+              if (pending.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Container(
+                    color: requestsSurface,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                          child: Text(
+                            'Message requests',
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                          ),
                         ),
-                      ),
-                      for (final convo in pending) ...[
-                        _buildChatTile(context, session, convo),
-                        if (convo != pending.last)
-                          const Divider(height: 1, indent: 72),
+                        for (final convo in pending) ...[
+                          _buildChatTile(context, session, convo),
+                          if (convo != pending.last)
+                            const Divider(height: 1, indent: 72),
+                        ],
+                        // A visibly heavier rule than the hairline dividers
+                        // used between individual rows -- marks this as a
+                        // section boundary, not just another list item.
+                        Divider(
+                          height: 1,
+                          thickness: 2,
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
                       ],
-                      // A visibly heavier rule than the hairline dividers
-                      // used between individual rows -- marks this as a
-                      // section boundary, not just another list item.
-                      Divider(
-                        height: 1,
-                        thickness: 2,
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
+              SliverList.separated(
+                itemCount: regular.length,
+                separatorBuilder: (_, _) =>
+                    const Divider(height: 1, indent: 72),
+                itemBuilder: (context, i) =>
+                    _buildChatTile(context, session, regular[i]),
               ),
-            SliverList.separated(
-              itemCount: regular.length,
-              separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
-              itemBuilder: (context, i) =>
-                  _buildChatTile(context, session, regular[i]),
-            ),
-          ],
+            ],
           ),
         );
       },
@@ -701,7 +702,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
   Widget _withBanners(List<Widget?> banners, Widget body) {
     final present = banners.whereType<Widget>().toList();
     if (present.isEmpty) return body;
-    return Column(children: [...present, Expanded(child: body)]);
+    return Column(
+      children: [
+        ...present,
+        Expanded(child: body),
+      ],
+    );
   }
 
   /// The last thing that went wrong in an account, kept until the user
@@ -770,8 +776,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             session.markRecoveryBackupDone();
             Navigator.of(context).push(
               MaterialPageRoute(
-                builder: (_) =>
-                    BackupScreen(rootPriv: session.state.rootPriv),
+                builder: (_) => BackupScreen(rootPriv: session.state.rootPriv),
               ),
             );
           },
@@ -823,15 +828,36 @@ class _ChatListScreenState extends State<ChatListScreen> {
               ),
             ),
           ),
+          // The two invitations get their own icons rather than an overflow
+          // entry, because they are the two things a person does *for somebody
+          // else* -- and both are done while the other person is standing next
+          // to you, which is the worst moment to be opening a menu and reading
+          // it. Everything left in the overflow is about your own account.
+          IconButton(
+            icon: const Icon(Icons.person_add_alt),
+            tooltip: 'Invite to chat',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => MyAddressScreen(session: session),
+              ),
+            ),
+          ),
+          // Shown on the same terms the menu entry used: on an open server
+          // anybody may invite, on an invite-only one this is an
+          // admin-or-moderator power. A ticket rather than a key, since a key
+          // in this app means an encryption key and nothing else.
+          if (_canInvite(session))
+            IconButton(
+              icon: const Icon(Icons.confirmation_number_outlined),
+              tooltip: 'Invite to server',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => InviteScreen(session: session),
+                ),
+              ),
+            ),
           PopupMenuButton<String>(
             onSelected: (value) {
-              if (value == 'my_address') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => MyAddressScreen(session: session),
-                  ),
-                );
-              }
               if (value == 'admin') {
                 Navigator.of(context)
                     .push(
@@ -844,13 +870,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       ),
                     )
                     .then((_) => session.refreshRegistrationPolicy());
-              }
-              if (value == 'invite') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => InviteScreen(session: session),
-                  ),
-                );
               }
               if (value == 'blocked') {
                 Navigator.of(context).push(
@@ -877,16 +896,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 );
               }
             },
+            // Both invitations moved out to icons above. What is left here is
+            // what you do to your own account, which is rarer and can afford a
+            // menu.
             itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'my_address',
-                child: Text('Invite to chat'),
-              ),
-              if (_canInvite(session))
-                const PopupMenuItem(
-                  value: 'invite',
-                  child: Text('Invite to server'),
-                ),
               if (session.myRole == 'admin' || session.myRole == 'moderator')
                 const PopupMenuItem(
                   value: 'admin',
