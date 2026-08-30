@@ -1,4 +1,4 @@
-﻿// Persisted local identity and conversation state -- the Dart-side
+// Persisted local identity and conversation state -- the Dart-side
 // mirror of cmd/devclient's State (state.go) in freizone-server. Stored
 // as one indented JSON file under the app's documents directory via
 // path_provider.
