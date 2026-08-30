@@ -403,6 +403,12 @@ class AppSession extends ChangeNotifier {
       registrationPolicy = status.registrationPolicy;
       federationEnabled = status.federationEnabled;
       reportsEnabled = status.reportsEnabled;
+      // Loading the queue needs two things -- a staff role and a server that
+      // accepts reports -- which arrive from two independent fetches that race
+      // at session start. So each of them triggers the load once its own half
+      // is in, and refreshReports checks the other. Without this the menu
+      // badge stayed empty whenever the role landed first.
+      if (reportsEnabled && myRole != null) unawaited(refreshReports());
       _ownBlobs = BlobCapability.from(status);
       // The attestation's domain is a bare hostname (FREIZONE_DOMAIN
       // server-side, no scheme/port); state.server carries the full
@@ -566,17 +572,30 @@ class AppSession extends ChangeNotifier {
   /// been fetched yet at this point in a session's life, and a server without
   /// reports answers 404, which is handled below anyway.
   Future<void> refreshReports() async {
+    // Asked, not assumed. A server that predates SRV-33 does not have the
+    // route at all, and a missing route is not a Freizone server answering
+    // "no" -- net/http's mux replies `404 page not found` as **plain text**,
+    // which the error path reads as "this host does not speak our JSON" and
+    // reports as "this address doesn't point to a Freizone server". Skipping
+    // the request is the actual fix; the catch below is the net.
+    if (!reportsEnabled) {
+      openReports = [];
+      notifyListeners();
+      return;
+    }
     try {
       openReports = await api.listReports(state.credentials);
-    } on ApiException catch (e) {
-      // 403: not staff. 404: this server does not accept reports after all --
-      // the status said otherwise, which can happen across a restart. Neither
-      // is worth surfacing; both mean there is nothing to show.
-      if (e.statusCode == 403 || e.statusCode == 404) {
-        openReports = [];
-      } else {
-        rethrow;
-      }
+    } catch (_) {
+      // Nothing here is worth putting in front of anybody. The report count is
+      // a side note on a screen whose job is roles, policy and the user list:
+      // a 403 (not staff), a route that turned out not to exist, a server
+      // away, a body that would not parse -- every one of them means "no
+      // reports to show", and none of them means the admin area is broken.
+      //
+      // This swallowing is what the previous version got wrong: it caught
+      // ApiException only, and the one failure a stale server actually
+      // produces is not an ApiException at all.
+      openReports = [];
     } finally {
       notifyListeners();
     }

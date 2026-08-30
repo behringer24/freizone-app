@@ -1478,3 +1478,23 @@ because it looks helpful.
     message the test was reading back
   - answered `503` instead. A server that is merely unhelpful has to answer
     like one, and the assertion then says what it always meant
+
+- 2026-08-30 — **device report: Server Admin failed outright against a server
+  that predates SRV-33**, with "This address doesn't point to a Freizone
+  server." A regression introduced by this item.
+  - `refreshReports` had its capability pre-check removed so the menu badge
+    could load early, on the assumption that an older server answers the route
+    with a JSON 404. It has no such route: net/http's mux replies `404 page not
+    found` as **plain text**, the body parser raises
+    `NotFreizoneServerException` -- not an `ApiException` -- and the `on
+    ApiException` catch let it straight through into the admin screen's error
+    banner
+  - fixed on both levels. The pre-check is back, so nothing is asked of a
+    server that does not offer it; and the catch is now unconditional, because
+    a report count is a side note on a screen about roles, policy and users and
+    must never be able to take it down. The badge keeps loading early by having
+    *both* fetches trigger it once their own half is in -- role and capability
+    arrive from two requests that race
+  - the general lesson, recorded in `test/reports_old_server_test.dart`: for an
+    **optional** route a non-JSON 404 means "this route does not exist", never
+    "wrong server". Any capability added from here on has the same shape
