@@ -16,6 +16,78 @@ each of which links the full design document.
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-08-30 (versionCode 31)
+
+Two things you can now do about the people you chat with: tell them what you
+are called, and tell your server's operator about somebody who is a problem.
+
+Until now an address said nothing about the person behind it. That is what
+makes it safe — nobody can claim yours — but it also meant two contacts you
+had not named yourself looked alike. You can now give yourself a name that
+travels with your messages to the people you talk to, and to nobody else: it
+is not stored on any server, not even your own.
+
+And blocking was the only thing you could do about an unwanted contact. It
+still is the thing that takes effect immediately, but you can now also tell the
+operator of the server, so somebody who is bothering several people can be
+dealt with rather than blocked over and over by each of them separately.
+
+### Added
+
+* **A name for yourself.** One optional field in *My Profile*. The people you
+  chat with see it; leave it empty and they see your address, as before. It
+  reaches somebody with your next message to them rather than all at once, and
+  clearing it takes it back the same way.
+
+* **Contacts show the name they give themselves** where you have not named them
+  yourself — in the chat title, the chat list, group messages and the member
+  list. A name you assigned always wins: renaming somebody is not undone by
+  whatever they call themselves afterwards.
+
+  When a contact changes their name, the chat says so once. That line appears
+  even if you have your own name for them, and it is the point of the feature:
+  somebody you called "Dad" starting to call themselves something else is worth
+  knowing. *Edit name* now offers "Use their name" where you have overridden
+  one, and shows what they call themselves while you decide.
+
+* **Reporting a contact to the operator** (`APP-28`, `SRV-33`), from the
+  contact's profile or as part of blocking them. Four categories, no message
+  to write — the operator cannot read your conversation, so what you send is
+  the reason you are reporting, not evidence.
+
+  **Your address goes with the report**, and the dialog says so before you
+  send it: the operator can come back and ask you what happened, which is the
+  main thing they can actually do about it. You can withdraw a report at any
+  time. The other side is never told.
+
+  For a contact on another server, telling *their* operator as well is a
+  separate question you are asked separately, because it hands your address to
+  an operator you have no relationship with. Your own operator is always told.
+
+* **Admins and moderators get a report queue** in Server Admin, with a count on
+  the menu entry so it is noticed without going looking. Each case shows who
+  reported, when, which category, and what the account calls itself — with
+  whether that name could be verified. Three outcomes: dealt with, dismissed,
+  or the report itself was abusive, which counts against whoever made it.
+
+  A moderator sees cases about regular members; anything about a moderator or
+  an admin is for admins. Nothing acts on its own — a report is a reason to
+  look, and to ask.
+
+### Fixed
+
+* A chat's title and the chat list ignored the name a contact gives itself, so
+  they still showed a short address after that name had already arrived.
+
+* The report queue was always empty, on every role, because the request was
+  signed in a way the server could not verify. Reports were being filed
+  correctly the whole time.
+
+* Opening Server Admin against a server that does not offer reporting failed
+  with "this address doesn't point to a Freizone server" instead of simply not
+  offering it.
+
+
 ## [0.24.0] — 2026-08-24 (versionCode 30)
 
 Inviting somebody, mostly. It is the one thing in this app you do *for* another
