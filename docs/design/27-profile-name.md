@@ -77,6 +77,22 @@ the transcript gets a plain system line — "now calls themselves Y" — on
 SRV-29's precedent that a fact about the other side is stated once in the
 transcript and not badged anywhere.
 
+**The core writes that line, not this app** — reversing what this document
+first sketched, and for the reason that decides it: the claim is applied on
+receipt, which includes a background push wake with no UI running at all, so a
+line the wake does not write is a line nobody ever sees. It is the same place
+the re-key markers and SRV-29's own line are written, and it is frozen into the
+transcript when written, on APP-18's precedent.
+
+Two cases get **no** line, both deliberately. A **first** claim: it arrives
+before its conversation exists, and there was no earlier name for it to be a
+change from — "now calls themselves Anna" would be explaining a change nobody
+saw, when the chat is simply labelled with the name from the start. And a
+**group member with no one-to-one chat**, which has nowhere to put it; minting
+a chat to hold a notice would put every member in the chat list, the very thing
+`PeerEndpoint` was split out of `Conversation` to avoid. Their name is adopted
+either way.
+
 Adopting silently was rejected: a contact renaming itself to "Bank Support" is
 exactly the case this feature could otherwise be used for, and the user is the
 only one positioned to notice. Not adopting at all was rejected too — then
@@ -108,10 +124,16 @@ nothing from the protocol.
 
 ## The reset entry
 
-Where a local name and a suggestion both exist, the contact and peer-profile
-screens offer "use the name they gave" — the reset half of the original idea.
-It only appears when there is something to reset to, and it does not appear at
-all where there was never a local override, because there is nothing to undo.
+The reset turns out to be a *wording* change, not a new action: clearing the
+local name is already exactly what hands the label back to them. So the rename
+dialog's existing "Remove" button reads **"Use their name"** wherever a
+suggestion exists and this device has overridden it — same code path, honest
+description of the outcome. Calling it "Remove" there would name a result that
+does not happen, since the contact does not become nameless.
+
+The dialog also states the suggestion under the field ("They call themselves
+X."), so the choice is visible at the moment it is made rather than only
+afterwards.
 
 ## What it must not become
 

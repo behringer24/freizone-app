@@ -605,7 +605,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) =>
-          RenameDialog(initialName: widget.contacts.nameFor(accountId) ?? ''),
+          RenameDialog(
+            initialName: widget.contacts.nameFor(accountId) ?? '',
+            suggestedName: widget.contacts.suggestedNameFor(accountId),
+          ),
     );
     if (result == null) return;
     if (result.isEmpty) {

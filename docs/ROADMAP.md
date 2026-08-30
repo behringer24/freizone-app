@@ -1336,7 +1336,7 @@ opening a menu and reading it.
   wrongly. Saying so rather than writing a test that would pass either way.
 
 ### APP-27 — Showing the name a contact asserts
-Status: `in progress` · Depends on: SRV-32 · Related: APP-18, APP-19
+Status: `done` · Depends on: SRV-32 · Related: APP-18, APP-19
 Design: [design/27-profile-name.md](design/27-profile-name.md)
 
 SRV-32 lets an account assert one optional, signed name about itself, carried
@@ -1410,3 +1410,23 @@ because it looks helpful.
     rebuilding the core with the send path reverted to the session's starting
     commit -- it fails there too. **Not fixed here**, since it belongs to
     whoever owns that test's expectations
+
+- 2026-08-30 — **done.** The second half: the rename notice, the reset, and the
+  two names side by side.
+  - the **notice is written by the core**, not here, reversing what design/27
+    sketched -- it happens on receipt, including a background wake with no UI,
+    and a line the wake does not write is a line nobody sees. Details and the
+    two cases that get no line are in freizone-server's SRV-32 entry
+  - the **reset turned out to be a wording change**, not a new action: clearing
+    the local name is already what hands the label back to them, so the rename
+    dialog's existing "Remove" reads "Use their name" wherever a suggestion
+    exists and this device has overridden it. Calling it "Remove" there would
+    name an outcome that does not happen. The dialog also states the suggestion
+    under the field, so the choice is visible while it is made
+  - "They call themselves X" appears on the peer profile and the contact detail
+    screen, and **only where the two differ** -- the one place the difference is
+    the point. Never decorated as a verification: anyone may call themselves
+    anything, and all a signature proves is that this account said it
+  - `test/person_label_test.dart` gained the chain's middle link, including the
+    one that matters most -- an asserted name never wins over a name assigned
+    here, or renaming somebody would not survive what they assert next

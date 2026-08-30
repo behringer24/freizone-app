@@ -52,8 +52,10 @@ class PeerProfileScreen extends StatelessWidget {
   ) async {
     final result = await showDialog<String>(
       context: context,
-      builder: (context) =>
-          RenameDialog(initialName: contacts.nameFor(peerAccountId) ?? ''),
+      builder: (context) => RenameDialog(
+        initialName: contacts.nameFor(peerAccountId) ?? '',
+        suggestedName: contacts.suggestedNameFor(peerAccountId),
+      ),
     );
     if (result == null) return; // cancelled
     if (result.isEmpty) {
@@ -168,7 +170,10 @@ class PeerProfileScreen extends StatelessWidget {
               ListTile(
                 title: const Text('Peer name'),
                 subtitle: Text(
-                  assignedName ?? 'No name set -- shows the address instead',
+                  assignedName ??
+                      (contacts.suggestedNameFor(peerAccountId) == null
+                          ? 'No name set -- shows the address instead'
+                          : 'Not named here -- shows the name they give'),
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.edit_outlined),
@@ -176,6 +181,17 @@ class PeerProfileScreen extends StatelessWidget {
                   onPressed: () => _showRenameDialog(context, convo),
                 ),
               ),
+              // Shown only where the two differ, which is the one place the
+              // difference is the point: you call them X, they call themselves
+              // Y (APP-27). Deliberately not decorated as a verification --
+              // anyone may call themselves anything, and all the signature
+              // proves is that this account said it.
+              if (contacts.suggestedNameFor(peerAccountId) case final theirs?)
+                if (theirs != assignedName)
+                  ListTile(
+                    title: const Text('They call themselves'),
+                    subtitle: Text(theirs),
+                  ),
               ListTile(
                 title: const Text('Short address'),
                 subtitle: Text(shortAddress),

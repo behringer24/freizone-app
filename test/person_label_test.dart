@@ -49,4 +49,57 @@ void main() {
       expect(personLabelCompact(storeWith(name: '  '), clara), 'qclar');
     });
   });
+
+  _profileNameTests();
+}
+
+// The asserted name (APP-27) is the middle link in the label chain: it stands
+// in where this device has assigned nothing, and never over an assigned name.
+void _profileNameTests() {
+  ContactStore storeWith({String? name, String? asserted}) {
+    final store = ContactStore.inMemory(
+      contacts: name == null ? const [] : [Contact(accountId: clara, name: name)],
+    );
+    if (asserted != null) store.setSuggestedNames({clara: asserted});
+    return store;
+  }
+
+  group('an asserted name', () {
+    test('labels somebody this device has not named', () {
+      expect(
+        personLabel(storeWith(asserted: 'Clara S.'), clara),
+        'Clara S. (qclar)',
+      );
+    });
+
+    test('never wins over a name assigned here', () {
+      // The whole point of being able to rename somebody: what the user chose
+      // has to survive whatever the other side asserts afterwards.
+      expect(
+        personLabel(storeWith(name: 'Clara', asserted: 'Bank Support'), clara),
+        'Clara (qclar)',
+      );
+    });
+
+    test('is dropped for display when it is withdrawn', () {
+      // A withdrawal reaches the store as an absent entry, not an empty one --
+      // the core leaves the peer out of the map entirely.
+      final store = storeWith(asserted: 'Clara S.');
+      store.setSuggestedNames({});
+      expect(personLabel(store, clara), 'qclar');
+    });
+
+    test('is kept apart from the name a report could forward', () {
+      // Two questions, two answers: nameFor is the private note and must never
+      // be what suggestedNameFor returns, or a report would carry it.
+      final store = storeWith(name: 'Dad', asserted: 'Clara S.');
+      expect(store.nameFor(clara), 'Dad');
+      expect(store.suggestedNameFor(clara), 'Clara S.');
+      expect(store.labelNameFor(clara), 'Dad');
+    });
+
+    test('shows in the compact row too, where there is no assigned name', () {
+      expect(personLabelCompact(storeWith(asserted: 'Clara S.'), clara), 'Clara S.');
+    });
+  });
 }
