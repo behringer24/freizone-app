@@ -1358,7 +1358,7 @@ rule literally true.
 grows one link in the middle.
 
 ### APP-28 — Reporting someone, and working through reports
-Status: `planned` · Depends on: SRV-33, APP-27 · Related: APP-10, APP-11
+Status: `done` · Depends on: SRV-33, APP-27 · Related: APP-10, APP-11
 Design: [design/28-report-and-moderation.md](design/28-report-and-moderation.md)
 
 Two surfaces from one feature. **Reporting** lives inside the existing personal
@@ -1430,3 +1430,36 @@ because it looks helpful.
   - `test/person_label_test.dart` gained the chain's middle link, including the
     one that matters most -- an asserted name never wins over a name assigned
     here, or renaming somebody would not survive what they assert next
+
+- 2026-08-30 — **done**, in two passes: the report flow, then the moderation
+  side.
+  - reporting sits **inside** blocking (`confirmAndBlock`'s checkbox), with the
+    standalone entry kept for the other case -- tell the operator, keep
+    reading. The dialog states before sending what a user would otherwise learn
+    after: the operator sees their address and can ask them about it
+  - **no free-text field**, four categories, and the reason said out loud on
+    the dialog: the operator cannot read the conversation, so a report is a
+    reason to look rather than evidence
+  - what travels is shown, and it is the *asserted* name (APP-27) -- with no
+    claim the dialog says so instead of substituting the local one, which lives
+    in a different store precisely so it cannot end up here
+  - telling the reported account's own server is a second question, and the
+    option appears only where that server accepts reports. Whether **this**
+    server does comes from the status fetch (absent means off), so the entry is
+    absent rather than drawn and failing
+  - the count rides on the **Server Admin menu entry**, loaded with the role
+    rather than when that area is opened. Staff who never open it would
+    otherwise never learn a report exists, and the button every member sees
+    would be a placebo
+  - the queue is its own screen with the *cases*, not the counters: who
+    reported, when, which category, what the account calls itself and whether
+    the signature checked out. Both addresses open the admin account view,
+    which is where asking either side already lives
+  - three outcomes and no counter reset. `abusive` counts against the reporter,
+    which is the counterweight to reporting being named
+  - **withdrawal is offered unconditionally**: nothing tells this device what it
+    has reported, so the entry cannot say whether there is anything to take
+    back. Named in design/28 as the honest cost rather than papered over
+  - a "most reported" sort order was considered and **not** built -- a column
+    that is zero for every row is the poor way in the reasoning rejects, and
+    the discreet marker on affected rows covers noticing one in passing

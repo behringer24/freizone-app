@@ -546,6 +546,53 @@ class AppSession extends ChangeNotifier {
   bool federationLockedFor(String? server) =>
       server != null && !federationEnabled;
 
+  /// The open moderation queue (SRV-33), newest first. Empty until fetched,
+  /// and empty for a caller who is neither admin nor moderator -- the server
+  /// answers 403, which is not an error but the answer.
+  ///
+  /// Only reports about *regular members* reach a moderator; ones targeting
+  /// staff are admin-only and the server does not send them at all. So a short
+  /// list here is the rule working, not a fetch that missed something.
+  List<AdminReport> openReports = [];
+
+  /// Refreshes [openReports].
+  ///
+  /// Called from [refreshMyRole] for staff, which is what puts the count on
+  /// the Server Admin menu entry *before* anybody opens that area -- staff who
+  /// never open it would otherwise never learn a report exists, and the report
+  /// button every member sees would be a placebo.
+  ///
+  /// Deliberately does not pre-check [reportsEnabled]: that value may not have
+  /// been fetched yet at this point in a session's life, and a server without
+  /// reports answers 404, which is handled below anyway.
+  Future<void> refreshReports() async {
+    try {
+      openReports = await api.listReports(state.credentials);
+    } on ApiException catch (e) {
+      // 403: not staff. 404: this server does not accept reports after all --
+      // the status said otherwise, which can happen across a restart. Neither
+      // is worth surfacing; both mean there is nothing to show.
+      if (e.statusCode == 403 || e.statusCode == 404) {
+        openReports = [];
+      } else {
+        rethrow;
+      }
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  /// Records an outcome and drops the case from [openReports].
+  ///
+  /// Dropped from the *open* list only -- the report itself stays on the
+  /// server, readable, which is what lets the next moderator see there was one
+  /// and how it went.
+  Future<void> resolveReport(int reportId, String outcome) async {
+    await api.resolveReport(state.credentials, reportId, outcome);
+    openReports = openReports.where((r) => r.id != reportId).toList();
+    notifyListeners();
+  }
+
   /// Refreshes [myRole] and [adminAccounts] from the server. A 403 means
   /// this device is neither admin nor moderator -- not an error, just
   /// the answer. Call once after [init] and again whenever the admin
@@ -576,6 +623,10 @@ class AppSession extends ChangeNotifier {
       // with an errno and an ephemeral port number.
       _noteFailure('checking admin role failed', e);
     }
+    // Only staff have a queue to count, and only they can see one. Not
+    // awaited: the role is what the caller was after, and a slow report fetch
+    // must not hold up the menu it belongs to.
+    if (myRole != null) unawaited(refreshReports());
     notifyListeners();
   }
 

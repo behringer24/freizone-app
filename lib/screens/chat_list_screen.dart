@@ -934,9 +934,21 @@ class _ChatListScreenState extends State<ChatListScreen> {
             // menu.
             itemBuilder: (context) => [
               if (session.myRole == 'admin' || session.myRole == 'moderator')
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'admin',
-                  child: Text('Server Admin'),
+                  // The count rides on the menu entry, not only inside the
+                  // area: staff who never open Server Admin would otherwise
+                  // never learn a report exists, and the report button
+                  // everybody else sees would be a placebo (APP-28).
+                  child: Row(
+                    children: [
+                      const Text('Server Admin'),
+                      if (session.openReports.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Badge(label: Text('${session.openReports.length}')),
+                      ],
+                    ],
+                  ),
                 ),
               const PopupMenuItem(
                 value: 'blocked',

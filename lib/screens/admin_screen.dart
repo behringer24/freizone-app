@@ -17,6 +17,7 @@ import '../util/role_icon.dart';
 import '../widgets/admin_search_field.dart';
 import '../widgets/verified_badge.dart';
 import 'admin_account_screen.dart';
+import 'admin_reports_screen.dart';
 import 'admin_stats_screen.dart';
 
 class AdminScreen extends StatefulWidget {
@@ -80,6 +81,9 @@ class _AdminScreenState extends State<AdminScreen> {
       // -- this is what populates ownAttestation (SRV-19 / APP-22), same as
       // every other screen that shows it.
       await widget.session.refreshRegistrationPolicy();
+      // After the status fetch above, which is what says whether this server
+      // accepts reports at all (SRV-33).
+      await widget.session.refreshReports();
       // Admin only (SRV-22) -- moderators get a 403 there, so this stays
       // scoped to the role that can actually act on it (renew, cut seats).
       // _isAdmin reads myRole, which refreshMyRole above just updated.
@@ -452,6 +456,52 @@ class _AdminScreenState extends State<AdminScreen> {
   /// The "Users" heading, the search box, and the sort control (APP-10). The
   /// count reads "showing N of M" only while a search is narrowing things, so
   /// the unfiltered case stays quiet.
+  /// The way into the moderation queue (APP-28).
+  ///
+  /// An entry with a count rather than a sort order on the list below: on a
+  /// healthy server nothing is reported, and a column that is zero for every
+  /// row is a poor way in. The count is what makes it worth looking at at all
+  /// -- without it an admin who never opens this area never learns a report
+  /// exists, and the whole feature is a placebo.
+  ///
+  /// Absent where the server does not accept reports, rather than present and
+  /// empty: there is nothing to moderate and nothing to explain.
+  Widget _buildReportsEntry(BuildContext context) {
+    if (!widget.session.reportsEnabled) return const SizedBox.shrink();
+    final open = widget.session.openReports.length;
+
+    return Column(
+      children: [
+        ListTile(
+          leading: Badge(
+            isLabelVisible: open > 0,
+            label: Text('$open'),
+            child: const Icon(Icons.flag_outlined),
+          ),
+          title: const Text('Reports'),
+          subtitle: Text(
+            open == 0
+                ? 'Nothing waiting'
+                : open == 1
+                ? '1 report waiting'
+                : '$open reports waiting',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => AdminReportsScreen(
+                session: widget.session,
+                settings: widget.settings,
+                contacts: widget.contacts,
+              ),
+            ),
+          ),
+        ),
+        const Divider(height: 32),
+      ],
+    );
+  }
+
   Widget _buildUsersHeader(
     BuildContext context,
     List<AdminAccountSummary> all,
@@ -528,16 +578,29 @@ class _AdminScreenState extends State<AdminScreen> {
           ),
         ),
       ),
-      title: Text(formatAccountIdForDisplay(account.id)),
+      title: Row(
+        children: [
+          Flexible(child: Text(formatAccountIdForDisplay(account.id))),
+          // Discreet, and only where there is something: somebody who came to
+          // this list for another reason should still notice, without the
+          // marker becoming the list's subject on a server where nothing is
+          // reported (APP-28).
+          if (account.hasOpenReports) ...[
+            const SizedBox(width: 8),
+            Icon(
+              Icons.flag,
+              size: 16,
+              color: Theme.of(context).colorScheme.error,
+            ),
+          ],
+        ],
+      ),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('${account.role}${blocked ? ' -- blocked for all' : ''}'),
           if (activity != null)
-            Text(
-              activity,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            Text(activity, style: Theme.of(context).textTheme.bodySmall),
         ],
       ),
       trailing: canBlock
@@ -556,7 +619,10 @@ class _AdminScreenState extends State<AdminScreen> {
                 // Role and delete stay admin-only, so a moderator's menu holds
                 // the block entry alone.
                 if (_isAdmin)
-                  const PopupMenuItem(value: 'set_role', child: Text('Set role')),
+                  const PopupMenuItem(
+                    value: 'set_role',
+                    child: Text('Set role'),
+                  ),
                 if (canBlock)
                   PopupMenuItem(
                     value: 'toggle_block',
@@ -623,6 +689,7 @@ class _AdminScreenState extends State<AdminScreen> {
                     const Divider(height: 32),
                     _buildAttestationSection(context),
                     const Divider(height: 32),
+                    _buildReportsEntry(context),
                     _buildUsersHeader(context, accounts, shown),
                     // A search that matches nothing needs saying out loud --
                     // an empty list under a filled-in search box otherwise
