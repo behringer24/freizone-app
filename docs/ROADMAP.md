@@ -1463,3 +1463,18 @@ because it looks helpful.
   - a "most reported" sort order was considered and **not** built -- a column
     that is zero for every row is the poor way in the reasoning rejects, and
     the discreet marker on affected rows covers noticing one in passing
+
+- 2026-08-30 — **`core_stream_test.dart`'s drain test was failing, and it took
+  building the desktop core to notice.** It is gated on `skip: coreMissing`, so
+  it silently does not run unless `native/build_desktop.ps1` has produced a
+  library -- worth knowing on its own: that file's five tests are invisible on
+  a checkout that has never built one.
+  - the fault was the test's own choice of refusal. Its catch-all answered
+    every housekeeping request `404`, meaning to say "this is best-effort, let
+    it fail" -- but on `GET /v1/accounts/{id}` a 404 is not a failure, it is
+    the protocol's statement that the account does not exist (§4). The core
+    believed it, correctly, and filed the peer as gone (SRV-29), which appends
+    a system line -- so the last transcript entry was that line rather than the
+    message the test was reading back
+  - answered `503` instead. A server that is merely unhelpful has to answer
+    like one, and the assertion then says what it always meant
