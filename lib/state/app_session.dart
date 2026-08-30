@@ -30,6 +30,7 @@ import '../util/freizone_address.dart';
 import '../util/gallery.dart';
 import '../util/server_url.dart';
 import 'app_settings.dart';
+import 'contact_store.dart';
 import 'chat_target.dart';
 import 'conversation.dart';
 import 'core_account.dart';
@@ -147,12 +148,19 @@ class AppSession extends ChangeNotifier {
   /// from a path, because an isolate is told the same way (see
   /// FreizoneCore.libraryPath, and CoreAccount's construction in [init] --
   /// it passes this instance's path on) and by name it would find nothing.
-  AppSession(this.state, {FreizoneCore? core}) : core = core ?? FreizoneCore() {
+  AppSession(this.state, {FreizoneCore? core, this.contacts})
+    : core = core ?? FreizoneCore() {
     api = ApiClient(baseUrl: state.server, core: this.core);
   }
 
   final AppState state;
   final FreizoneCore core;
+
+  /// The device-wide contact store, when there is one -- absent in the tests
+  /// that build a session without an app around it. Held so every core refresh
+  /// can hand it this account's peers' asserted names (APP-27), which is the
+  /// only per-account thing in it and is replaced wholesale each time.
+  final ContactStore? contacts;
   late final ApiClient api;
   CoreStream? _sse;
 
@@ -711,7 +719,7 @@ class AppSession extends ChangeNotifier {
     // this session was frozen -- it opens the same core handle's on-disk
     // state, see doCoreSync -- rather than re-reading a Dart-side profile the
     // wake no longer writes.
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
     // Reopen the live stream that backgrounding closed, so the foregrounded
     // app is back on the fast path (and the server stops pushing to it).
     _startStream();
@@ -845,7 +853,7 @@ class AppSession extends ChangeNotifier {
     // Whatever the core already holds from a previous run, before the first
     // paint -- the same rebuild-whole read _handleIncoming and every send
     // below trigger on their own, just run once up front here.
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
 
     // Before anything can confirm or record anything: the switch is app-wide
     // and the core keeps its own per-account copy, so a session that never
@@ -1555,7 +1563,7 @@ class AppSession extends ChangeNotifier {
     if (topic.isNotEmpty) {
       await coreAccount.setGroupMeta(groupId, name, topic);
     }
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
     notifyListeners();
     return state.groups[groupId]!;
   }
@@ -1699,7 +1707,7 @@ class AppSession extends ChangeNotifier {
   Future<void> declineGroupInvite(String groupId) async {
     await coreAccount.leaveGroup(groupId);
     coreAccount.deleteChat(groupId);
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
     notifyListeners();
   }
 
@@ -1753,7 +1761,7 @@ class AppSession extends ChangeNotifier {
   Future<void> leaveAndDeleteGroup(String groupId) async {
     await coreAccount.leaveGroup(groupId);
     coreAccount.deleteChat(groupId);
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
     notifyListeners();
   }
 

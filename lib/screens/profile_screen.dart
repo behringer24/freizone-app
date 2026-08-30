@@ -253,6 +253,19 @@ class ProfileScreen extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: Text(
+                  'Your name',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              _ProfileNameField(session: session),
+              const SizedBox(height: 16),
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
                   'Security',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
@@ -360,3 +373,134 @@ class _OwnServerListTileState extends State<_OwnServerListTile> {
     );
   }
 }
+
+/// The name this account asserts about itself (APP-27).
+///
+/// One field, optional, empty by default -- and the sentence under it is the
+/// whole of what a user needs to decide: it goes to the people they talk to,
+/// with their messages, and to no server. Clearing it is a real action, not an
+/// absence: the withdrawal travels the same way the name did.
+class _ProfileNameField extends StatefulWidget {
+  const _ProfileNameField({required this.session});
+
+  final AppSession session;
+
+  @override
+  State<_ProfileNameField> createState() => _ProfileNameFieldState();
+}
+
+class _ProfileNameFieldState extends State<_ProfileNameField> {
+  final _controller = TextEditingController();
+
+  /// What the core holds, so the button knows whether there is a change to
+  /// save. Null until the first read has answered.
+  String? _saved;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final account = widget.session.coreAccount;
+    try {
+      final profile = await account.profileName();
+      if (!mounted) return;
+      setState(() {
+        _saved = profile.name;
+        _controller.text = profile.name;
+      });
+    } catch (_) {
+      // Nothing to show and nothing to say: the field simply stays empty, and
+      // saving still works. An error here is not something a user can act on.
+    }
+  }
+
+  Future<void> _save() async {
+    final account = widget.session.coreAccount;
+
+    final name = _controller.text.trim();
+    setState(() => _saving = true);
+    try {
+      await account.setProfileName(name);
+      if (!mounted) return;
+      setState(() {
+        _saved = name;
+        _controller.text = name;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(name.isEmpty ? 'Name removed' : 'Name saved'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(describeError(e))));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final changed = _saved != null && _controller.text.trim() != _saved;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _controller,
+            enabled: !_saving,
+            // The server's own limit (PROTOCOL §6). Enforced here as well so a
+            // name is cut off while it is being typed rather than refused
+            // after the fact.
+            maxLength: profileNameMaxLength,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              labelText: 'Name (optional)',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => changed ? _save() : null,
+          ),
+          Text(
+            'People you chat with see this name. It travels with your '
+            'messages and is not stored on any server. Leave it empty and '
+            'they see your address instead.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              onPressed: changed && !_saving ? _save : null,
+              child: Text(_controller.text.trim().isEmpty ? 'Remove' : 'Save'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The longest name a claim may carry, in characters.
+///
+/// The protocol bounds it in *bytes* (64), which a text field cannot express.
+/// Half that in characters is under the byte limit for anything up to
+/// four-byte code points, so this never lets somebody type a name the core
+/// will then refuse.
+const profileNameMaxLength = 32;

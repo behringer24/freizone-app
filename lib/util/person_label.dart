@@ -38,6 +38,6 @@ String personLabelCompact(ContactStore contacts, String accountId) =>
 /// The stored name, with blank treated as absent -- it would otherwise render
 /// as ` (qk43r)` or as an empty author.
 String? _assignedName(ContactStore contacts, String accountId) {
-  final name = contacts.nameFor(accountId)?.trim();
+  final name = contacts.labelNameFor(accountId)?.trim();
   return name == null || name.isEmpty ? null : name;
 }

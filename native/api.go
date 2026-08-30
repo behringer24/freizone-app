@@ -1115,3 +1115,64 @@ func formatOptional(t *time.Time) string {
 	}
 	return t.UTC().Format(time.RFC3339Nano)
 }
+
+type coreProfileNameRequest struct {
+	Handle int64  `json:"handle"`
+	Name   string `json:"name"`
+}
+
+// doCoreSetProfileName records the name this account asserts about itself
+// (SRV-32).
+//
+// Nothing is sent from here. The claim rides on the next envelope to each
+// peer, so a rename costs no delivery of its own and reaches people at the
+// moment it becomes relevant to them.
+func doCoreSetProfileName(req coreProfileNameRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	return struct{}{}, entry.client.SetProfileName(req.Name)
+}
+
+type profileNameDTO struct {
+	Name string `json:"name"`
+
+	// SetAt is empty when a name was never set. Empty Name *with* a SetAt is a
+	// name that was set and then cleared, which is a different state: the
+	// withdrawal has been sent to peers, where "never set" has nothing to send.
+	SetAt string `json:"set_at,omitempty"`
+}
+
+func doCoreProfileName(req coreHandleRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	name, setAt, err := entry.client.ProfileName()
+	if err != nil {
+		return nil, err
+	}
+	return profileNameDTO{Name: name, SetAt: formatOptional(setAt)}, nil
+}
+
+// doCorePeerProfileNames is every peer's asserted name in one call, keyed by
+// account id.
+//
+// One call because the callers are lists. A peer who has asserted nothing, or
+// withdrawn it, is simply absent -- so a caller falls back to the short id by
+// finding no entry, rather than by testing for an empty string everywhere.
+func doCorePeerProfileNames(req coreHandleRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	names, err := entry.client.PeerProfileNames()
+	if err != nil {
+		return nil, err
+	}
+	if names == nil {
+		names = map[string]string{}
+	}
+	return names, nil
+}
