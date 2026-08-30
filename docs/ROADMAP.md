@@ -1334,3 +1334,79 @@ opening a menu and reading it.
   `AppSettings` and `ContactStore` standing up in a widget test, and the fault is
   structural rather than logical — a widget not listening, not a rule computed
   wrongly. Saying so rather than writing a test that would pass either way.
+
+### APP-27 — Showing the name a contact asserts
+Status: `in progress` · Depends on: SRV-32 · Related: APP-18, APP-19
+Design: [design/27-profile-name.md](design/27-profile-name.md)
+
+SRV-32 lets an account assert one optional, signed name about itself, carried
+inside the encrypted channel. This is the display half: an optional field in
+one's own profile, the asserted name as a fallback label where no contact name
+exists, a transcript line when somebody changes theirs, and a reset entry back
+to it.
+
+The suggestion is **not** written to APP-19's `ContactStore` — it is kept in
+the core's per-account state, because it is a statement *they* made to *one* of
+my accounts rather than my own judgement about a person, because the receive
+path runs in the push isolate where the contact store must not be touched, and
+because APP-28 forwards the asserted name and must never be able to reach the
+private petname. Adopting a suggestion is the deliberate act that turns it into
+an ordinary contact, which keeps APP-19's "never from having seen an account"
+rule literally true.
+
+`personLabel` (APP-18) stays the one function every surface calls; the chain
+grows one link in the middle.
+
+### APP-28 — Reporting someone, and working through reports
+Status: `planned` · Depends on: SRV-33, APP-27 · Related: APP-10, APP-11
+Design: [design/28-report-and-moderation.md](design/28-report-and-moderation.md)
+
+Two surfaces from one feature. **Reporting** lives inside the existing personal
+block in `peer_profile_screen.dart` rather than beside it, states in one
+sentence that the operator sees the reporter's address, offers four categories
+and no free text, shows what will be sent — the *asserted* name from APP-27,
+never the local one — and asks separately before handing a reporter's identity
+to a federated operator they do not know.
+
+**Moderation** gets its own Reports entry with a badge, not a sort order, since
+nothing is reported on a healthy server; the account detail screen (APP-11)
+grows the individual cases, because a counter is not the working unit. Three
+outcomes — actioned, dismissed, abusive — and no counter reset. Contacting the
+reported account and the reporter are both one tap, with **nothing prefilled**:
+that convenience would expose the reporter, and it is tempting precisely
+because it looks helpful.
+
+- **Named limit to state in the UI**: reporting the server's only admin
+  delivers the report to the person it is about.
+
+- 2026-08-30 — **first half shipped**: the core bridge, the display fallback and
+  the field for one's own name.
+  - three core calls (`set_profile_name`, `profile_name`, `peer_profile_names`),
+    with the last one a **local read** like `chats` rather than an isolate hop --
+    it is called while a list is being built, where the hop would buy nothing
+    and cost a frame
+  - `personLabel` stays the one function every surface calls (APP-18). Rather
+    than adding a parameter at six call sites, the store gained
+    `labelNameFor` -- assigned name, else asserted name, else the short id --
+    while `nameFor` stays "what I called them" and remains the only half that
+    is written to the file, offered for editing, or reachable by a report
+  - the asserted names are a **cache within the device-wide store**, set by
+    `applyCoreState` and replaced wholesale on every refresh and account
+    switch. That is what keeps APP-19's rule intact: the persisted half stays
+    account-independent, and the per-account half is owned by the core beside
+    that account's other state. `AccountManager` and `AppSession` now carry the
+    store so the refresh can reach it
+  - the profile screen has one optional field with the sentence that decides
+    it: this goes to the people you chat with, with your messages, and to no
+    server
+- 2026-08-30 — two things found on the way, neither caused here:
+  - `native/go.mod` pinned `go 1.26.4` while freizone-server has moved to
+    `1.26.6`, so the native module **did not build at all**. Raised to match;
+    verified by building the baseline before touching anything
+  - `test/core_stream_test.dart`'s "a connect drains the queue" fails: the
+    transcript ends with the SRV-29 account-gone system line rather than the
+    message, because the test's server answers `not_found` to everything and
+    the receipt sent afterwards resolves the peer. Confirmed pre-existing by
+    rebuilding the core with the send path reverted to the session's starting
+    commit -- it fails there too. **Not fixed here**, since it belongs to
+    whoever owns that test's expectations

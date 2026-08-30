@@ -149,7 +149,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       await LocalStateStore.listProfileJson(),
     );
 
-    final manager = await AccountManager.load(widget.settings);
+    final manager = await AccountManager.load(widget.settings, widget.contacts);
     if (!mounted) return;
     setState(() {
       _manager = manager;

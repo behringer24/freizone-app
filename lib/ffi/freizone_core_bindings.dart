@@ -93,6 +93,9 @@ class FreizoneCoreBindings {
       coreGroupSyncRequest = _lookupWithReq(lib, 'CoreGroupSyncRequest'),
       coreForgetPeer = _lookupWithReq(lib, 'CoreForgetPeer'),
       coreSetReceiptsEnabled = _lookupWithReq(lib, 'CoreSetReceiptsEnabled'),
+      coreSetProfileName = _lookupWithReq(lib, 'CoreSetProfileName'),
+      coreProfileName = _lookupWithReq(lib, 'CoreProfileName'),
+      corePeerProfileNames = _lookupWithReq(lib, 'CorePeerProfileNames'),
       coreGroupDissolve = _lookupWithReq(lib, 'CoreGroupDissolve'),
       coreGroupInfo = _lookupWithReq(lib, 'CoreGroupInfo'),
       coreMaintain = _lookupWithReq(lib, 'CoreMaintain'),
@@ -214,5 +217,8 @@ class FreizoneCoreBindings {
   final WithReqFn coreGroupSyncRequest;
   final WithReqFn coreForgetPeer;
   final WithReqFn coreSetReceiptsEnabled;
+  final WithReqFn coreSetProfileName;
+  final WithReqFn coreProfileName;
+  final WithReqFn corePeerProfileNames;
   final WithReqFn coreGroupDissolve;
 }

@@ -242,6 +242,39 @@ class ContactStore extends ChangeNotifier {
   /// them. The single question every screen asks this store.
   String? nameFor(String accountId) => _contacts[accountId]?.name;
 
+  /// The name to *show* for an account: what this device assigned, or -- where
+  /// it assigned none -- what that account asserts about itself (APP-27).
+  ///
+  /// Kept apart from [nameFor], which stays "what I called them" and is the
+  /// only half that is ever written to the file, sent anywhere, or offered for
+  /// editing. A report forwards the asserted claim and must never be able to
+  /// reach the private one, and a reset needs both side by side.
+  String? labelNameFor(String accountId) =>
+      nameFor(accountId) ?? _suggested[accountId];
+
+  /// What [accountId] calls itself, whether or not this device has renamed
+  /// them. Null when they have asserted nothing.
+  String? suggestedNameFor(String accountId) => _suggested[accountId];
+
+  /// The asserted names of the **currently open account's** peers, as the core
+  /// holds them.
+  ///
+  /// A cache of core state and nothing more: never written to this store's
+  /// file, and replaced wholesale on every refresh and every account switch.
+  /// That is what lets it live in a device-wide store without contradicting
+  /// APP-19 -- the persisted half stays account-independent, while a claim is
+  /// a statement made *to one account of mine* and is owned by the core beside
+  /// that account's other state.
+  void setSuggestedNames(Map<String, String> names) {
+    if (mapEquals(_suggested, names)) return;
+    _suggested
+      ..clear()
+      ..addAll(names);
+    notifyListeners();
+  }
+
+  final Map<String, String> _suggested = {};
+
   /// The import report, while it still has something to say.
   ContactImportReport? get pendingReport =>
       _report?.worthShowing == true ? _report : null;

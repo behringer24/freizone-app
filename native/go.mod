@@ -1,6 +1,6 @@
 module github.com/behringer24/freizone-app/native
 
-go 1.26.4
+go 1.26.6
 
 require github.com/behringer24/freizone-server v0.0.0-00010101000000-000000000000
 
