@@ -280,6 +280,75 @@ class PeerProfileScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
+              // Its own section, in the same shape as Encryption and
+              // Protection either side of it: a coloured heading, a sentence
+              // saying what the action actually does, then the button. Red,
+              // because it is about somebody's conduct and reaches an operator
+              // -- and placed between the two, since it sits between "recover
+              // this conversation" and "end it".
+              //
+              // Reporting without blocking is the case this covers: somebody
+              // the user wants the operator to know about but still wants to
+              // hear from. The ordinary path is the checkbox inside blocking.
+              if (session.reportsEnabled) ...[
+                const SizedBox(height: 32),
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    'Report',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    'Tells the operator of ${convo.peerServer ?? session.state.server} about this account. '
+                    'They see the report with your address and can ask you about it -- messages are '
+                    'encrypted, so your account of what happened is all they have. Nothing is sent to '
+                    'the other side, and you can withdraw it again.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                      side: BorderSide(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                    onPressed: () => reportContact(
+                      context,
+                      session,
+                      accountId: peerAccountId,
+                      peerServer: convo.peerServer ?? '',
+                      assertedName: contacts.suggestedNameFor(peerAccountId),
+                    ),
+                    icon: const Icon(Icons.flag_outlined),
+                    label: const Text('Report this contact'),
+                  ),
+                ),
+                // Always offered, never conditioned on knowing one exists:
+                // nothing tells this device what it has reported, and
+                // withdrawing what is not there is the outcome being asked for
+                // rather than a failure.
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: TextButton(
+                    onPressed: () =>
+                        withdrawReportFor(context, session, peerAccountId),
+                    child: const Text('Withdraw my report'),
+                  ),
+                ),
+              ],
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Text(
@@ -321,36 +390,6 @@ class PeerProfileScreen extends StatelessWidget {
                         label: const Text('Block this contact'),
                       ),
               ),
-              // Reporting without blocking, for somebody the user wants the
-              // operator to know about but still wants to hear from. The
-              // ordinary path is the checkbox inside blocking; this is the
-              // other case, not a second way to do the same thing.
-              if (session.reportsEnabled) ...[
-                ListTile(
-                  leading: const Icon(Icons.flag_outlined),
-                  title: const Text('Report to the operator'),
-                  subtitle: const Text(
-                    'They see your address and can ask you about it',
-                  ),
-                  onTap: () => reportContact(
-                    context,
-                    session,
-                    accountId: peerAccountId,
-                    peerServer: convo.peerServer ?? '',
-                    assertedName: contacts.suggestedNameFor(peerAccountId),
-                  ),
-                ),
-                // Always offered, never conditioned on knowing one exists:
-                // nothing tells this device what it has reported, and
-                // withdrawing what is not there is the outcome being asked
-                // for rather than a failure.
-                ListTile(
-                  leading: const Icon(Icons.flag_outlined),
-                  title: const Text('Withdraw my report'),
-                  onTap: () =>
-                      withdrawReportFor(context, session, peerAccountId),
-                ),
-              ],
             ],
           ),
         );

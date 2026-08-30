@@ -1498,3 +1498,27 @@ because it looks helpful.
   - the general lesson, recorded in `test/reports_old_server_test.dart`: for an
     **optional** route a non-JSON 404 means "this route does not exist", never
     "wrong server". Any capability added from here on has the same shape
+
+- 2026-08-30 — **three device findings, two of them real defects.**
+  - **the queue was always empty, on every role.** `listReports` appended
+    `?state=open` to the *path* instead of passing it as `rawQuery`. §3 signs
+    method, path and rawQuery as three separate pieces and the server splits
+    the URL the same way, so the signature could not be reproduced: a 401 that
+    the unconditional catch turned into "nothing waiting". Reports were being
+    filed correctly the whole time -- only reading them was broken. Fixed, and
+    **the catch now logs**: a failure nobody may be shown still has to be
+    findable, which is exactly what was missing while this hid
+  - **the chat title and chat list never showed an asserted name.** APP-27
+    switched `personLabel`, but `Conversation.titleFor` is a separate read path
+    (APP-19's own) and still called `nameFor`. Every display site now uses
+    `labelNameFor`; the four remaining `nameFor` callers are the three rename
+    dialogs and the peer profile's side-by-side comparison, all of which
+    genuinely want the assigned half
+  - reporting got its own section in the shape of Encryption and Protection --
+    coloured heading, a sentence, a button -- red, and between the two, on
+    Andreas' call from the device
+- 2026-08-30 — **not a defect**, worth writing down because it will be asked
+  again: a rename reaches only peers the renaming account has *sent* something
+  to since. The claim rides on ordinary envelopes (SRV-32), so an account that
+  wrote to one contact and not another shows its new name to the first only.
+  There is no fan-out, deliberately.

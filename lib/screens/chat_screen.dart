@@ -599,13 +599,15 @@ class _ChatScreenState extends State<ChatScreen> {
           PeerAvatar(accountId: convo.peerAccountId, radius: 18),
           const SizedBox(width: 12),
           Expanded(
-            child: widget.contacts.nameFor(convo.peerAccountId) != null
+            // The asserted name counts here too (APP-27): this header is what a
+            // reader looks at while the chat is open.
+            child: widget.contacts.labelNameFor(convo.peerAccountId) != null
                 ? Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        widget.contacts.nameFor(convo.peerAccountId)!,
+                        widget.contacts.labelNameFor(convo.peerAccountId)!,
                         overflow: TextOverflow.ellipsis,
                       ),
                       // Always shown alongside the alias, smaller and muted,
