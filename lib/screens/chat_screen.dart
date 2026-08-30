@@ -542,6 +542,7 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (context) => RenameDialog(
         initialName: widget.contacts.nameFor(widget.peerAccountId) ?? '',
+        suggestedName: widget.contacts.suggestedNameFor(widget.peerAccountId),
       ),
     );
     if (result == null) return; // cancelled
