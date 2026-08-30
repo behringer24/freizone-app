@@ -20,6 +20,7 @@ class ServerStatus {
     this.batchMessages = false,
     this.maxBatchMessages = 0,
     this.attestation,
+    this.reportsEnabled = false,
   });
 
   factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
@@ -37,6 +38,11 @@ class ServerStatus {
     // answers 201 -- so assuming otherwise would silently deliver a group
     // picture to a single member. One is also what a server that states 0
     // means: it takes an upload, just not a shared one.
+    // Absent means OFF, on blobs_enabled's rule rather than federation's: a
+    // server that does not advertise reports predates them and has no report
+    // endpoints, so offering the action would produce a 404 the user has to
+    // interpret (SRV-33).
+    reportsEnabled: j['reports_enabled'] as bool? ?? false,
     maxBlobRecipients: () {
       final stated = (j['max_blob_recipients'] as num?)?.toInt() ?? 1;
       return stated < 1 ? 1 : stated;
@@ -84,6 +90,11 @@ class ServerStatus {
   /// FreizoneCore.verifyAttestation against the domain actually being shown,
   /// and only render its result.
   final String? attestation;
+
+  /// Whether this server accepts abuse reports (SRV-33). Absent means off:
+  /// a server too old to say has no endpoints to talk to, so the action is
+  /// not offered rather than offered and refused.
+  final bool reportsEnabled;
 }
 
 /// What one item of a batch send came back as (docs/PROTOCOL.md §7).
@@ -543,6 +554,10 @@ class AdminAccountSummary {
     this.blobBytesLimit = 0,
     this.deviceCount = 0,
     this.invitedBy,
+    this.reportsLocal = 0,
+    this.reportsFederated = 0,
+    this.reportsFiled = 0,
+    this.reportsAbusive = 0,
   });
 
   /// Every activity field defaults rather than being required: a server that
@@ -565,6 +580,10 @@ class AdminAccountSummary {
         blobBytesLimit: (j['blob_bytes_limit'] as num?)?.toInt() ?? 0,
         deviceCount: (j['device_count'] as num?)?.toInt() ?? 0,
         invitedBy: j['invited_by'] as String?,
+        reportsLocal: (j['reports_local'] as num?)?.toInt() ?? 0,
+        reportsFederated: (j['reports_federated'] as num?)?.toInt() ?? 0,
+        reportsFiled: (j['reports_filed'] as num?)?.toInt() ?? 0,
+        reportsAbusive: (j['reports_abusive'] as num?)?.toInt() ?? 0,
       );
 
   final String id;
@@ -601,6 +620,22 @@ class AdminAccountSummary {
   /// least one device, or it could never have registered -- so the device
   /// count is the one field that cannot legitimately be zero on a server that
   /// does report them.
+  /// Open reports **about** this account (SRV-33), split by where they came
+  /// from and deliberately never summed: anybody on any server can raise
+  /// [reportsFederated], so a combined figure is one a stranger can inflate
+  /// and an operator therefore cannot act on. Both are 0 for a moderator
+  /// looking at a staff row -- the server does not send them at all.
+  final int reportsLocal;
+  final int reportsFederated;
+
+  /// The mirror, which is what makes brigading visible: open reports this
+  /// account has **made**, and how often one of them was judged abusive.
+  final int reportsFiled;
+  final int reportsAbusive;
+
+  /// Whether anything about this account is waiting for a moderator.
+  bool get hasOpenReports => reportsLocal > 0 || reportsFederated > 0;
+
   bool get hasActivitySignals => deviceCount > 0;
 }
 
@@ -626,4 +661,67 @@ class MessageResponse {
   final String senderDeviceId;
   final DateTime sentAt;
   final Map<String, dynamic> payload;
+}
+
+/// One report a member filed about an account (SRV-33).
+///
+/// A report is an assertion with no proof behind it -- the server cannot see
+/// what was said, and never will. So this is a reason to talk to somebody,
+/// never a finding, and nothing in the app should render it as one.
+class AdminReport {
+  AdminReport({
+    required this.id,
+    required this.reported,
+    required this.reporter,
+    required this.category,
+    required this.state,
+    required this.createdAt,
+    this.evidence = const [],
+    this.evidenceVerified = false,
+    this.resolvedBy,
+  });
+
+  factory AdminReport.fromJson(Map<String, dynamic> j) => AdminReport(
+    id: (j['id'] as num).toInt(),
+    reported: j['reported'] as String,
+    reporter: j['reporter'] as String,
+    category: j['category'] as String,
+    state: j['state'] as String,
+    createdAt: decodeTime(j['created_at'] as String),
+    evidence: ((j['evidence'] as List<dynamic>?) ?? const [])
+        .map((e) => (e as Map<String, dynamic>)['name'] as String? ?? '')
+        .where((name) => name.isNotEmpty)
+        .toList(),
+    evidenceVerified: j['evidence_verified'] as bool? ?? false,
+    resolvedBy: j['resolved_by'] as String?,
+  );
+
+  final int id;
+
+  /// Both addresses in canonical `id*server` form. The reporter is named on
+  /// purpose: an operator who cannot ask "what happened?" can do nothing with
+  /// a number, and that is the whole design.
+  final String reported;
+  final String reporter;
+
+  final String category;
+
+  /// open | actioned | dismissed | abusive. Resolving is not deleting -- the
+  /// value of an old report is that the next moderator sees there was one.
+  final String state;
+
+  final DateTime createdAt;
+
+  /// The names that account asserted about *itself* (SRV-32), newest first.
+  /// Empty when it asserted none, which is itself worth showing: it means the
+  /// reporter had nothing to hand over, not that something was withheld.
+  final List<String> evidence;
+
+  /// Whether the server could check those signatures, which it can only do for
+  /// an account of its own.
+  final bool evidenceVerified;
+
+  final String? resolvedBy;
+
+  bool get isOpen => state == 'open';
 }

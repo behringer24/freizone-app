@@ -48,9 +48,16 @@ The button is absent, not disabled and not failing, when the user's own server
 does not report `reports_enabled` — the compatibility rule this repo works
 under: discover, never assume.
 
-**Withdrawal** belongs where the report was made: the same section reads
-"reported — withdraw" once one exists. Somebody who bears responsibility for
-an accusation has to be able to take it back.
+**Withdrawal** sits in the same section, and is offered **unconditionally**
+rather than only where a report is known to exist. Nothing tells this device
+what it has reported — the server has no "my reports" endpoint and the app
+keeps no record — and withdrawing something that is not there is the outcome
+being asked for rather than a failure, so the core swallows that one 404.
+
+The honest cost: the entry cannot read "reported — withdraw", so it does not
+say whether there is anything to take back. Worth revisiting if it confuses
+anybody; a per-peer record in the core would fix it, and this deliberately
+did not open that.
 
 **The reported account is told nothing**, ever — no badge, no line, nothing in
 any screen it can reach. The report runs towards the operator, not towards the
@@ -67,9 +74,10 @@ make sure nobody discovers it afterwards.
 reported, so a column that is zero for 200 rows is a poor primary route and
 would crowd out SRV-09's activity signals, which actually vary. The Server
 Admin area gets its own **Reports** entry showing the open count, opening a
-list filtered to the accounts that have any. APP-10's sort menu can gain a
-"most reported" ordering — it is nearly free where the menu already exists —
-but it is the secondary route, not the way in.
+list of the open cases. A "most reported" ordering in APP-10's sort menu was
+considered and **not** built: a column that is zero for every row is exactly
+the poor way in this paragraph rejects, and the marker below already covers
+noticing something while here for another reason.
 
 A badge on the Server Admin entry itself is not optional. An admin who never
 opens the area never learns a report exists, and then the report button was a

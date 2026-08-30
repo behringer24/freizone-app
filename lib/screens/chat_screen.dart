@@ -252,12 +252,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final peerAccountId = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      builder: (_) =>
-          NewChatSheet(
-            session: widget.session,
-            contacts: widget.contacts,
-            initialId: span.target,
-          ),
+      builder: (_) => NewChatSheet(
+        session: widget.session,
+        contacts: widget.contacts,
+        initialId: span.target,
+      ),
     );
     if (peerAccountId == null || !mounted) return;
     Navigator.of(context).push(
@@ -500,13 +499,18 @@ class _ChatScreenState extends State<ChatScreen> {
       // wire carries text only (see ReplyPreview). So this is resolved from
       // local history and simply stays false once the original is gone,
       // leaving the text-only quote that was rendered before.
-      final quoted = m.replyToId == null ? null : convo.messageById(m.replyToId!);
+      final quoted = m.replyToId == null
+          ? null
+          : convo.messageById(m.replyToId!);
       items.add(
         _MessageBubble(
           key: _keyFor(m.id),
           message: m,
           timeLabel: timeLabel(m.displayTime),
-          peerTitle: convo.titleFor(widget.session.state.server, widget.contacts),
+          peerTitle: convo.titleFor(
+            widget.session.state.server,
+            widget.contacts,
+          ),
           isPinned: convo.pinnedMessageIds.contains(m.id),
           deliveryStatus: _deliveryStatusFor(convo, m),
           session: widget.session,
@@ -621,7 +625,11 @@ class _ChatScreenState extends State<ChatScreen> {
           if (widget.session.federationLocked(convo))
             Padding(
               padding: const EdgeInsets.only(left: 8),
-              child: Icon(Icons.lock, size: 18, color: colorScheme.onSurfaceVariant),
+              child: Icon(
+                Icons.lock,
+                size: 18,
+                color: colorScheme.onSurfaceVariant,
+              ),
             ),
         ],
       ),
@@ -686,10 +694,7 @@ class _ChatScreenState extends State<ChatScreen> {
               !federationLocked;
           return Column(
             children: [
-              PinnedMessageBar(
-                chat: convo,
-                onJumpToMessage: _scrollToMessage,
-              ),
+              PinnedMessageBar(chat: convo, onJumpToMessage: _scrollToMessage),
               Expanded(
                 child: PatternBackground(
                   child: ListView(
@@ -751,8 +756,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             tooltip: _pendingAttachment != null
                                 ? 'One picture per message'
                                 : 'Attach a picture',
-                            onPressed:
-                                _preparing || _pendingAttachment != null
+                            onPressed: _preparing || _pendingAttachment != null
                                 ? null
                                 : _pickImage,
                           ),
@@ -988,7 +992,16 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             TextButton(
-              onPressed: () => confirmAndBlock(context, widget.session, widget.contacts, convo),
+              onPressed: () => confirmAndBlock(
+                context,
+                widget.session,
+                widget.contacts,
+                convo,
+                canReport: widget.session.reportsEnabled,
+                assertedName: widget.contacts.suggestedNameFor(
+                  convo.peerAccountId,
+                ),
+              ),
               style: TextButton.styleFrom(foregroundColor: colorScheme.error),
               child: const Text('Block'),
             ),
@@ -1189,7 +1202,11 @@ class _MessageBubble extends StatelessWidget {
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.error_outline, size: 13, color: colorScheme.onErrorContainer),
+        Icon(
+          Icons.error_outline,
+          size: 13,
+          color: colorScheme.onErrorContainer,
+        ),
         const SizedBox(width: 3),
         Text(
           label,

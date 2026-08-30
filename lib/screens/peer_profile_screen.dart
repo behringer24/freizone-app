@@ -13,6 +13,7 @@ import '../state/conversation.dart';
 import '../util/address_format.dart';
 import '../util/block_actions.dart';
 import '../util/freizone_address.dart';
+import '../util/report_actions.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
 import '../widgets/verified_badge.dart';
@@ -78,7 +79,14 @@ class PeerProfileScreen extends StatelessWidget {
       await session.setBlocked(peerAccountId, false);
       return;
     }
-    await confirmAndBlock(context, session, contacts, convo);
+    await confirmAndBlock(
+      context,
+      session,
+      contacts,
+      convo,
+      canReport: session.reportsEnabled,
+      assertedName: contacts.suggestedNameFor(peerAccountId),
+    );
   }
 
   @override
@@ -313,6 +321,36 @@ class PeerProfileScreen extends StatelessWidget {
                         label: const Text('Block this contact'),
                       ),
               ),
+              // Reporting without blocking, for somebody the user wants the
+              // operator to know about but still wants to hear from. The
+              // ordinary path is the checkbox inside blocking; this is the
+              // other case, not a second way to do the same thing.
+              if (session.reportsEnabled) ...[
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined),
+                  title: const Text('Report to the operator'),
+                  subtitle: const Text(
+                    'They see your address and can ask you about it',
+                  ),
+                  onTap: () => reportContact(
+                    context,
+                    session,
+                    accountId: peerAccountId,
+                    peerServer: convo.peerServer ?? '',
+                    assertedName: contacts.suggestedNameFor(peerAccountId),
+                  ),
+                ),
+                // Always offered, never conditioned on knowing one exists:
+                // nothing tells this device what it has reported, and
+                // withdrawing what is not there is the outcome being asked
+                // for rather than a failure.
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined),
+                  title: const Text('Withdraw my report'),
+                  onTap: () =>
+                      withdrawReportFor(context, session, peerAccountId),
+                ),
+              ],
             ],
           ),
         );

@@ -761,6 +761,48 @@ class ApiClient {
         .toList();
   }
 
+  /// The moderation queue (SRV-33), newest first.
+  ///
+  /// A moderator sees reports about regular members; ones targeting a
+  /// moderator or an admin are admin-only and the server does not send them,
+  /// so their absence here is the rule working rather than an empty result.
+  Future<List<AdminReport>> listReports(
+    DeviceCredentials creds, {
+    bool openOnly = true,
+  }) async {
+    final resp = await _signedRequest(
+      'GET',
+      openOnly ? '/v1/admin/reports?state=open' : '/v1/admin/reports',
+      null,
+      creds,
+    );
+    _checkStatus(resp, {200});
+    final list = json.decode(resp.body) as List<dynamic>;
+    return list
+        .map((e) => AdminReport.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Records what was done about a report: actioned, dismissed, or abusive.
+  ///
+  /// Resolving is **not** deleting and there is no counter reset -- the case
+  /// stays readable, which is what lets the next moderator see there was one
+  /// and how it went. "abusive" counts against the reporter instead, which is
+  /// the counterweight to reporting being named.
+  Future<void> resolveReport(
+    DeviceCredentials creds,
+    int reportId,
+    String outcome,
+  ) async {
+    final resp = await _signedRequest(
+      'POST',
+      '/v1/admin/reports/$reportId/resolve',
+      {'outcome': outcome},
+      creds,
+    );
+    _checkStatus(resp, {200});
+  }
+
   /// Grants or revokes admin/moderator status. Admin only.
   Future<void> setAccountRole(
     DeviceCredentials creds,
