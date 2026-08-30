@@ -314,10 +314,18 @@ void main() {
           // status, server status, peer resolution for the receipt). Refused
           // fast on purpose: those are best-effort and belong in
           // SyncReport.problems, and this test is about the drain.
+          //
+          // **503, not 404**, and that distinction is the whole of it: on
+          // `GET /v1/accounts/{id}` a 404 is not a failure, it is the
+          // protocol's way of saying that account does not exist (PROTOCOL
+          // §4). The core believes it -- correctly -- and files the peer as
+          // gone (SRV-29), which appends a system line and made this test's
+          // last transcript entry that line instead of the message. A server
+          // that is merely unhelpful has to answer like one.
           request.response
-            ..statusCode = 404
+            ..statusCode = 503
             ..headers.set('Content-Type', 'application/json')
-            ..write('{"error":{"code":"not_found","message":"no"}}')
+            ..write('{"error":{"code":"unavailable","message":"no"}}')
             ..close();
         });
         addTearDown(() => server.close(force: true));
