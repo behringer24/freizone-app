@@ -304,6 +304,13 @@ class AppSession extends ChangeNotifier {
   /// [federationLocked].
   bool federationEnabled = true;
 
+  /// Whether this account's own server accepts abuse reports (SRV-33), from
+  /// the same public status fetch. Defaults to **false** until answered --
+  /// the opposite of [federationEnabled], because a server that does not say
+  /// has no report endpoints at all, and an entry that fails on tap is worse
+  /// than one that was never drawn.
+  bool reportsEnabled = false;
+
   /// This account's own home server's attestation (SRV-19 / APP-22), decoded
   /// and verified inside [refreshRegistrationPolicy] alongside the
   /// registration policy and federation flag it already fetches from the
@@ -395,6 +402,7 @@ class AppSession extends ChangeNotifier {
       final status = await api.getServerStatus();
       registrationPolicy = status.registrationPolicy;
       federationEnabled = status.federationEnabled;
+      reportsEnabled = status.reportsEnabled;
       _ownBlobs = BlobCapability.from(status);
       // The attestation's domain is a bare hostname (FREIZONE_DOMAIN
       // server-side, no scheme/port); state.server carries the full

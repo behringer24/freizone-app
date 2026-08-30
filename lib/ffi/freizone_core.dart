@@ -697,6 +697,12 @@ class FreizoneCore {
       _call(_bindings.coreProfileName, req);
   Map<String, dynamic> corePeerProfileNamesRaw(Map<String, dynamic> req) =>
       _call(_bindings.corePeerProfileNames, req);
+  Map<String, dynamic> coreReportRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreReport, req);
+  Map<String, dynamic> coreWithdrawReportRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreWithdrawReport, req);
+  Map<String, dynamic> coreServerStatusRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreServerStatus, req);
   Map<String, dynamic> coreGroupDissolveRaw(Map<String, dynamic> req) =>
       _call(_bindings.coreGroupDissolve, req);
 

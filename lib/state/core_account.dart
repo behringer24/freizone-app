@@ -46,6 +46,50 @@ class CoreAccount {
   List<CoreMessage> messages(String chatId) =>
       core.coreMessages(handle, chatId);
 
+  /// Reports an account to its operator (APP-28).
+  ///
+  /// **The report is named**: the reporter's address is stored and shown to
+  /// that server's staff, so they can come back and ask what happened. A
+  /// caller must have said so before calling this.
+  ///
+  /// The evidence is gathered by the core from what that account asserted
+  /// about *itself* -- never the name this device gave them, which lives in
+  /// another store entirely.
+  ///
+  /// [alsoTheirServer] additionally files it with a federated account's own
+  /// home server. Off by default and a deliberate choice: it hands the
+  /// reporter's address to an operator they do not know. Filing with one's own
+  /// server always happens.
+  Future<void> report(
+    String accountId,
+    ReportCategory category, {
+    bool alsoTheirServer = false,
+  }) => _run({
+    'call': 'report',
+    'handle': handle,
+    'account_id': accountId,
+    'category': category.wire,
+    'also_their_server': alsoTheirServer,
+  });
+
+  /// Takes back a report. Somebody who bears responsibility for an accusation
+  /// has to be able to change their mind, so this is always offered -- and a
+  /// server that has no report of theirs is not an error, it is the outcome.
+  Future<void> withdrawReport(String accountId) =>
+      _run({'call': 'withdraw_report', 'handle': handle, 'account_id': accountId});
+
+  /// Whether a server accepts reports. Pass an empty server for this account's
+  /// own, or a peer's origin for theirs -- two separate questions, and a caller
+  /// offering to forward a report has to ask both.
+  Future<bool> reportsEnabled({String server = ''}) async {
+    final res = await _run({
+      'call': 'server_status',
+      'handle': handle,
+      'server': server,
+    });
+    return (res['reports_enabled'] as bool?) ?? false;
+  }
+
   /// Every peer's asserted name, keyed by account id (APP-27).
   ///
   /// A local read like [chats], so it can be folded into a rebuild without an
@@ -403,6 +447,12 @@ Map<String, dynamic> coreCallInIsolate(
       return core.coreSetProfileNameRaw(request);
     case 'profile_name':
       return core.coreProfileNameRaw(request);
+    case 'report':
+      return core.coreReportRaw(request);
+    case 'withdraw_report':
+      return core.coreWithdrawReportRaw(request);
+    case 'server_status':
+      return core.coreServerStatusRaw(request);
     case 'group_dissolve':
       return core.coreGroupDissolveRaw(request);
   }
@@ -419,4 +469,18 @@ class ProfileName {
 
   final String name;
   final bool everSet;
+}
+
+/// Why an account is being reported (APP-28). A fixed set, matching the
+/// server's: there is no free-text field anywhere in this feature.
+enum ReportCategory {
+  spam('spam', 'Spam'),
+  harassment('harassment', 'Harassment'),
+  fraud('fraud', 'Fraud or impersonation'),
+  other('other', 'Something else');
+
+  const ReportCategory(this.wire, this.label);
+
+  final String wire;
+  final String label;
 }

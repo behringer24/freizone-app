@@ -320,7 +320,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
       if (action == 'accept') {
         await session.acceptConversation(convo.peerAccountId);
       } else if (action == 'block') {
-        await confirmAndBlock(context, session, widget.contacts, convo);
+        await confirmAndBlock(
+          context,
+          session,
+          widget.contacts,
+          convo,
+          canReport: session.reportsEnabled,
+          assertedName: widget.contacts.suggestedNameFor(convo.peerAccountId),
+        );
       }
       return;
     }

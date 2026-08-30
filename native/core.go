@@ -376,3 +376,14 @@ func CoreProfileName(cReq *C.char) *C.char { return jsonCall(cReq, doCoreProfile
 func CorePeerProfileNames(cReq *C.char) *C.char {
 	return jsonCall(cReq, doCorePeerProfileNames)
 }
+
+//export CoreReport
+func CoreReport(cReq *C.char) *C.char { return jsonCall(cReq, doCoreReport) }
+
+//export CoreWithdrawReport
+func CoreWithdrawReport(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreWithdrawReport)
+}
+
+//export CoreServerStatus
+func CoreServerStatus(cReq *C.char) *C.char { return jsonCall(cReq, doCoreServerStatus) }

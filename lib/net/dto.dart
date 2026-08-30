@@ -20,6 +20,7 @@ class ServerStatus {
     this.batchMessages = false,
     this.maxBatchMessages = 0,
     this.attestation,
+    this.reportsEnabled = false,
   });
 
   factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
@@ -37,6 +38,11 @@ class ServerStatus {
     // answers 201 -- so assuming otherwise would silently deliver a group
     // picture to a single member. One is also what a server that states 0
     // means: it takes an upload, just not a shared one.
+    // Absent means OFF, on blobs_enabled's rule rather than federation's: a
+    // server that does not advertise reports predates them and has no report
+    // endpoints, so offering the action would produce a 404 the user has to
+    // interpret (SRV-33).
+    reportsEnabled: j['reports_enabled'] as bool? ?? false,
     maxBlobRecipients: () {
       final stated = (j['max_blob_recipients'] as num?)?.toInt() ?? 1;
       return stated < 1 ? 1 : stated;
@@ -84,6 +90,11 @@ class ServerStatus {
   /// FreizoneCore.verifyAttestation against the domain actually being shown,
   /// and only render its result.
   final String? attestation;
+
+  /// Whether this server accepts abuse reports (SRV-33). Absent means off:
+  /// a server too old to say has no endpoints to talk to, so the action is
+  /// not offered rather than offered and refused.
+  final bool reportsEnabled;
 }
 
 /// What one item of a batch send came back as (docs/PROTOCOL.md §7).

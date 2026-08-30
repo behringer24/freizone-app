@@ -1176,3 +1176,73 @@ func doCorePeerProfileNames(req coreHandleRequest) (any, error) {
 	}
 	return names, nil
 }
+
+type coreReportRequest struct {
+	Handle    int64  `json:"handle"`
+	AccountID string `json:"account_id"`
+	Category  string `json:"category"`
+
+	// AlsoTheirServer additionally files the report with the reported
+	// account's own home server. Off unless the user chose it: it hands their
+	// address to an operator they have no relationship with.
+	AlsoTheirServer bool `json:"also_their_server"`
+}
+
+// doCoreReport reports an account to its operator (SRV-33).
+//
+// The evidence -- the profile claims that account asserted about itself -- is
+// gathered by the core from its own store. Deliberately not passed in from
+// here: the name this device gave somebody lives in the app's contact store,
+// and the two must never be able to swap places.
+func doCoreReport(req coreReportRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := callContext()
+	defer cancel()
+	return struct{}{}, entry.client.Report(
+		ctx, req.AccountID, client.ReportCategory(req.Category),
+		client.ReportOptions{AlsoTellTheirServer: req.AlsoTheirServer},
+	)
+}
+
+func doCoreWithdrawReport(req corePeerRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := callContext()
+	defer cancel()
+	return struct{}{}, entry.client.WithdrawReport(ctx, req.AccountID)
+}
+
+type serverStatusDTO struct {
+	ReportsEnabled bool `json:"reports_enabled"`
+}
+
+type coreServerStatusRequest struct {
+	Handle int64  `json:"handle"`
+	Server string `json:"server"`
+}
+
+// doCoreServerStatus answers what a server supports. Only the reports flag is
+// surfaced so far -- the rest of ServerStatus has no caller in the app yet,
+// and a DTO field nothing reads is a field that goes stale unnoticed.
+//
+// Two questions in practice: pass an empty server for this account's own
+// (may I report at all?), and a peer's origin for theirs (may I additionally
+// tell them?).
+func doCoreServerStatus(req coreServerStatusRequest) (any, error) {
+	entry, err := lookupHandle(req.Handle)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := callContext()
+	defer cancel()
+	status, err := entry.client.ServerStatus(ctx, req.Server)
+	if err != nil {
+		return nil, err
+	}
+	return serverStatusDTO{ReportsEnabled: status.ReportsEnabled}, nil
+}
