@@ -51,7 +51,7 @@ class BlockedContactsScreen extends StatelessWidget {
                   itemBuilder: (context, i) {
                     final peer = blocked[i];
                     final server = peer.peerServer ?? session.state.server;
-                    final name = contacts.nameFor(peer.peerAccountId);
+                    final name = contacts.labelNameFor(peer.peerAccountId);
                     final title =
                         name ??
                         shortFreizoneAddress(

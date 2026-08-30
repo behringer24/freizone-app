@@ -585,16 +585,21 @@ class AppSession extends ChangeNotifier {
     }
     try {
       openReports = await api.listReports(state.credentials);
-    } catch (_) {
+    } catch (e) {
       // Nothing here is worth putting in front of anybody. The report count is
       // a side note on a screen whose job is roles, policy and the user list:
       // a 403 (not staff), a route that turned out not to exist, a server
       // away, a body that would not parse -- every one of them means "no
       // reports to show", and none of them means the admin area is broken.
       //
-      // This swallowing is what the previous version got wrong: it caught
-      // ApiException only, and the one failure a stale server actually
-      // produces is not an ApiException at all.
+      // **But it is logged.** Swallowing this quietly is how a signing bug hid
+      // as an empty queue: every account showed "nothing waiting" while the
+      // server was answering 401, and there was nothing anywhere to say so
+      // (2026-08-30). A failure nobody must be shown still has to be findable.
+      logDiagnostic(
+        'listing reports failed: ${describeError(e)}',
+        name: 'freizone',
+      );
       openReports = [];
     } finally {
       notifyListeners();

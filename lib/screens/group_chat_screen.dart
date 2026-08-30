@@ -483,7 +483,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     // APP-16's sender field has none to find. Both mean the two entries about
     // the author are simply absent rather than inert (APP-18).
     final author = message.mine ? null : message.senderAccountId;
-    final named = author != null && widget.contacts.nameFor(author) != null;
+    final named =
+        author != null && widget.contacts.labelNameFor(author) != null;
     // Resolved before the sheet is built rather than inside it: a picture
     // still downloading has no file yet, and the entries then have to be
     // absent rather than present and failing.
@@ -604,11 +605,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Future<void> _nameAuthor(BuildContext context, String accountId) async {
     final result = await showDialog<String>(
       context: context,
-      builder: (context) =>
-          RenameDialog(
-            initialName: widget.contacts.nameFor(accountId) ?? '',
-            suggestedName: widget.contacts.suggestedNameFor(accountId),
-          ),
+      builder: (context) => RenameDialog(
+        initialName: widget.contacts.nameFor(accountId) ?? '',
+        suggestedName: widget.contacts.suggestedNameFor(accountId),
+      ),
     );
     if (result == null) return;
     if (result.isEmpty) {
