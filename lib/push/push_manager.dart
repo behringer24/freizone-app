@@ -30,6 +30,7 @@
 // needs directly from LocalStateStore/AppSettings.
 import 'dart:async';
 import 'dart:developer' as developer;
+import 'dart:io';
 import 'dart:isolate';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -119,6 +120,14 @@ Future<void> initPush() async {
     // the launcher icon's silhouette.
     settings: const InitializationSettings(
       android: AndroidInitializationSettings('ic_stat_notification'),
+      // No permission prompt at init: initPush runs before any UI exists, so
+      // a dialog here would come with nothing explaining it. The prompt comes
+      // from requestNotificationPermission instead, same as on Android.
+      iOS: DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      ),
     ),
     // Fires when a notification this plugin showed is tapped while its
     // Dart isolate is still alive (foreground, or backgrounded but not
@@ -129,6 +138,11 @@ Future<void> initPush() async {
     onDidReceiveNotificationResponse: (response) =>
         handleNotificationPayload(response.payload),
   );
+  // UnifiedPush and FCM are Android's wake mechanisms. iOS gets its wakes
+  // from APNs via freizone-gateway instead (APP-03), and until that is wired
+  // up it has no background wake at all -- the live stream still delivers
+  // while the app is open.
+  if (!Platform.isAndroid) return;
   await UnifiedPush.initialize(
     onNewEndpoint: _onNewEndpoint,
     onRegistrationFailed: _onRegistrationFailed,
@@ -194,6 +208,13 @@ Future<void> requestNotificationPermission() async {
         AndroidFlutterLocalNotificationsPlugin
       >()
       ?.requestNotificationsPermission();
+  // iOS asks once and remembers the answer, so repeating this per launch is
+  // harmless: after the first time it returns without a dialog.
+  await _notifications
+      .resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin
+      >()
+      ?.requestPermissions(alert: true, badge: true, sound: true);
 }
 
 /// Outcome of a push registration attempt (see [registerForPush]). Lets the
@@ -226,6 +247,8 @@ enum PushMechanism {
 /// Resolves the app-wide mechanism once. Call this before a loop over
 /// accounts, not inside it.
 Future<PushMechanism> resolvePushMechanism() async {
+  // Neither mechanism exists off Android (see initPush).
+  if (!Platform.isAndroid) return PushMechanism.none;
   final settings = await AppSettings.load();
   switch (settings.pushPreference) {
     case PushPreference.forceFcm:
@@ -456,7 +479,9 @@ Future<void> _syncAndMaybeNotify(String? instance) async {
       ? [instance]
       : await LocalStateStore.listProfileIds();
 
-  _log('wake received (${instance ?? 'fcm/all'}): ${accountIds.length} profile(s)');
+  _log(
+    'wake received (${instance ?? 'fcm/all'}): ${accountIds.length} profile(s)',
+  );
   for (final accountId in accountIds) {
     final notice = await _syncAccount(accountId);
     if (notice != null) {
@@ -511,10 +536,7 @@ Future<_WakeNotice?> _syncAccount(String accountId) async {
   final statePath = await coreStatePath(accountId);
   try {
     final raw = await Isolate.run(
-      () => _wakeSyncInIsolate(
-        statePath,
-        _identityArgs(identity),
-      ),
+      () => _wakeSyncInIsolate(statePath, _identityArgs(identity)),
     );
     for (final problem in (raw['problems'] as List<dynamic>? ?? const [])) {
       // Best-effort housekeeping (prekey top-up, group snapshot debts,
@@ -782,6 +804,9 @@ Future<void> _show({
         playSound: settings.notificationSound,
         enableVibration: settings.notificationVibration,
       ),
+      // iOS has no per-app vibration switch; vibration follows the sound
+      // and the system's own settings.
+      iOS: DarwinNotificationDetails(presentSound: settings.notificationSound),
     ),
   );
 }

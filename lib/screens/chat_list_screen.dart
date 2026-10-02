@@ -4,6 +4,8 @@
 // its preview/ordering here, since AppSession owns the SSE stream for
 // the whole app lifetime, not just while a chat screen happens to be
 // open.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../state/account_manager.dart';
@@ -507,6 +509,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
             PushRegistration.needsDistributorChoice =>
               'Choose a push target in Settings > Push delivery. '
                   'Chat still works while Freizone is open.',
+            // Nothing the user could install or switch on iOS -- its only
+            // wake mechanism (APNs) isn't wired up yet (APP-03), and Settings
+            // already says so.
+            PushRegistration.unavailable when !Platform.isAndroid => null,
             PushRegistration.unavailable =>
               'No push notifications available -- install a UnifiedPush app '
                   '(e.g. ntfy) or switch to Firebase (FCM) in Settings > Push '
