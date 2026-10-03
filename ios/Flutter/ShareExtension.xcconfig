@@ -2,5 +2,5 @@
 // Info.plist and the App Group entitlement. It links neither the Go core nor
 // any plugin -- it only hands what was shared over to the app.
 #include "Generated.xcconfig"
-#include "Entitlements.xcconfig"
+#include "Signing.xcconfig"
 CODE_SIGN_ENTITLEMENTS = $(FREIZONE_SHARE_ENTITLEMENTS)

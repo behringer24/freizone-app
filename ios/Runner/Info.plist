@@ -41,6 +41,8 @@
 	<string>Freizone uses the camera to scan invite QR codes.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Freizone lets you pick pictures from your library to send in a chat.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Freizone connects to your chat server when it runs on your local network.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Freizone saves received pictures to your library when you ask it to.</string>
 	<key>UIApplicationSceneManifest</key>
