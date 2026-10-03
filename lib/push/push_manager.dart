@@ -95,8 +95,20 @@ int _notificationIdFor(String instance) {
 /// call once it has no more unread conversations, so the launcher icon's
 /// badge (which Android derives from active notifications) goes away
 /// again instead of lingering after the messages have been read.
-Future<void> clearMessageNotification(String instance) =>
-    _notifications.cancel(id: _notificationIdFor(instance));
+Future<void> clearMessageNotification(String instance) async {
+  final id = _notificationIdFor(instance);
+  await _notifications.cancel(id: id);
+  // A notification the iOS Notification Service Extension showed carries the
+  // same id in its userInfo, but the system gave it an identifier of its own,
+  // so the plugin's cancel above cannot reach it.
+  if (Platform.isIOS) {
+    try {
+      await _apnsChannel.invokeMethod<void>('removeDelivered', {'id': id});
+    } catch (_) {
+      // Nothing to clear, or no platform side: either way nothing to do.
+    }
+  }
+}
 
 /// Checks whether the app's current run was cold-started by tapping a
 /// notification (rather than the launcher icon) -- call once, early,
@@ -107,6 +119,17 @@ Future<void> clearMessageNotification(String instance) =>
 /// same payload showMessageNotification encoded, or null if the app
 /// wasn't launched this way.
 Future<String?> consumeLaunchNotificationPayload() async {
+  if (Platform.isIOS) {
+    // On iOS taps come through the app's own notification delegate
+    // (ios/Runner/NotificationRouter.swift), not the plugin -- see there.
+    try {
+      return await _notificationsChannel.invokeMethod<String>(
+        'takeLaunchPayload',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
   final details = await _notifications.getNotificationAppLaunchDetails();
   if (details?.didNotificationLaunchApp ?? false) {
     return details!.notificationResponse?.payload;
@@ -150,10 +173,19 @@ Future<void> initPush() async {
     onDidReceiveNotificationResponse: (response) =>
         handleNotificationPayload(response.payload),
   );
+  if (Platform.isIOS) {
+    // Taps on iOS arrive here rather than through the plugin's
+    // onDidReceiveNotificationResponse -- see consumeLaunchNotificationPayload.
+    _notificationsChannel.setMethodCallHandler((call) async {
+      if (call.method == 'tapped') {
+        handleNotificationPayload(call.arguments as String?);
+      }
+    });
+  }
   // UnifiedPush and FCM are Android's wake mechanisms. iOS gets its wakes
-  // from APNs via freizone-gateway instead (APP-03), and until that is wired
-  // up it has no background wake at all -- the live stream still delivers
-  // while the app is open.
+  // from APNs via freizone-gateway instead (APP-03), and they never reach
+  // Dart: the Notification Service Extension (ios/NotificationService) syncs
+  // and shows the notification while the app is not running.
   if (!Platform.isAndroid) return;
   await UnifiedPush.initialize(
     onNewEndpoint: _onNewEndpoint,
@@ -248,6 +280,10 @@ enum PushMechanism {
   unifiedPush,
   fcm,
 
+  /// iOS: Apple Push Notification service, through freizone-gateway. The only
+  /// mechanism there is, so there is nothing to choose (APP-03).
+  apns,
+
   /// UnifiedPush is wanted but several distributors are installed and none is
   /// chosen yet -- the user has to pick, so nothing can be registered.
   needsDistributorChoice,
@@ -259,7 +295,9 @@ enum PushMechanism {
 /// Resolves the app-wide mechanism once. Call this before a loop over
 /// accounts, not inside it.
 Future<PushMechanism> resolvePushMechanism() async {
-  // Neither mechanism exists off Android (see initPush).
+  // iOS has exactly one; whether this build can actually get a token is
+  // answered when registering (see _registerApns). Elsewhere there is none.
+  if (Platform.isIOS) return PushMechanism.apns;
   if (!Platform.isAndroid) return PushMechanism.none;
   final settings = await AppSettings.load();
   switch (settings.pushPreference) {
@@ -323,6 +361,10 @@ Future<PushRegistration> registerForPush(
       return (await _registerFcm(api, creds))
           ? PushRegistration.registered
           : PushRegistration.unavailable;
+    case PushMechanism.apns:
+      return (await _registerApns(api, creds))
+          ? PushRegistration.registered
+          : PushRegistration.unavailable;
     case PushMechanism.unifiedPush:
       final viaUnifiedPush = await _registerUnifiedPush(api, instance);
       if (viaUnifiedPush == PushRegistration.registered) return viaUnifiedPush;
@@ -358,6 +400,8 @@ Future<String> pushMechanismLabel(PushMechanism mechanism) async {
   switch (mechanism) {
     case PushMechanism.fcm:
       return 'fcm';
+    case PushMechanism.apns:
+      return 'apns';
     case PushMechanism.unifiedPush:
       final distributor = await UnifiedPush.getDistributor();
       return 'unifiedpush:${distributor ?? ''}';
@@ -408,6 +452,27 @@ Future<bool> _registerFcm(ApiClient api, DeviceCredentials creds) async {
     return false;
   }
 }
+
+/// Registers this device's APNs token as the account's push target (APP-03).
+///
+/// The token comes from the platform side (ios/Runner/ApnsChannel.swift). A
+/// build that cannot get one -- signed without the push entitlement, or a
+/// simulator without APNs -- answers with an error, and push is then reported
+/// unavailable rather than pretending.
+Future<bool> _registerApns(ApiClient api, DeviceCredentials creds) async {
+  try {
+    final token = await _apnsChannel.invokeMethod<String>('token');
+    if (token == null || token.isEmpty) return false;
+    await api.setPushTarget(creds: creds, platform: 'apns', token: token);
+    return true;
+  } catch (e) {
+    _log('registering apns push target failed: $e');
+    return false;
+  }
+}
+
+const _apnsChannel = MethodChannel('freizone/apns');
+const _notificationsChannel = MethodChannel('freizone/notifications');
 
 Future<void> _onNewEndpoint(PushEndpoint endpoint, String instance) async {
   final keySet = endpoint.pubKeySet;

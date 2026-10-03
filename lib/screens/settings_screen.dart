@@ -475,6 +475,8 @@ class _PushStatusLineState extends State<_PushStatusLine> {
         return 'Checking…';
       case PushMechanism.fcm:
         mechanismText = 'Firebase Cloud Messaging';
+      case PushMechanism.apns:
+        mechanismText = 'Apple Push Notification service';
       case PushMechanism.unifiedPush:
         final pkg = _distributor;
         mechanismText = pkg == null || pkg.isEmpty
@@ -484,7 +486,7 @@ class _PushStatusLineState extends State<_PushStatusLine> {
         return 'Pick a distributor above to receive notifications';
       case PushMechanism.none:
         if (!Platform.isAndroid) {
-          return 'Push notifications are not available on iOS yet — '
+          return 'Push notifications are not available on this device — '
               'messages arrive while the app is open';
         }
         return 'No push service available — install a UnifiedPush '

@@ -26,6 +26,8 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		A070D8E14BE81AD7E08BDCDD /* ApnsChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2638CD5235B25E3CF7A70A69 /* ApnsChannel.swift */; };
+		B7895EA59A01EF15C34A8CE9 /* NotificationRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7701E6CD8A3E2BA4E08185A1 /* NotificationRouter.swift */; };
 		C80CA14AFAA7089D01F95D85 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 788DE4ADC2ED5C153D1875C0 /* Pods_Runner.framework */; };
 /* End PBXBuildFile section */
 
@@ -77,6 +79,7 @@
 		164CAFD391BD7860113FEA8E /* Pods-RunnerTests.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.profile.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.profile.xcconfig"; sourceTree = "<group>"; };
 		1BB09FFEE2DF49621FA28E41 /* Runner.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 		20E4E3D6E63FEB402E7384A8 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		2638CD5235B25E3CF7A70A69 /* ApnsChannel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ApnsChannel.swift; sourceTree = "<group>"; };
 		2DD093A8FEBF03DBBB065DC0 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -85,6 +88,7 @@
 		5FBBAD4FE5B0B30252693B01 /* NotificationService.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		7701E6CD8A3E2BA4E08185A1 /* NotificationRouter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NotificationRouter.swift; sourceTree = "<group>"; };
 		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		788DE4ADC2ED5C153D1875C0 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
@@ -228,6 +232,8 @@
 				FB7C8CDED1FB843144476AC0 /* StorageChannel.swift */,
 				1BB09FFEE2DF49621FA28E41 /* Runner.entitlements */,
 				5DFADAB77CFC8CC7EBFF1959 /* BackgroundGrace.swift */,
+				2638CD5235B25E3CF7A70A69 /* ApnsChannel.swift */,
+				7701E6CD8A3E2BA4E08185A1 /* NotificationRouter.swift */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -512,6 +518,8 @@
 				952DBFCA6A44EF23F536BD20 /* SharedStorage.swift in Sources */,
 				8F0B307C9F44BA31B1B43056 /* StorageChannel.swift in Sources */,
 				62842A35C2146A2D0B34439E /* BackgroundGrace.swift in Sources */,
+				A070D8E14BE81AD7E08BDCDD /* ApnsChannel.swift in Sources */,
+				B7895EA59A01EF15C34A8CE9 /* NotificationRouter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
