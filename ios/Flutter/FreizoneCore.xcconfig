@@ -1,0 +1,16 @@
+// Links the Go core (native/build_ios.sh) statically into the app binary.
+//
+// -force_load pulls in every object of the archive even though nothing in
+// Swift/ObjC references it -- the only caller is Dart FFI, which looks the
+// symbols up at runtime via DynamicLibrary.process(). -export_dynamic keeps
+// those symbols visible to dlsym after the linker's dead-code stripping, and
+// STRIP_STYLE keeps them in the symbol table of release builds.
+//
+// The core itself needs CoreFoundation and Security (Go's crypto/x509 on
+// Apple platforms) and libresolv (Go's net package).
+FREIZONE_CORE_DIR = $(PROJECT_DIR)/Frameworks/FreizoneCore
+FREIZONE_CORE_LIB[sdk=iphoneos*] = $(FREIZONE_CORE_DIR)/iphoneos/libfreizonecore.a
+FREIZONE_CORE_LIB[sdk=iphonesimulator*] = $(FREIZONE_CORE_DIR)/iphonesimulator/libfreizonecore.a
+
+OTHER_LDFLAGS = $(inherited) -force_load "$(FREIZONE_CORE_LIB)" -Wl,-export_dynamic -framework CoreFoundation -framework Security -lresolv
+STRIP_STYLE = non-global

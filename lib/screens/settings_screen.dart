@@ -1,6 +1,8 @@
 // App-wide preferences (not tied to any one account) -- theme, accent
 // color, the default for "copy my address", and notification sound/
 // vibration. See lib/state/app_settings.dart for persistence.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
@@ -162,24 +164,28 @@ class SettingsScreen extends StatelessWidget {
               ),
               const Divider(height: 32),
               _sectionTitle(context, 'Push delivery'),
-              RadioGroup<PushPreference>(
-                groupValue: settings.pushPreference,
-                onChanged: (pref) {
-                  if (pref != null) _setPushPreference(pref);
-                },
-                child: Column(
-                  children: [
-                    for (final pref in PushPreference.values)
-                      RadioListTile<PushPreference>(
-                        value: pref,
-                        title: Text(pref.label),
-                      ),
-                  ],
+              // UnifiedPush vs. FCM is an Android choice; iOS has exactly one
+              // way to be woken (APNs), so there is nothing to pick there.
+              if (Platform.isAndroid)
+                RadioGroup<PushPreference>(
+                  groupValue: settings.pushPreference,
+                  onChanged: (pref) {
+                    if (pref != null) _setPushPreference(pref);
+                  },
+                  child: Column(
+                    children: [
+                      for (final pref in PushPreference.values)
+                        RadioListTile<PushPreference>(
+                          value: pref,
+                          title: Text(pref.label),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
               // The distributor only matters when UnifiedPush is in play --
               // hidden when FCM is forced, since it wouldn't be used then.
-              if (settings.pushPreference != PushPreference.forceFcm)
+              if (Platform.isAndroid &&
+                  settings.pushPreference != PushPreference.forceFcm)
                 _PushDistributorTile(manager: manager),
               _PushStatusLine(manager: manager, settings: settings),
               const Divider(height: 32),
@@ -466,14 +472,17 @@ class _PushStatusLineState extends State<_PushStatusLine> {
       case PushMechanism.needsDistributorChoice:
         return 'Pick a distributor above to receive notifications';
       case PushMechanism.none:
+        if (!Platform.isAndroid) {
+          return 'Push notifications are not available on iOS yet — '
+              'messages arrive while the app is open';
+        }
         return 'No push service available — install a UnifiedPush '
             'distributor, or allow Firebase above';
     }
 
     // Only worth spelling out for automatic, where the choice was ours and the
     // radios therefore don't already answer it.
-    final prefix =
-        widget.settings.pushPreference == PushPreference.automatic
+    final prefix = widget.settings.pushPreference == PushPreference.automatic
         ? 'Using $mechanismText'
         : mechanismText;
     return total == 0

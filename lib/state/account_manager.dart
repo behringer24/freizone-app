@@ -6,6 +6,7 @@
 // rather than only the currently-viewed one, so push notifications work
 // regardless of which account's server most recently changed.
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:unifiedpush/unifiedpush.dart';
@@ -166,7 +167,7 @@ class AccountManager extends ChangeNotifier {
     // itself best-effort (see push_manager.dart's _onUnregistered), so a
     // server that no longer recognizes this device either doesn't block
     // the local cleanup here.
-    await UnifiedPush.unregister(accountId);
+    if (Platform.isAndroid) await UnifiedPush.unregister(accountId);
 
     // Closes the core handle, among other things, which is what makes the
     // directory below safe to delete rather than something still being written.

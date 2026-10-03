@@ -78,3 +78,5 @@ CLAUDE.md
 # Local, machine-specific VS Code build/deploy tasks -- not part of the
 # public project (paths and device targets are personal).
 .vscode/tasks.json
+# iOS build of the Go core (native/build_ios.sh) -- regenerated, not source.
+/ios/Frameworks/FreizoneCore/
