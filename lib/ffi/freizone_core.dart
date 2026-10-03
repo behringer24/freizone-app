@@ -584,6 +584,20 @@ class FreizoneCore {
           .map((e) => ChatSummary.fromJson(e as Map<String, dynamic>))
           .toList(growable: false);
 
+  /// Every peer's asserted name, keyed by account id (APP-27).
+  ///
+  /// Synchronous like [coreChats], and for the same reason: it reads a small
+  /// file per peer and is called while a list is being built, where an isolate
+  /// hop would buy nothing and cost a frame.
+  ///
+  /// A peer who has asserted nothing, or withdrawn it, is **absent** rather
+  /// than present with an empty string -- so a caller falls back to the short
+  /// id by finding no entry.
+  Map<String, String> corePeerProfileNames(int handle) =>
+      _call(_bindings.corePeerProfileNames, {'handle': handle}).map(
+        (key, value) => MapEntry(key, value as String),
+      );
+
   /// One chat's whole transcript, in arrival order.
   List<CoreMessage> coreMessages(int handle, String chatId) =>
       _callList(_bindings.coreMessages, {'handle': handle, 'chat_id': chatId})
@@ -677,6 +691,18 @@ class FreizoneCore {
       _call(_bindings.coreForgetPeer, req);
   Map<String, dynamic> coreSetReceiptsEnabledRaw(Map<String, dynamic> req) =>
       _call(_bindings.coreSetReceiptsEnabled, req);
+  Map<String, dynamic> coreSetProfileNameRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreSetProfileName, req);
+  Map<String, dynamic> coreProfileNameRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreProfileName, req);
+  Map<String, dynamic> corePeerProfileNamesRaw(Map<String, dynamic> req) =>
+      _call(_bindings.corePeerProfileNames, req);
+  Map<String, dynamic> coreReportRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreReport, req);
+  Map<String, dynamic> coreWithdrawReportRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreWithdrawReport, req);
+  Map<String, dynamic> coreServerStatusRaw(Map<String, dynamic> req) =>
+      _call(_bindings.coreServerStatus, req);
   Map<String, dynamic> coreGroupDissolveRaw(Map<String, dynamic> req) =>
       _call(_bindings.coreGroupDissolve, req);
 

@@ -363,3 +363,27 @@ func CoreResetSession(cReq *C.char) *C.char { return jsonCall(cReq, doCoreResetS
 //
 //export CoreSync
 func CoreSync(cReq *C.char) *C.char { return jsonCall(cReq, doCoreSync) }
+
+//export CoreSetProfileName
+func CoreSetProfileName(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreSetProfileName)
+}
+
+//export CoreProfileName
+func CoreProfileName(cReq *C.char) *C.char { return jsonCall(cReq, doCoreProfileName) }
+
+//export CorePeerProfileNames
+func CorePeerProfileNames(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCorePeerProfileNames)
+}
+
+//export CoreReport
+func CoreReport(cReq *C.char) *C.char { return jsonCall(cReq, doCoreReport) }
+
+//export CoreWithdrawReport
+func CoreWithdrawReport(cReq *C.char) *C.char {
+	return jsonCall(cReq, doCoreWithdrawReport)
+}
+
+//export CoreServerStatus
+func CoreServerStatus(cReq *C.char) *C.char { return jsonCall(cReq, doCoreServerStatus) }

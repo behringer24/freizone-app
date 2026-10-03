@@ -25,6 +25,7 @@ import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/role_icon.dart';
 import '../widgets/peer_avatar.dart';
+import 'admin_reports_screen.dart';
 import 'chat_screen.dart';
 import '../widgets/readable_width.dart';
 
@@ -131,7 +132,9 @@ class _AdminAccountScreenState extends State<AdminAccountScreen> {
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// Same wording and feedback as both profile screens, so copying an address
@@ -350,6 +353,14 @@ class _AdminAccountScreenState extends State<AdminAccountScreen> {
       // has since been deleted.
       if (_isAdmin) _invitedByRow(context, account),
 
+      // What has been reported about this account, and what it has reported
+      // about others (APP-28). Above the actions, because it is the thing an
+      // operator reads *before* deciding on one.
+      if (account.hasOpenReports ||
+          account.reportsFiled > 0 ||
+          account.reportsAbusive > 0)
+        _reportsRow(context, account),
+
       // Both action areas follow profile_screen.dart and
       // peer_profile_screen.dart: a coloured section heading, a sentence saying
       // what the action actually does, then the button. A ListTile row invites a
@@ -443,6 +454,57 @@ class _AdminAccountScreenState extends State<AdminAccountScreen> {
         ),
       ],
     ];
+  }
+
+  /// This account's report figures (SRV-33), and the way into the queue.
+  ///
+  /// The two "about this account" counts are shown side by side and never
+  /// summed: anybody on any server can raise the federated one, so a combined
+  /// figure is one a stranger can inflate and an operator cannot act on. The
+  /// "filed" pair is the mirror -- an account that reports two hundred people
+  /// is itself the thing worth noticing.
+  Widget _reportsRow(BuildContext context, AdminAccountSummary account) {
+    final theme = Theme.of(context);
+    final parts = <String>[];
+    if (account.reportsLocal > 0) {
+      parts.add('${account.reportsLocal} from this server');
+    }
+    if (account.reportsFederated > 0) {
+      parts.add('${account.reportsFederated} from elsewhere');
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (parts.isNotEmpty)
+          ListTile(
+            leading: Icon(Icons.flag, color: theme.colorScheme.error),
+            title: const Text('Open reports'),
+            subtitle: Text(parts.join(' · ')),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => AdminReportsScreen(
+                  session: widget.session,
+                  settings: widget.settings,
+                  contacts: widget.contacts,
+                ),
+              ),
+            ),
+          ),
+        if (account.reportsFiled > 0 || account.reportsAbusive > 0)
+          ListTile(
+            leading: const Icon(Icons.outbox_outlined),
+            title: const Text('Reports this account made'),
+            subtitle: Text(
+              account.reportsAbusive == 0
+                  ? '${account.reportsFiled} open'
+                  : '${account.reportsFiled} open · '
+                        '${account.reportsAbusive} judged abusive',
+            ),
+          ),
+      ],
+    );
   }
 
   Widget _invitedByRow(BuildContext context, AdminAccountSummary account) {

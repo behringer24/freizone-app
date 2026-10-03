@@ -31,6 +31,7 @@ import '../util/freizone_address.dart';
 import '../util/gallery.dart';
 import '../util/server_url.dart';
 import 'app_settings.dart';
+import 'contact_store.dart';
 import 'chat_target.dart';
 import 'conversation.dart';
 import 'core_account.dart';
@@ -148,12 +149,19 @@ class AppSession extends ChangeNotifier {
   /// from a path, because an isolate is told the same way (see
   /// FreizoneCore.libraryPath, and CoreAccount's construction in [init] --
   /// it passes this instance's path on) and by name it would find nothing.
-  AppSession(this.state, {FreizoneCore? core}) : core = core ?? FreizoneCore() {
+  AppSession(this.state, {FreizoneCore? core, this.contacts})
+    : core = core ?? FreizoneCore() {
     api = ApiClient(baseUrl: state.server, core: this.core);
   }
 
   final AppState state;
   final FreizoneCore core;
+
+  /// The device-wide contact store, when there is one -- absent in the tests
+  /// that build a session without an app around it. Held so every core refresh
+  /// can hand it this account's peers' asserted names (APP-27), which is the
+  /// only per-account thing in it and is replaced wholesale each time.
+  final ContactStore? contacts;
   late final ApiClient api;
   CoreStream? _sse;
 
@@ -297,6 +305,13 @@ class AppSession extends ChangeNotifier {
   /// [federationLocked].
   bool federationEnabled = true;
 
+  /// Whether this account's own server accepts abuse reports (SRV-33), from
+  /// the same public status fetch. Defaults to **false** until answered --
+  /// the opposite of [federationEnabled], because a server that does not say
+  /// has no report endpoints at all, and an entry that fails on tap is worse
+  /// than one that was never drawn.
+  bool reportsEnabled = false;
+
   /// This account's own home server's attestation (SRV-19 / APP-22), decoded
   /// and verified inside [refreshRegistrationPolicy] alongside the
   /// registration policy and federation flag it already fetches from the
@@ -388,6 +403,13 @@ class AppSession extends ChangeNotifier {
       final status = await api.getServerStatus();
       registrationPolicy = status.registrationPolicy;
       federationEnabled = status.federationEnabled;
+      reportsEnabled = status.reportsEnabled;
+      // Loading the queue needs two things -- a staff role and a server that
+      // accepts reports -- which arrive from two independent fetches that race
+      // at session start. So each of them triggers the load once its own half
+      // is in, and refreshReports checks the other. Without this the menu
+      // badge stayed empty whenever the role landed first.
+      if (reportsEnabled && myRole != null) unawaited(refreshReports());
       _ownBlobs = BlobCapability.from(status);
       // The attestation's domain is a bare hostname (FREIZONE_DOMAIN
       // server-side, no scheme/port); state.server carries the full
@@ -531,6 +553,71 @@ class AppSession extends ChangeNotifier {
   bool federationLockedFor(String? server) =>
       server != null && !federationEnabled;
 
+  /// The open moderation queue (SRV-33), newest first. Empty until fetched,
+  /// and empty for a caller who is neither admin nor moderator -- the server
+  /// answers 403, which is not an error but the answer.
+  ///
+  /// Only reports about *regular members* reach a moderator; ones targeting
+  /// staff are admin-only and the server does not send them at all. So a short
+  /// list here is the rule working, not a fetch that missed something.
+  List<AdminReport> openReports = [];
+
+  /// Refreshes [openReports].
+  ///
+  /// Called from [refreshMyRole] for staff, which is what puts the count on
+  /// the Server Admin menu entry *before* anybody opens that area -- staff who
+  /// never open it would otherwise never learn a report exists, and the report
+  /// button every member sees would be a placebo.
+  ///
+  /// Deliberately does not pre-check [reportsEnabled]: that value may not have
+  /// been fetched yet at this point in a session's life, and a server without
+  /// reports answers 404, which is handled below anyway.
+  Future<void> refreshReports() async {
+    // Asked, not assumed. A server that predates SRV-33 does not have the
+    // route at all, and a missing route is not a Freizone server answering
+    // "no" -- net/http's mux replies `404 page not found` as **plain text**,
+    // which the error path reads as "this host does not speak our JSON" and
+    // reports as "this address doesn't point to a Freizone server". Skipping
+    // the request is the actual fix; the catch below is the net.
+    if (!reportsEnabled) {
+      openReports = [];
+      notifyListeners();
+      return;
+    }
+    try {
+      openReports = await api.listReports(state.credentials);
+    } catch (e) {
+      // Nothing here is worth putting in front of anybody. The report count is
+      // a side note on a screen whose job is roles, policy and the user list:
+      // a 403 (not staff), a route that turned out not to exist, a server
+      // away, a body that would not parse -- every one of them means "no
+      // reports to show", and none of them means the admin area is broken.
+      //
+      // **But it is logged.** Swallowing this quietly is how a signing bug hid
+      // as an empty queue: every account showed "nothing waiting" while the
+      // server was answering 401, and there was nothing anywhere to say so
+      // (2026-08-30). A failure nobody must be shown still has to be findable.
+      logDiagnostic(
+        'listing reports failed: ${describeError(e)}',
+        name: 'freizone',
+      );
+      openReports = [];
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  /// Records an outcome and drops the case from [openReports].
+  ///
+  /// Dropped from the *open* list only -- the report itself stays on the
+  /// server, readable, which is what lets the next moderator see there was one
+  /// and how it went.
+  Future<void> resolveReport(int reportId, String outcome) async {
+    await api.resolveReport(state.credentials, reportId, outcome);
+    openReports = openReports.where((r) => r.id != reportId).toList();
+    notifyListeners();
+  }
+
   /// Refreshes [myRole] and [adminAccounts] from the server. A 403 means
   /// this device is neither admin nor moderator -- not an error, just
   /// the answer. Call once after [init] and again whenever the admin
@@ -561,6 +648,10 @@ class AppSession extends ChangeNotifier {
       // with an errno and an ephemeral port number.
       _noteFailure('checking admin role failed', e);
     }
+    // Only staff have a queue to count, and only they can see one. Not
+    // awaited: the role is what the caller was after, and a slow report fetch
+    // must not hold up the menu it belongs to.
+    if (myRole != null) unawaited(refreshReports());
     notifyListeners();
   }
 
@@ -722,7 +813,7 @@ class AppSession extends ChangeNotifier {
     // Notification Service Extension) received while this session was frozen
     // -- it opens the same core state on disk, see doCoreSync -- rather than
     // re-reading a Dart-side profile the wake no longer writes.
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
     // Reopen the live stream that backgrounding closed, so the foregrounded
     // app is back on the fast path (and the server stops pushing to it).
     _startStream();
@@ -837,7 +928,7 @@ class AppSession extends ChangeNotifier {
     // Whatever the core already holds from a previous run, before the first
     // paint -- the same rebuild-whole read _handleIncoming and every send
     // below trigger on their own, just run once up front here.
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
 
     // Before anything can confirm or record anything: the switch is app-wide
     // and the core keeps its own per-account copy, so a session that never
@@ -1607,7 +1698,7 @@ class AppSession extends ChangeNotifier {
     if (topic.isNotEmpty) {
       await coreAccount.setGroupMeta(groupId, name, topic);
     }
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
     notifyListeners();
     return state.groups[groupId]!;
   }
@@ -1751,7 +1842,7 @@ class AppSession extends ChangeNotifier {
   Future<void> declineGroupInvite(String groupId) async {
     await coreAccount.leaveGroup(groupId);
     coreAccount.deleteChat(groupId);
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
     notifyListeners();
   }
 
@@ -1805,7 +1896,7 @@ class AppSession extends ChangeNotifier {
   Future<void> leaveAndDeleteGroup(String groupId) async {
     await coreAccount.leaveGroup(groupId);
     coreAccount.deleteChat(groupId);
-    applyCoreState(state, coreAccount);
+    applyCoreState(state, coreAccount, contacts);
     notifyListeners();
   }
 

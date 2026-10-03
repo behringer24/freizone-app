@@ -1,4 +1,4 @@
-﻿// The client-to-client wire shapes groups add (APP-16 phase 5): `v: 4` group
+// The client-to-client wire shapes groups add (APP-16 phase 5): `v: 4` group
 // chat content and the `v: 5` control envelope. Pure logic, and the contract
 // both the send and receive paths are built on -- a second client has to be
 // able to reproduce exactly this.

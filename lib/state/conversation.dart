@@ -162,8 +162,15 @@ class Conversation extends ChatTarget {
   /// "remove a contact" cost nothing but the label.
   @override
   String titleFor(String localServer, ContactStore contacts) =>
-      contacts.nameFor(peerAccountId) ??
-      shortFreizoneAddress(id: peerAccountId, server: peerServer ?? localServer);
+      // labelNameFor, not nameFor: the name this device assigned, else the one
+      // the peer asserts about itself (APP-27). This is the chat title and the
+      // chat-list row -- the most visible place a name appears, and the place
+      // where it was still showing a bare id after APP-27 shipped.
+      contacts.labelNameFor(peerAccountId) ??
+      shortFreizoneAddress(
+        id: peerAccountId,
+        server: peerServer ?? localServer,
+      );
 
   Map<String, dynamic> toJson() {
     final j = <String, dynamic>{'peer_account_id': peerAccountId};

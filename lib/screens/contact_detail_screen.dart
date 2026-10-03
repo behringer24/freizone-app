@@ -127,6 +127,16 @@ class ContactDetailScreen extends StatelessWidget {
           onPressed: () => _rename(context, contact),
         ),
       ),
+      // The one place the difference between the two names is the point: you
+      // call them this, they call themselves that (APP-27). Shown only when
+      // they differ, and never decorated as a verification -- anyone may call
+      // themselves anything.
+      if (contacts.suggestedNameFor(contact.accountId) case final theirs?)
+        if (theirs != contact.name)
+          ListTile(
+            title: const Text('They call themselves'),
+            subtitle: Text(theirs),
+          ),
       ListTile(
         title: const Text('Address'),
         subtitle: Text(fullAddress),
@@ -345,7 +355,10 @@ class ContactDetailScreen extends StatelessWidget {
   Future<void> _rename(BuildContext context, Contact contact) async {
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => RenameDialog(initialName: contact.name),
+      builder: (context) => RenameDialog(
+        initialName: contact.name,
+        suggestedName: contacts.suggestedNameFor(contact.accountId),
+      ),
     );
     if (result == null) return;
     if (result.isEmpty) {

@@ -20,6 +20,7 @@ import 'dart:typed_data';
 
 import '../ffi/core_models.dart';
 import 'chat_target.dart';
+import 'contact_store.dart';
 import 'conversation.dart';
 import 'group_conversation.dart';
 import 'local_state.dart';
@@ -31,7 +32,15 @@ import 'core_account.dart';
 /// Everything else on [state] -- the account id, the keys, the server -- is
 /// identity and is not touched: the core has its own copy, and the app's is
 /// what set it there in the first place.
-void applyCoreState(AppState state, CoreAccount account) {
+void applyCoreState(AppState state, CoreAccount account, ContactStore? contacts) {
+  // The asserted names of this account's peers (APP-27), refreshed with the
+  // chats they label. A local read, so it costs the same as one more chat.
+  //
+  // Set here rather than at the five call sites, and taken as a parameter
+  // rather than reached for, so a rebuild cannot leave the labels showing what
+  // the previous account's peers called themselves.
+  contacts?.setSuggestedNames(account.peerProfileNames());
+
   final chats = account.chats();
 
   final conversations = <String, Conversation>{};

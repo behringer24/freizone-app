@@ -673,7 +673,10 @@ class ApiClient {
     req.bodyBytes = ciphertext;
 
     final resp = await _send(req);
-    return blobIdFromUploadResponse(_decodeObject(resp, {200, 201}), resp.statusCode);
+    return blobIdFromUploadResponse(
+      _decodeObject(resp, {200, 201}),
+      resp.statusCode,
+    );
   }
 
   /// Uploads an attachment to a peer on a DIFFERENT server, where we have no
@@ -708,14 +711,19 @@ class ApiClient {
     req.headers['Freizone-Sender-Account-Id'] = senderAccountId;
     req.headers['Freizone-Sender-Root-Pub-Key'] = encodeB64(rootPub);
     req.headers['Freizone-Sender-Device-Id'] = cert.deviceId;
-    req.headers['Freizone-Sender-Device-Pub-Key'] = encodeB64(cert.devicePubKey);
+    req.headers['Freizone-Sender-Device-Pub-Key'] = encodeB64(
+      cert.devicePubKey,
+    );
     req.headers['Freizone-Sender-Cert-Issued-At'] = encodeTime(cert.issuedAt);
     req.headers['Freizone-Sender-Cert-Signature'] = encodeB64(cert.signature);
     headers.forEach((key, value) => req.headers[key] = value);
     req.bodyBytes = ciphertext;
 
     final resp = await _send(req);
-    return blobIdFromUploadResponse(_decodeObject(resp, {200, 201}), resp.statusCode);
+    return blobIdFromUploadResponse(
+      _decodeObject(resp, {200, 201}),
+      resp.statusCode,
+    );
   }
 
   /// Downloads an attachment's ciphertext. Only the recipient device can
@@ -741,7 +749,12 @@ class ApiClient {
   /// Drops a blob the recipient no longer needs, freeing its quota before
   /// the retention window would.
   Future<void> deleteBlob(String blobId, DeviceCredentials creds) async {
-    final resp = await _signedRequest('DELETE', '/v1/blobs/$blobId', null, creds);
+    final resp = await _signedRequest(
+      'DELETE',
+      '/v1/blobs/$blobId',
+      null,
+      creds,
+    );
     _checkStatus(resp, {204});
   }
 
@@ -759,6 +772,54 @@ class ApiClient {
     return list
         .map((e) => AdminAccountSummary.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// The moderation queue (SRV-33), newest first.
+  ///
+  /// A moderator sees reports about regular members; ones targeting a
+  /// moderator or an admin are admin-only and the server does not send them,
+  /// so their absence here is the rule working rather than an empty result.
+  Future<List<AdminReport>> listReports(
+    DeviceCredentials creds, {
+    bool openOnly = true,
+  }) async {
+    // The query goes in rawQuery, never appended to the path: §3 signs method,
+    // path and rawQuery as three separate pieces, and the server splits the
+    // URL the same way. Signing "…/reports?state=open" as the path produced a
+    // signature the server could not reproduce -- a 401 that looked like an
+    // empty queue (2026-08-30, found on the device).
+    final resp = await _signedRequest(
+      'GET',
+      '/v1/admin/reports',
+      null,
+      creds,
+      rawQuery: openOnly ? 'state=open' : '',
+    );
+    _checkStatus(resp, {200});
+    final list = json.decode(resp.body) as List<dynamic>;
+    return list
+        .map((e) => AdminReport.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Records what was done about a report: actioned, dismissed, or abusive.
+  ///
+  /// Resolving is **not** deleting and there is no counter reset -- the case
+  /// stays readable, which is what lets the next moderator see there was one
+  /// and how it went. "abusive" counts against the reporter instead, which is
+  /// the counterweight to reporting being named.
+  Future<void> resolveReport(
+    DeviceCredentials creds,
+    int reportId,
+    String outcome,
+  ) async {
+    final resp = await _signedRequest(
+      'POST',
+      '/v1/admin/reports/$reportId/resolve',
+      {'outcome': outcome},
+      creds,
+    );
+    _checkStatus(resp, {200});
   }
 
   /// Grants or revokes admin/moderator status. Admin only.
@@ -816,7 +877,10 @@ class ApiClient {
   /// signature, never from [accountId] alone (see docs/PROTOCOL.md's
   /// entry for this endpoint), so this can never be pointed at a
   /// different account no matter what's passed here.
-  Future<void> deleteOwnAccount(DeviceCredentials creds, String accountId) async {
+  Future<void> deleteOwnAccount(
+    DeviceCredentials creds,
+    String accountId,
+  ) async {
     final resp = await _signedRequest(
       'DELETE',
       '/v1/accounts/$accountId',
@@ -853,7 +917,12 @@ class ApiClient {
   /// Returns whether inbound federation is currently enabled. Admin or
   /// moderator.
   Future<bool> getFederationEnabled(DeviceCredentials creds) async {
-    final resp = await _signedRequest('GET', '/v1/admin/federation', null, creds);
+    final resp = await _signedRequest(
+      'GET',
+      '/v1/admin/federation',
+      null,
+      creds,
+    );
     return _decodeObject(resp, {200})['enabled'] as bool;
   }
 

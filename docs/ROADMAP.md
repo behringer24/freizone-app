@@ -1378,3 +1378,191 @@ opening a menu and reading it.
   `AppSettings` and `ContactStore` standing up in a widget test, and the fault is
   structural rather than logical — a widget not listening, not a rule computed
   wrongly. Saying so rather than writing a test that would pass either way.
+
+### APP-27 — Showing the name a contact asserts
+Status: `done` · Depends on: SRV-32 · Related: APP-18, APP-19
+Design: [design/27-profile-name.md](design/27-profile-name.md)
+
+SRV-32 lets an account assert one optional, signed name about itself, carried
+inside the encrypted channel. This is the display half: an optional field in
+one's own profile, the asserted name as a fallback label where no contact name
+exists, a transcript line when somebody changes theirs, and a reset entry back
+to it.
+
+The suggestion is **not** written to APP-19's `ContactStore` — it is kept in
+the core's per-account state, because it is a statement *they* made to *one* of
+my accounts rather than my own judgement about a person, because the receive
+path runs in the push isolate where the contact store must not be touched, and
+because APP-28 forwards the asserted name and must never be able to reach the
+private petname. Adopting a suggestion is the deliberate act that turns it into
+an ordinary contact, which keeps APP-19's "never from having seen an account"
+rule literally true.
+
+`personLabel` (APP-18) stays the one function every surface calls; the chain
+grows one link in the middle.
+
+### APP-28 — Reporting someone, and working through reports
+Status: `done` · Depends on: SRV-33, APP-27 · Related: APP-10, APP-11
+Design: [design/28-report-and-moderation.md](design/28-report-and-moderation.md)
+
+Two surfaces from one feature. **Reporting** lives inside the existing personal
+block in `peer_profile_screen.dart` rather than beside it, states in one
+sentence that the operator sees the reporter's address, offers four categories
+and no free text, shows what will be sent — the *asserted* name from APP-27,
+never the local one — and asks separately before handing a reporter's identity
+to a federated operator they do not know.
+
+**Moderation** gets its own Reports entry with a badge, not a sort order, since
+nothing is reported on a healthy server; the account detail screen (APP-11)
+grows the individual cases, because a counter is not the working unit. Three
+outcomes — actioned, dismissed, abusive — and no counter reset. Contacting the
+reported account and the reporter are both one tap, with **nothing prefilled**:
+that convenience would expose the reporter, and it is tempting precisely
+because it looks helpful.
+
+- **Named limit to state in the UI**: reporting the server's only admin
+  delivers the report to the person it is about.
+
+- 2026-08-30 — **first half shipped**: the core bridge, the display fallback and
+  the field for one's own name.
+  - three core calls (`set_profile_name`, `profile_name`, `peer_profile_names`),
+    with the last one a **local read** like `chats` rather than an isolate hop --
+    it is called while a list is being built, where the hop would buy nothing
+    and cost a frame
+  - `personLabel` stays the one function every surface calls (APP-18). Rather
+    than adding a parameter at six call sites, the store gained
+    `labelNameFor` -- assigned name, else asserted name, else the short id --
+    while `nameFor` stays "what I called them" and remains the only half that
+    is written to the file, offered for editing, or reachable by a report
+  - the asserted names are a **cache within the device-wide store**, set by
+    `applyCoreState` and replaced wholesale on every refresh and account
+    switch. That is what keeps APP-19's rule intact: the persisted half stays
+    account-independent, and the per-account half is owned by the core beside
+    that account's other state. `AccountManager` and `AppSession` now carry the
+    store so the refresh can reach it
+  - the profile screen has one optional field with the sentence that decides
+    it: this goes to the people you chat with, with your messages, and to no
+    server
+- 2026-08-30 — two things found on the way, neither caused here:
+  - `native/go.mod` pinned `go 1.26.4` while freizone-server has moved to
+    `1.26.6`, so the native module **did not build at all**. Raised to match;
+    verified by building the baseline before touching anything
+  - `test/core_stream_test.dart`'s "a connect drains the queue" fails: the
+    transcript ends with the SRV-29 account-gone system line rather than the
+    message, because the test's server answers `not_found` to everything and
+    the receipt sent afterwards resolves the peer. Confirmed pre-existing by
+    rebuilding the core with the send path reverted to the session's starting
+    commit -- it fails there too. **Not fixed here**, since it belongs to
+    whoever owns that test's expectations
+
+- 2026-08-30 — **done.** The second half: the rename notice, the reset, and the
+  two names side by side.
+  - the **notice is written by the core**, not here, reversing what design/27
+    sketched -- it happens on receipt, including a background wake with no UI,
+    and a line the wake does not write is a line nobody sees. Details and the
+    two cases that get no line are in freizone-server's SRV-32 entry
+  - the **reset turned out to be a wording change**, not a new action: clearing
+    the local name is already what hands the label back to them, so the rename
+    dialog's existing "Remove" reads "Use their name" wherever a suggestion
+    exists and this device has overridden it. Calling it "Remove" there would
+    name an outcome that does not happen. The dialog also states the suggestion
+    under the field, so the choice is visible while it is made
+  - "They call themselves X" appears on the peer profile and the contact detail
+    screen, and **only where the two differ** -- the one place the difference is
+    the point. Never decorated as a verification: anyone may call themselves
+    anything, and all a signature proves is that this account said it
+  - `test/person_label_test.dart` gained the chain's middle link, including the
+    one that matters most -- an asserted name never wins over a name assigned
+    here, or renaming somebody would not survive what they assert next
+
+- 2026-08-30 — **done**, in two passes: the report flow, then the moderation
+  side.
+  - reporting sits **inside** blocking (`confirmAndBlock`'s checkbox), with the
+    standalone entry kept for the other case -- tell the operator, keep
+    reading. The dialog states before sending what a user would otherwise learn
+    after: the operator sees their address and can ask them about it
+  - **no free-text field**, four categories, and the reason said out loud on
+    the dialog: the operator cannot read the conversation, so a report is a
+    reason to look rather than evidence
+  - what travels is shown, and it is the *asserted* name (APP-27) -- with no
+    claim the dialog says so instead of substituting the local one, which lives
+    in a different store precisely so it cannot end up here
+  - telling the reported account's own server is a second question, and the
+    option appears only where that server accepts reports. Whether **this**
+    server does comes from the status fetch (absent means off), so the entry is
+    absent rather than drawn and failing
+  - the count rides on the **Server Admin menu entry**, loaded with the role
+    rather than when that area is opened. Staff who never open it would
+    otherwise never learn a report exists, and the button every member sees
+    would be a placebo
+  - the queue is its own screen with the *cases*, not the counters: who
+    reported, when, which category, what the account calls itself and whether
+    the signature checked out. Both addresses open the admin account view,
+    which is where asking either side already lives
+  - three outcomes and no counter reset. `abusive` counts against the reporter,
+    which is the counterweight to reporting being named
+  - **withdrawal is offered unconditionally**: nothing tells this device what it
+    has reported, so the entry cannot say whether there is anything to take
+    back. Named in design/28 as the honest cost rather than papered over
+  - a "most reported" sort order was considered and **not** built -- a column
+    that is zero for every row is the poor way in the reasoning rejects, and
+    the discreet marker on affected rows covers noticing one in passing
+
+- 2026-08-30 — **`core_stream_test.dart`'s drain test was failing, and it took
+  building the desktop core to notice.** It is gated on `skip: coreMissing`, so
+  it silently does not run unless `native/build_desktop.ps1` has produced a
+  library -- worth knowing on its own: that file's five tests are invisible on
+  a checkout that has never built one.
+  - the fault was the test's own choice of refusal. Its catch-all answered
+    every housekeeping request `404`, meaning to say "this is best-effort, let
+    it fail" -- but on `GET /v1/accounts/{id}` a 404 is not a failure, it is
+    the protocol's statement that the account does not exist (§4). The core
+    believed it, correctly, and filed the peer as gone (SRV-29), which appends
+    a system line -- so the last transcript entry was that line rather than the
+    message the test was reading back
+  - answered `503` instead. A server that is merely unhelpful has to answer
+    like one, and the assertion then says what it always meant
+
+- 2026-08-30 — **device report: Server Admin failed outright against a server
+  that predates SRV-33**, with "This address doesn't point to a Freizone
+  server." A regression introduced by this item.
+  - `refreshReports` had its capability pre-check removed so the menu badge
+    could load early, on the assumption that an older server answers the route
+    with a JSON 404. It has no such route: net/http's mux replies `404 page not
+    found` as **plain text**, the body parser raises
+    `NotFreizoneServerException` -- not an `ApiException` -- and the `on
+    ApiException` catch let it straight through into the admin screen's error
+    banner
+  - fixed on both levels. The pre-check is back, so nothing is asked of a
+    server that does not offer it; and the catch is now unconditional, because
+    a report count is a side note on a screen about roles, policy and users and
+    must never be able to take it down. The badge keeps loading early by having
+    *both* fetches trigger it once their own half is in -- role and capability
+    arrive from two requests that race
+  - the general lesson, recorded in `test/reports_old_server_test.dart`: for an
+    **optional** route a non-JSON 404 means "this route does not exist", never
+    "wrong server". Any capability added from here on has the same shape
+
+- 2026-08-30 — **three device findings, two of them real defects.**
+  - **the queue was always empty, on every role.** `listReports` appended
+    `?state=open` to the *path* instead of passing it as `rawQuery`. §3 signs
+    method, path and rawQuery as three separate pieces and the server splits
+    the URL the same way, so the signature could not be reproduced: a 401 that
+    the unconditional catch turned into "nothing waiting". Reports were being
+    filed correctly the whole time -- only reading them was broken. Fixed, and
+    **the catch now logs**: a failure nobody may be shown still has to be
+    findable, which is exactly what was missing while this hid
+  - **the chat title and chat list never showed an asserted name.** APP-27
+    switched `personLabel`, but `Conversation.titleFor` is a separate read path
+    (APP-19's own) and still called `nameFor`. Every display site now uses
+    `labelNameFor`; the four remaining `nameFor` callers are the three rename
+    dialogs and the peer profile's side-by-side comparison, all of which
+    genuinely want the assigned half
+  - reporting got its own section in the shape of Encryption and Protection --
+    coloured heading, a sentence, a button -- red, and between the two, on
+    Andreas' call from the device
+- 2026-08-30 — **not a defect**, worth writing down because it will be asked
+  again: a rename reaches only peers the renaming account has *sent* something
+  to since. The claim rides on ordinary envelopes (SRV-32), so an account that
+  wrote to one contact and not another shows its new name to the first only.
+  There is no fan-out, deliberately.

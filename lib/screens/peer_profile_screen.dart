@@ -13,6 +13,7 @@ import '../state/conversation.dart';
 import '../util/address_format.dart';
 import '../util/block_actions.dart';
 import '../util/freizone_address.dart';
+import '../util/report_actions.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
 import '../widgets/verified_badge.dart';
@@ -53,8 +54,10 @@ class PeerProfileScreen extends StatelessWidget {
   ) async {
     final result = await showDialog<String>(
       context: context,
-      builder: (context) =>
-          RenameDialog(initialName: contacts.nameFor(peerAccountId) ?? ''),
+      builder: (context) => RenameDialog(
+        initialName: contacts.nameFor(peerAccountId) ?? '',
+        suggestedName: contacts.suggestedNameFor(peerAccountId),
+      ),
     );
     if (result == null) return; // cancelled
     if (result.isEmpty) {
@@ -77,7 +80,14 @@ class PeerProfileScreen extends StatelessWidget {
       await session.setBlocked(peerAccountId, false);
       return;
     }
-    await confirmAndBlock(context, session, contacts, convo);
+    await confirmAndBlock(
+      context,
+      session,
+      contacts,
+      convo,
+      canReport: session.reportsEnabled,
+      assertedName: contacts.suggestedNameFor(peerAccountId),
+    );
   }
 
   @override
@@ -170,7 +180,10 @@ class PeerProfileScreen extends StatelessWidget {
                 ListTile(
                   title: const Text('Peer name'),
                   subtitle: Text(
-                    assignedName ?? 'No name set -- shows the address instead',
+                    assignedName ??
+                        (contacts.suggestedNameFor(peerAccountId) == null
+                            ? 'No name set -- shows the address instead'
+                            : 'Not named here -- shows the name they give'),
                   ),
                   trailing: IconButton(
                     icon: const Icon(Icons.edit_outlined),
@@ -178,6 +191,17 @@ class PeerProfileScreen extends StatelessWidget {
                     onPressed: () => _showRenameDialog(context, convo),
                   ),
                 ),
+                // Shown only where the two differ, which is the one place the
+                // difference is the point: you call them X, they call themselves
+                // Y (APP-27). Deliberately not decorated as a verification --
+                // anyone may call themselves anything, and all the signature
+                // proves is that this account said it.
+                if (contacts.suggestedNameFor(peerAccountId) case final theirs?)
+                  if (theirs != assignedName)
+                    ListTile(
+                      title: const Text('They call themselves'),
+                      subtitle: Text(theirs),
+                    ),
                 ListTile(
                   title: const Text('Short address'),
                   subtitle: Text(shortAddress),
@@ -258,6 +282,75 @@ class PeerProfileScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 24),
+                // Its own section, in the same shape as Encryption and
+                // Protection either side of it: a coloured heading, a sentence
+                // saying what the action actually does, then the button. Red,
+                // because it is about somebody's conduct and reaches an operator
+                // -- and placed between the two, since it sits between "recover
+                // this conversation" and "end it".
+                //
+                // Reporting without blocking is the case this covers: somebody
+                // the user wants the operator to know about but still wants to
+                // hear from. The ordinary path is the checkbox inside blocking.
+                if (session.reportsEnabled) ...[
+                  const SizedBox(height: 32),
+                  const Divider(),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Text(
+                      'Report',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'Tells the operator of ${convo.peerServer ?? session.state.server} about this account. '
+                      'They see the report with your address and can ask you about it -- messages are '
+                      'encrypted, so your account of what happened is all they have. Nothing is sent to '
+                      'the other side, and you can withdraw it again.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Theme.of(context).colorScheme.error,
+                        side: BorderSide(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                      onPressed: () => reportContact(
+                        context,
+                        session,
+                        accountId: peerAccountId,
+                        peerServer: convo.peerServer ?? '',
+                        assertedName: contacts.suggestedNameFor(peerAccountId),
+                      ),
+                      icon: const Icon(Icons.flag_outlined),
+                      label: const Text('Report this contact'),
+                    ),
+                  ),
+                  // Always offered, never conditioned on knowing one exists:
+                  // nothing tells this device what it has reported, and
+                  // withdrawing what is not there is the outcome being asked for
+                  // rather than a failure.
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: TextButton(
+                      onPressed: () =>
+                          withdrawReportFor(context, session, peerAccountId),
+                      child: const Text('Withdraw my report'),
+                    ),
+                  ),
+                ],
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                   child: Text(

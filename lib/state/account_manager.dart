@@ -17,14 +17,26 @@ import '../push/push_manager.dart';
 import '../util/server_url.dart';
 import 'app_session.dart';
 import 'app_settings.dart';
+import 'contact_store.dart';
 import 'local_state.dart';
 
 class AccountManager extends ChangeNotifier {
-  AccountManager._(this._sessions, this._activeAccountId, this._settings);
+  AccountManager._(
+    this._sessions,
+    this._activeAccountId,
+    this._settings,
+    this._contacts,
+  );
 
   final Map<String, AppSession> _sessions;
   String? _activeAccountId;
   final AppSettings _settings;
+
+  /// Handed on to every session, which passes it to the core refresh so the
+  /// asserted names of the open account's peers (APP-27) are there when a list
+  /// is drawn. The store itself stays device-wide and unaware of accounts --
+  /// only this cache within it is per account.
+  final ContactStore _contacts;
 
   List<AppSession> get sessions => _sessions.values.toList();
   AppSession? get active => _sessions[_activeAccountId];
@@ -74,13 +86,16 @@ class AccountManager extends ChangeNotifier {
   /// falling back to an arbitrary "first in the list" order -- falls
   /// back to that only if the remembered id no longer exists (e.g. that
   /// account was removed on another device in the meantime).
-  static Future<AccountManager> load(AppSettings settings) async {
+  static Future<AccountManager> load(
+    AppSettings settings,
+    ContactStore contacts,
+  ) async {
     await requestNotificationPermission();
 
     final profiles = await LocalStateStore.listProfiles();
     final sessions = <String, AppSession>{};
     for (final profile in profiles) {
-      final session = AppSession(profile);
+      final session = AppSession(profile, contacts: contacts);
       sessions[profile.accountId] = session;
       // Fire init() but do NOT await it here: init() does network I/O
       // (prekey upload/top-up) against the account's own home server, and
@@ -98,7 +113,7 @@ class AccountManager extends ChangeNotifier {
         (remembered != null && sessions.containsKey(remembered))
         ? remembered
         : (profiles.isEmpty ? null : profiles.first.accountId);
-    return AccountManager._(sessions, initialActiveId, settings);
+    return AccountManager._(sessions, initialActiveId, settings, contacts);
   }
 
   /// Adds a freshly registered/bootstrapped account (see SetupScreen) and
@@ -111,7 +126,7 @@ class AccountManager extends ChangeNotifier {
   Future<void> addProfile(AppState state) async {
     _sessions[state.accountId]?.dispose();
 
-    final session = AppSession(state);
+    final session = AppSession(state, contacts: _contacts);
     await session.init();
     _sessions[state.accountId] = session;
     _activeAccountId = state.accountId;

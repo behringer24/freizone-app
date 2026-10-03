@@ -51,6 +51,57 @@ class CoreAccount {
   List<CoreMessage> messages(String chatId) =>
       core.coreMessages(handle, chatId);
 
+  /// Reports an account to its operator (APP-28).
+  ///
+  /// **The report is named**: the reporter's address is stored and shown to
+  /// that server's staff, so they can come back and ask what happened. A
+  /// caller must have said so before calling this.
+  ///
+  /// The evidence is gathered by the core from what that account asserted
+  /// about *itself* -- never the name this device gave them, which lives in
+  /// another store entirely.
+  ///
+  /// [alsoTheirServer] additionally files it with a federated account's own
+  /// home server. Off by default and a deliberate choice: it hands the
+  /// reporter's address to an operator they do not know. Filing with one's own
+  /// server always happens.
+  Future<void> report(
+    String accountId,
+    ReportCategory category, {
+    bool alsoTheirServer = false,
+  }) => _run({
+    'call': 'report',
+    'handle': handle,
+    'account_id': accountId,
+    'category': category.wire,
+    'also_their_server': alsoTheirServer,
+  });
+
+  /// Takes back a report. Somebody who bears responsibility for an accusation
+  /// has to be able to change their mind, so this is always offered -- and a
+  /// server that has no report of theirs is not an error, it is the outcome.
+  Future<void> withdrawReport(String accountId) =>
+      _run({'call': 'withdraw_report', 'handle': handle, 'account_id': accountId});
+
+  /// Whether a server accepts reports. Pass an empty server for this account's
+  /// own, or a peer's origin for theirs -- two separate questions, and a caller
+  /// offering to forward a report has to ask both.
+  Future<bool> reportsEnabled({String server = ''}) async {
+    final res = await _run({
+      'call': 'server_status',
+      'handle': handle,
+      'server': server,
+    });
+    return (res['reports_enabled'] as bool?) ?? false;
+  }
+
+  /// Every peer's asserted name, keyed by account id (APP-27).
+  ///
+  /// A local read like [chats], so it can be folded into a rebuild without an
+  /// isolate hop. A peer who has asserted nothing is absent, which is how a
+  /// caller falls back to the short id.
+  Map<String, String> peerProfileNames() => core.corePeerProfileNames(handle);
+
   /// Everything about a group: membership, roles, and how far each member has
   /// got with our messages.
   GroupInfo groupInfo(String groupId) => core.coreGroupInfo(handle, groupId);
@@ -301,6 +352,24 @@ class CoreAccount {
     'enabled': enabled,
   });
 
+  /// Records the name this account asserts about itself (APP-27).
+  ///
+  /// Nothing is sent from here: the claim rides on the next envelope to each
+  /// peer, so a rename costs no delivery of its own and reaches somebody at
+  /// the moment it becomes relevant to them. Passing an empty name is the
+  /// withdrawal, which is itself a claim and does travel.
+  Future<void> setProfileName(String name) =>
+      _run({'call': 'set_profile_name', 'handle': handle, 'name': name});
+
+  /// This account's own asserted name, and whether one was ever set.
+  Future<ProfileName> profileName() async {
+    final res = await _run({'call': 'profile_name', 'handle': handle});
+    return ProfileName(
+      name: (res['name'] as String?) ?? '',
+      everSet: ((res['set_at'] as String?) ?? '').isNotEmpty,
+    );
+  }
+
   /// Discards everything held *about* a peer: the cached device and both
   /// ratchet sessions with them.
   ///
@@ -439,8 +508,44 @@ Map<String, dynamic> coreCallInIsolate(
       return core.coreForgetPeerRaw(request);
     case 'set_receipts_enabled':
       return core.coreSetReceiptsEnabledRaw(request);
+    case 'set_profile_name':
+      return core.coreSetProfileNameRaw(request);
+    case 'profile_name':
+      return core.coreProfileNameRaw(request);
+    case 'report':
+      return core.coreReportRaw(request);
+    case 'withdraw_report':
+      return core.coreWithdrawReportRaw(request);
+    case 'server_status':
+      return core.coreServerStatusRaw(request);
     case 'group_dissolve':
       return core.coreGroupDissolveRaw(request);
   }
   throw ArgumentError('unknown core call "$name"');
+}
+
+/// This account's own asserted name (APP-27).
+///
+/// [everSet] distinguishes two states an empty [name] would otherwise merge:
+/// never having set one, and having set one and cleared it. The second is a
+/// withdrawal that has been sent to peers; the first has nothing to send.
+class ProfileName {
+  const ProfileName({required this.name, required this.everSet});
+
+  final String name;
+  final bool everSet;
+}
+
+/// Why an account is being reported (APP-28). A fixed set, matching the
+/// server's: there is no free-text field anywhere in this feature.
+enum ReportCategory {
+  spam('spam', 'Spam'),
+  harassment('harassment', 'Harassment'),
+  fraud('fraud', 'Fraud or impersonation'),
+  other('other', 'Something else');
+
+  const ReportCategory(this.wire, this.label);
+
+  final String wire;
+  final String label;
 }
