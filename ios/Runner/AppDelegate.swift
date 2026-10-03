@@ -19,6 +19,9 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FreizoneStorage") {
       StorageChannel.register(with: registrar)
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FreizoneLifecycle") {
+      BackgroundGrace.register(with: registrar)
+    }
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FreizoneGallery") {
       GalleryChannel.register(with: registrar)
     }

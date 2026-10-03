@@ -27,10 +27,15 @@ import '../net/core_stream.dart';
 
 /// One open account, addressed by the handle the core gave us.
 class CoreAccount {
-  CoreAccount({required this.core, required this.handle, this.libraryPath});
+  CoreAccount({required this.core, required this._handle, this.libraryPath});
 
   final FreizoneCore core;
-  final int handle;
+
+  /// The handle the core gave us. It changes only on iOS, where the account is
+  /// let go of while the app is in the background and opened again on return
+  /// -- see [suspend].
+  int get handle => _handle;
+  int _handle;
 
   /// Passed to every isolate: null lets the platform find the library, which is
   /// right in the app, but a host test loaded it from a path and an isolate
@@ -317,9 +322,69 @@ class CoreAccount {
     'group_id': groupId,
   });
 
-  Future<Map<String, dynamic>> _run(Map<String, dynamic> request) {
+  Future<Map<String, dynamic>> _run(Map<String, dynamic> request) async {
+    // A call made while the account is let go of waits for it to come back
+    // rather than failing against a closed handle, and then runs against the
+    // new one -- the request was built with whatever handle was current when
+    // the caller asked.
+    while (_resumed != null) {
+      await _resumed!.future;
+    }
+    final call = {...request, 'handle': _handle};
     final path = libraryPath;
-    return Isolate.run(() => coreCallInIsolate(request, path));
+    _inFlight++;
+    try {
+      return await Isolate.run(() => coreCallInIsolate(call, path));
+    } finally {
+      _inFlight--;
+      if (_inFlight == 0) {
+        _idle?.complete();
+        _idle = null;
+      }
+    }
+  }
+
+  // --- letting go in the background (iOS) -----------------------------------
+  //
+  // The core holds an exclusive lock on the account directory for as long as
+  // the account is open. On iOS that directory is in the App Group container,
+  // shared with the Notification Service Extension, and two things follow: the
+  // extension cannot open an account the app is holding, so a push wake would
+  // decrypt nothing; and iOS terminates an app outright if it is suspended
+  // while holding a file lock in a shared container. So the app closes the
+  // account on its way into the background and opens it again on return.
+
+  int _inFlight = 0;
+  Completer<void>? _idle;
+  Completer<void>? _resumed;
+
+  /// Whether the account is currently let go of.
+  bool get suspended => _resumed != null;
+
+  /// Closes the account so another process may open it. Waits up to [grace]
+  /// for blocking calls already running to finish -- a send cut off halfway is
+  /// worse than a moment's delay -- and closes regardless after that, because
+  /// being suspended while still holding the lock is what gets the app killed.
+  Future<void> suspend({Duration grace = const Duration(seconds: 8)}) async {
+    if (_resumed != null) return;
+    _resumed = Completer<void>();
+    // Captured now: a resume racing the wait below installs a new handle, and
+    // that one must not be the one closed.
+    final closing = _handle;
+    if (_inFlight > 0) {
+      final idle = _idle ??= Completer<void>();
+      await idle.future.timeout(grace, onTimeout: () {});
+    }
+    core.coreClose(closing);
+  }
+
+  /// Takes up the account again under [handle], a fresh coreOpen of the same
+  /// directory, and releases every call that waited meanwhile.
+  void resume(int handle) {
+    _handle = handle;
+    final resumed = _resumed;
+    _resumed = null;
+    resumed?.complete();
   }
 }
 

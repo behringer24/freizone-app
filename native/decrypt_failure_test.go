@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/behringer24/freizone-server/pkg/client"
 	"github.com/behringer24/freizone-server/pkg/ratchet"
 )
 
@@ -101,5 +102,15 @@ func TestErrorCodeAbsentForUnclassifiedFailures(t *testing.T) {
 	wrapped := fmt.Errorf("while syncing: %w", codedError{code: "x", err: errors.New("boom")})
 	if got := errorCode(wrapped); got != "x" {
 		t.Errorf("errorCode(wrapped) = %q, want %q", got, "x")
+	}
+}
+
+// An account another process holds open -- the iOS Notification Service
+// Extension during a push wake -- has to be recognisable without matching
+// error text, so the app can wait for it instead of failing to open.
+func TestErrorCodeAccountInUse(t *testing.T) {
+	err := fmt.Errorf("opening: %w", &client.ErrAccountInUse{Path: "/tmp/x"})
+	if got := errorCode(err); got != codeAccountInUse {
+		t.Errorf("errorCode() = %q, want %q", got, codeAccountInUse)
 	}
 }
