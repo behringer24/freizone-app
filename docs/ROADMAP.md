@@ -52,16 +52,49 @@ Move existing local chat history onto a newly linked device. Needs the
 multi-device linking channel first (SRV-02).
 
 ### APP-03 — iOS client
-Status: `planned` · Also affects: freizone-gateway (GAW-01)
+Status: `in progress` · Also affects: freizone-gateway (GAW-01)
 
-No `ios/` directory yet; only Android is built and tested. iOS push delivery
-needs the gateway's APNs path (GAW-01).
+The Flutter app on iPhone and iPad (iOS 16+), developed on the long-running
+`feat/ios_app` branch. iOS push delivery needs the gateway's APNs path (GAW-01).
 
 - 2026-08-07 — the Go core has to reach iOS too, which is the last stage of
   freizone-server's `SRV-23` (shared protocol client core): `native/` currently
   builds only as an Android `.so`, and an xcframework target is a prerequisite
   for any iOS build, Flutter or otherwise. That work is tracked there, not
   here. A Mac is the other prerequisite and is planned
+
+- 2026-10-03 — **the app runs on iOS.** `ios/` scaffolded; the Go core builds
+  as static archives (`native/build_ios.sh`) linked into the app binary, where
+  the existing `DynamicLibrary.process()` lookup finds it. Bootstrap, 1:1 chat,
+  pictures and the iPad were exercised on simulators against a local server.
+  UnifiedPush and FCM are Android-only; the Android channels got iOS halves
+  where iOS has an equivalent (saving to Photos, add-only; shielding the
+  recovery phrase from the app switcher and screen recording, since iOS cannot
+  block a screenshot), and forms and bubbles are width-capped on tablets.
+
+- 2026-10-03 — **push, the iOS way.** The gateway's wake (GAW-01) is a mutable
+  placeholder alert, and a Notification Service Extension does what Android
+  does in the background: opens every account through the core, runs the
+  shared receive path (`doCoreSync`), and shows one "New message(s) for
+  <account>" per account with the app's own tap payload.
+
+  Two consequences reached into the app. The extension is a separate process,
+  so all data moved into an App Group container (migrated by rename on first
+  launch). And the core holds an exclusive `flock` on an open account, which
+  would lock the extension out -- and iOS terminates an app suspended while
+  holding a lock in a shared container -- so on iOS the app now closes its
+  accounts when it is paused and reopens them on resume, waiting while the
+  extension holds one (`account_in_use`).
+
+  Also found: `firebase_messaging`, linked in for Android, makes itself the
+  notification delegate on iOS and swallowed every tap, including on the
+  app's own notifications. An own delegate (`NotificationRouter`) now routes
+  taps to Dart and decides foreground presentation.
+
+  Not yet seen on a real push, which needs a paid Apple developer account: the
+  extension being started by iOS, an empty notification for a housekeeping
+  wake actually staying hidden, and memory on a device (6 MB peak footprint
+  measured on the Mac, against an extension limit of about 24 MB).
 
 ### APP-04 — Multimedia messaging
 Status: `in progress` · Also affects: freizone-server (SRV-07)
