@@ -1,6 +1,6 @@
 // Copies a received picture out of the app's private storage and into the
 // device's own gallery (APP-20), over a MethodChannel handled in
-// MainActivity.kt -- the same shape as secure_screen.dart and
+// MainActivity.kt and, on iOS, GalleryChannel.swift -- the same shape as secure_screen.dart and
 // share_intake.dart, and for the same reason: one platform call does not earn
 // a dependency.
 //
@@ -23,14 +23,16 @@ enum GallerySaveResult {
   saved,
 
   /// The storage permission was refused (API 24-28 only -- from API 29 on the
-  /// save needs no permission). Re-askable: the next attempt asks again.
+  /// save needs no permission). Re-askable on Android: the next attempt asks
+  /// again. On iOS the add-to-Photos permission is asked only once; after a
+  /// refusal it can only be changed in the Settings app.
   permissionDenied,
 
   /// The copy itself failed -- no space, an unreadable source, a provider that
   /// refused the insert.
   failed,
 
-  /// No platform side at all: iOS, desktop, a unit test, or the background
+  /// No platform side at all: desktop, a unit test, or the background
   /// isolate, whose engine never registered the channel. Not an error, and
   /// deliberately distinct from [failed] so an automatic save can stay quiet
   /// while a manual one still reports something.

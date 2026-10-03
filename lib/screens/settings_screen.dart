@@ -63,8 +63,8 @@ class SettingsScreen extends StatelessWidget {
   /// Asks for the storage permission here rather than when the first picture
   /// arrives (APP-20): this is the moment the user is looking at an
   /// explanation of what the permission is for, and an automatic save must
-  /// never raise a dialog by itself. Older Android only — from API 29 on the
-  /// save needs no permission and this grants silently.
+  /// never raise a dialog by itself. Older Android and iOS only — from API 29
+  /// on Android the save needs no permission and this grants silently.
   Future<void> _setAutoSavePicturesToGallery(
     BuildContext context,
     bool value,
@@ -78,10 +78,15 @@ class SettingsScreen extends StatelessWidget {
       // Left off rather than on-but-silently-broken: a switch that says
       // pictures are being saved has to mean it.
       messenger.showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Freizone needs permission to write to your gallery before it can '
-            'save pictures automatically.',
+            Platform.isIOS
+                // iOS asks only once; after that only Settings can change it.
+                ? 'Freizone needs permission to add photos before it can save '
+                      'pictures automatically -- allow it in Settings > '
+                      'Freizone > Photos.'
+                : 'Freizone needs permission to write to your gallery before '
+                      'it can save pictures automatically.',
           ),
         ),
       );

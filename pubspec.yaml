@@ -116,6 +116,10 @@ flutter:
 
 flutter_launcher_icons:
   android: true
+  # iOS masks the corners itself, so it gets the full-bleed square; App Store
+  # icons must not carry an alpha channel.
+  ios: true
+  remove_alpha_ios: true
   image_path: "gfx/origami_chat_composite_preview.png"
   adaptive_icon_background: "gfx/origami_chat_background.png"
   adaptive_icon_foreground: "gfx/origami_chat_foreground_android_adaptive.png"
