@@ -16,6 +16,7 @@ import '../util/freizone_address.dart';
 import '../util/role_icon.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/verified_badge.dart';
+import '../widgets/readable_width.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
@@ -172,135 +173,137 @@ class ProfileScreen extends StatelessWidget {
 
         return Scaffold(
           appBar: AppBar(title: const Text('My Profile')),
-          body: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            children: [
-              Center(
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    PeerAvatar(accountId: accountId, radius: 48),
-                    if (roleBadgeIcon(session.myRole) case final icon?)
-                      Positioned(
-                        bottom: -4,
-                        right: -4,
-                        child: CircleAvatar(
-                          radius: 18,
-                          backgroundColor: Colors.white,
-                          child: Icon(icon, size: 22, color: Colors.black87),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (roleLabel != null) ...[
-                const SizedBox(height: 12),
+          body: ReadableWidth(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              children: [
                 Center(
-                  child: Chip(
-                    label: Text(roleLabel),
-                    visualDensity: VisualDensity.compact,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      PeerAvatar(accountId: accountId, radius: 48),
+                      if (roleBadgeIcon(session.myRole) case final icon?)
+                        Positioned(
+                          bottom: -4,
+                          right: -4,
+                          child: CircleAvatar(
+                            radius: 18,
+                            backgroundColor: Colors.white,
+                            child: Icon(icon, size: 22, color: Colors.black87),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-              ],
-              const SizedBox(height: 16),
-              Center(
-                child: Text(
-                  shortId,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
+                if (roleLabel != null) ...[
+                  const SizedBox(height: 12),
+                  Center(
+                    child: Chip(
+                      label: Text(roleLabel),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                Center(
+                  child: Text(
+                    shortId,
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Text(
-                  server,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Text(
+                    server,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 24),
-              ListTile(
-                title: const Text('Short address'),
-                subtitle: Text(shortAddress),
-                trailing: IconButton(
-                  icon: const Icon(Icons.copy),
-                  tooltip: 'Copy short address',
-                  onPressed: () =>
-                      _copy(context, 'Short address', shortAddress),
-                ),
-              ),
-              ListTile(
-                title: const Text('Full address'),
-                subtitle: Text(fullAddress),
-                trailing: IconButton(
-                  icon: const Icon(Icons.copy),
-                  tooltip: 'Copy full address',
-                  onPressed: () => _copy(context, 'Full address', fullAddress),
-                ),
-              ),
-              // Same placement as peer_profile_screen.dart's analogous line
-              // -- on its own row, attached to the server, not the identity
-              // above (APP-22).
-              _OwnServerListTile(session: session),
-              const SizedBox(height: 16),
-              const Divider(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text(
-                  'Security',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                const SizedBox(height: 24),
+                ListTile(
+                  title: const Text('Short address'),
+                  subtitle: Text(shortAddress),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy),
+                    tooltip: 'Copy short address',
+                    onPressed: () =>
+                        _copy(context, 'Short address', shortAddress),
                   ),
                 ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.key),
-                title: const Text('Recovery phrase'),
-                subtitle: const Text(
-                  'Back up your account so you can restore it on a new device',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        BackupScreen(rootPriv: session.state.rootPriv),
+                ListTile(
+                  title: const Text('Full address'),
+                  subtitle: Text(fullAddress),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy),
+                    tooltip: 'Copy full address',
+                    onPressed: () => _copy(context, 'Full address', fullAddress),
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              const Divider(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text(
-                  'Danger zone',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.error,
+                // Same placement as peer_profile_screen.dart's analogous line
+                // -- on its own row, attached to the server, not the identity
+                // above (APP-22).
+                _OwnServerListTile(session: session),
+                const SizedBox(height: 16),
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    'Security',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Theme.of(context).colorScheme.error,
-                    side: BorderSide(
+                ListTile(
+                  leading: const Icon(Icons.key),
+                  title: const Text('Recovery phrase'),
+                  subtitle: const Text(
+                    'Back up your account so you can restore it on a new device',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          BackupScreen(rootPriv: session.state.rootPriv),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    'Danger zone',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
-                  onPressed: () => _confirmDelete(context),
-                  icon: const Icon(Icons.delete_outline),
-                  label: const Text('Delete account'),
                 ),
-              ),
-            ],
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                      side: BorderSide(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                    onPressed: () => _confirmDelete(context),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete account'),
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },

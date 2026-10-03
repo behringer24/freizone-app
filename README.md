@@ -73,6 +73,32 @@ Every account's local state (its keys, conversation history, ratchet sessions) i
 
    The same holds anywhere else an address is typed, including the `id*server` form used to reach someone on another server: `q2xjx*http://192.168.1.10:18080`.
 
+## Building for iOS (work in progress)
+
+The iOS client (iPhone and iPad, iOS 16+) is being built on the `feat/ios_app`
+branch. It needs a Mac with Xcode, CocoaPods and Go; the same sibling-checkout
+layout as above applies.
+
+1. Build the native core as static archives for device and simulator:
+   ```sh
+   ./native/build_ios.sh
+   ```
+   They land in `ios/Frameworks/FreizoneCore/` (generated, gitignored) and are
+   linked into the app binary by `ios/Flutter/FreizoneCore.xcconfig`. Re-run it
+   whenever `native/*.go` changes.
+2. Run on a simulator or a connected device:
+   ```sh
+   flutter run -d "iPhone 18 Pro"
+   ```
+   A debug build only runs while `flutter run` (or Xcode) is attached; launched
+   on its own it shows a white screen. A device needs a signing team set in
+   Xcode (`open ios/Runner.xcworkspace`, Runner target, Signing & Capabilities);
+   a free Apple ID is enough for that, but its provisioning expires after 7 days.
+
+A simulator reaches a server on the same Mac as `http://127.0.0.1:<port>`.
+Push notifications are not available on iOS yet: messages arrive while the
+app is open.
+
 ## Running the tests
 
 `flutter test` works out of the box for everything that is pure Dart. Tests that
@@ -85,7 +111,12 @@ loaded by a test running on your machine — so build a host copy once:
 
 This needs a C compiler, because the core is cgo. On Windows:
 `winget install --id BrechtSanders.WinLibs.POSIX.UCRT --source winget`. The
-Android NDK's clang cannot stand in — it only targets Android.
+Android NDK's clang cannot stand in — it only targets Android. On a Mac, the
+Xcode command line tools provide the compiler, and the same build is:
+
+```sh
+cd native && go build -buildmode=c-shared -o libfreizonecore.dylib .
+```
 
 Tests needing the core **skip** rather than fail when it is missing, so a fresh
 checkout is never red; a skipped test says which script to run. Re-run the

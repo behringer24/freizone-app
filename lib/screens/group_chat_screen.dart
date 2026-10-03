@@ -32,6 +32,7 @@ import '../widgets/group_delivery_sheet.dart';
 import '../widgets/image_attachment.dart';
 import '../widgets/pattern_background.dart';
 import '../widgets/pinned_message_bar.dart';
+import '../widgets/readable_width.dart';
 import '../widgets/rename_dialog.dart';
 import '../widgets/reply_composer_bar.dart';
 import '../widgets/reply_quote.dart';
@@ -994,7 +995,7 @@ class _GroupBubble extends StatelessWidget {
           children: [
             Container(
               constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.75,
+                maxWidth: bubbleMaxWidth(context),
               ),
               margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),

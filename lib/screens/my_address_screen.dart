@@ -20,6 +20,7 @@ import '../util/errors.dart';
 import '../util/freizone_address.dart';
 import '../util/invite_uri.dart';
 import '../widgets/qr_invite_card.dart';
+import '../widgets/readable_width.dart';
 
 class MyAddressScreen extends StatefulWidget {
   const MyAddressScreen({super.key, required this.session});
@@ -87,57 +88,59 @@ class _MyAddressScreenState extends State<MyAddressScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Invite to chat')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            QrInviteCard(
-              captureKey: _captureKey,
-              title: 'My Freizone Address',
-              subtitle: 'Scan this with the Freizone app to start a chat with me.',
-              qrData: buildChatInviteUri(
-                id: widget.session.state.accountId,
-                server: widget.session.state.server,
-                name: _nameController.text,
-              ).toString(),
-              addressLines: [
-                SelectableText(_address, textAlign: TextAlign.center),
-              ],
-            ),
-            const SizedBox(height: 24),
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(
-                labelText: 'Suggest a name (optional)',
-                helperText:
-                    'Shown as the default chat name for whoever scans this',
+      body: ReadableWidth(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              QrInviteCard(
+                captureKey: _captureKey,
+                title: 'My Freizone Address',
+                subtitle: 'Scan this with the Freizone app to start a chat with me.',
+                qrData: buildChatInviteUri(
+                  id: widget.session.state.accountId,
+                  server: widget.session.state.server,
+                  name: _nameController.text,
+                ).toString(),
+                addressLines: [
+                  SelectableText(_address, textAlign: TextAlign.center),
+                ],
               ),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _copy,
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy'),
+              const SizedBox(height: 24),
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Suggest a name (optional)',
+                  helperText:
+                      'Shown as the default chat name for whoever scans this',
                 ),
-                const SizedBox(width: 16),
-                FilledButton.icon(
-                  onPressed: _sharing ? null : _share,
-                  icon: _sharing
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.share),
-                  label: const Text('Share'),
-                ),
-              ],
-            ),
-          ],
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _copy,
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Copy'),
+                  ),
+                  const SizedBox(width: 16),
+                  FilledButton.icon(
+                    onPressed: _sharing ? null : _share,
+                    icon: _sharing
+                        ? const SizedBox(
+                            height: 16,
+                            width: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.share),
+                    label: const Text('Share'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

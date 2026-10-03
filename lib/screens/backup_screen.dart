@@ -14,6 +14,7 @@ import 'package:share_plus/share_plus.dart';
 import '../ffi/freizone_core.dart';
 import '../util/errors.dart';
 import '../util/secure_screen.dart';
+import '../widgets/readable_width.dart';
 
 class BackupScreen extends StatefulWidget {
   const BackupScreen({super.key, required this.rootPriv});
@@ -91,94 +92,96 @@ class _BackupScreenState extends State<BackupScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Recovery phrase')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            color: theme.colorScheme.errorContainer,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.warning_amber_rounded,
-                      color: theme.colorScheme.onErrorContainer),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Anyone with these 24 words can restore and take over your '
-                      'account. Write them down and keep them somewhere safe and '
-                      'offline. Nobody -- not even your server -- can recover them '
-                      'for you if you lose them.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onErrorContainer,
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Card(
+              color: theme.colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.warning_amber_rounded,
+                        color: theme.colorScheme.onErrorContainer),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Anyone with these 24 words can restore and take over your '
+                        'account. Write them down and keep them somewhere safe and '
+                        'offline. Nobody -- not even your server -- can recover them '
+                        'for you if you lose them.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onErrorContainer,
+                        ),
                       ),
                     ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (_error != null)
+              Text(_error!, style: TextStyle(color: theme.colorScheme.error))
+            else if (!_revealed)
+              ElevatedButton.icon(
+                onPressed: () => setState(() => _revealed = true),
+                icon: const Icon(Icons.visibility),
+                label: const Text('Show recovery phrase'),
+              )
+            else ...[
+              _buildWordGrid(theme),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _copy,
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Copy'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => setState(() => _showQr = !_showQr),
+                    icon: const Icon(Icons.qr_code_2),
+                    label: Text(_showQr ? 'Hide QR' : 'Show QR'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _share,
+                    icon: const Icon(Icons.ios_share),
+                    label: const Text('Share'),
                   ),
                 ],
               ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (_error != null)
-            Text(_error!, style: TextStyle(color: theme.colorScheme.error))
-          else if (!_revealed)
-            ElevatedButton.icon(
-              onPressed: () => setState(() => _revealed = true),
-              icon: const Icon(Icons.visibility),
-              label: const Text('Show recovery phrase'),
-            )
-          else ...[
-            _buildWordGrid(theme),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _copy,
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () => setState(() => _showQr = !_showQr),
-                  icon: const Icon(Icons.qr_code_2),
-                  label: Text(_showQr ? 'Hide QR' : 'Show QR'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _share,
-                  icon: const Icon(Icons.ios_share),
-                  label: const Text('Share'),
-                ),
-              ],
-            ),
-            if (_showQr) ...[
-              const SizedBox(height: 24),
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  color: Colors.white,
-                  child: QrImageView(
-                    data: _phrase,
-                    size: 240,
-                    backgroundColor: Colors.white,
-                    errorCorrectionLevel: QrErrorCorrectLevel.M,
+              if (_showQr) ...[
+                const SizedBox(height: 24),
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    color: Colors.white,
+                    child: QrImageView(
+                      data: _phrase,
+                      size: 240,
+                      backgroundColor: Colors.white,
+                      errorCorrectionLevel: QrErrorCorrectLevel.M,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Scanning this QR reveals your full recovery phrase -- treat it '
-                'like the words themselves.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                const SizedBox(height: 8),
+                Text(
+                  'Scanning this QR reveals your full recovery phrase -- treat it '
+                  'like the words themselves.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
+              ],
             ],
           ],
-        ],
+        ),
       ),
     );
   }

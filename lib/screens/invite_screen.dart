@@ -16,6 +16,7 @@ import '../state/app_session.dart';
 import '../util/errors.dart';
 import '../util/invite_uri.dart';
 import '../widgets/qr_invite_card.dart';
+import '../widgets/readable_width.dart';
 
 class InviteScreen extends StatefulWidget {
   const InviteScreen({super.key, required this.session});
@@ -114,73 +115,75 @@ class _InviteScreenState extends State<InviteScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Invite to server')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(_error!),
-              ),
-            )
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                children: [
-                  QrInviteCard(
-                    captureKey: _captureKey,
-                    title: 'Freizone Invite',
-                    subtitle:
-                        'Scan this with the Freizone app to join automatically.',
-                    qrData: buildInviteUri(
-                      server: server,
-                      code: _code,
-                    ).toString(),
-                    addressLines: [
-                      SelectableText(server, textAlign: TextAlign.center),
-                      if (_code != null) ...[
-                        const SizedBox(height: 4),
-                        // Monospace and spaced out: this is the one thing on
-                        // the screen someone may have to read out over the
-                        // phone or copy onto paper, so the grouping the
-                        // server already applied ("ABCD-EFGH-JKMN") should
-                        // stay legible rather than blend into the prose.
-                        SelectableText(
-                          _code!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 18,
-                            letterSpacing: 1.5,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        if (_expiresAt != null) ...[
+      body: ReadableWidth(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(_error!),
+                ),
+              )
+            : SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    QrInviteCard(
+                      captureKey: _captureKey,
+                      title: 'Freizone Invite',
+                      subtitle:
+                          'Scan this with the Freizone app to join automatically.',
+                      qrData: buildInviteUri(
+                        server: server,
+                        code: _code,
+                      ).toString(),
+                      addressLines: [
+                        SelectableText(server, textAlign: TextAlign.center),
+                        if (_code != null) ...[
                           const SizedBox(height: 4),
-                          Text(
-                            'Valid until ${_formatExpiry(_expiresAt!)}',
+                          // Monospace and spaced out: this is the one thing on
+                          // the screen someone may have to read out over the
+                          // phone or copy onto paper, so the grouping the
+                          // server already applied ("ABCD-EFGH-JKMN") should
+                          // stay legible rather than blend into the prose.
+                          SelectableText(
+                            _code!,
                             textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.bodySmall,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 18,
+                              letterSpacing: 1.5,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
+                          if (_expiresAt != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Valid until ${_formatExpiry(_expiresAt!)}',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
                         ],
                       ],
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  FilledButton.icon(
-                    onPressed: _sharing ? null : _share,
-                    icon: _sharing
-                        ? const SizedBox(
-                            height: 16,
-                            width: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.share),
-                    label: const Text('Share'),
-                  ),
-                ],
+                    ),
+                    const SizedBox(height: 24),
+                    FilledButton.icon(
+                      onPressed: _sharing ? null : _share,
+                      icon: _sharing
+                          ? const SizedBox(
+                              height: 16,
+                              width: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.share),
+                      label: const Text('Share'),
+                    ),
+                  ],
+                ),
               ),
-            ),
+      ),
     );
   }
 }

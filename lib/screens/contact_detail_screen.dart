@@ -20,6 +20,7 @@ import '../util/server_url.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
 import 'chat_screen.dart';
+import '../widgets/readable_width.dart';
 
 class ContactDetailScreen extends StatelessWidget {
   const ContactDetailScreen({
@@ -60,9 +61,11 @@ class ContactDetailScreen extends StatelessWidget {
         }
         return Scaffold(
           appBar: AppBar(title: Text(contact.name)),
-          body: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            children: _body(context, contact),
+          body: ReadableWidth(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              children: _body(context, contact),
+            ),
           ),
         );
       },

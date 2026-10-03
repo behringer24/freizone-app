@@ -117,11 +117,16 @@ Future<void> savePictureToGallery(BuildContext context, File file) async {
   if (!context.mounted) return;
   final text = switch (result) {
     GallerySaveResult.saved => 'Saved to your gallery',
+    // iOS asks only once, so "try again" would be a promise it can't keep.
+    GallerySaveResult.permissionDenied when Platform.isIOS =>
+      'Freizone may not add photos. The picture is still here -- allow it '
+          'in Settings > Freizone > Photos.',
     GallerySaveResult.permissionDenied =>
       'Freizone needs permission to write to your gallery. The picture is '
           'still here -- try again to be asked once more.',
     GallerySaveResult.failed => 'Could not save the picture',
-    GallerySaveResult.unsupported => 'Saving to the gallery is not available here',
+    GallerySaveResult.unsupported =>
+      'Saving to the gallery is not available here',
   };
   messenger.showSnackBar(SnackBar(content: Text(text)));
 }

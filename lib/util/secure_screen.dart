@@ -1,8 +1,10 @@
 // Toggles Android's FLAG_SECURE for the current window via a MethodChannel
 // (handled in MainActivity.kt), so a screen showing the recovery phrase can't
-// be captured by a screenshot or screen recording. Best-effort and a no-op on
-// non-Android platforms; a deliberate photo with a second camera is still
-// possible -- that stays the user's own choice.
+// be captured by a screenshot or screen recording. On iOS (SecureScreen.swift)
+// a screenshot can't be blocked at all, so there it covers the app-switcher
+// snapshot and any ongoing screen recording instead. Best-effort and a no-op
+// elsewhere; a deliberate photo with a second camera is still possible --
+// that stays the user's own choice.
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -10,7 +12,7 @@ import 'package:flutter/services.dart';
 const _channel = MethodChannel('freizone/secure_screen');
 
 Future<void> enableSecureScreen() async {
-  if (!Platform.isAndroid) return;
+  if (!Platform.isAndroid && !Platform.isIOS) return;
   try {
     await _channel.invokeMethod('enable');
   } on PlatformException {
@@ -20,7 +22,7 @@ Future<void> enableSecureScreen() async {
 }
 
 Future<void> disableSecureScreen() async {
-  if (!Platform.isAndroid) return;
+  if (!Platform.isAndroid && !Platform.isIOS) return;
   try {
     await _channel.invokeMethod('disable');
   } on PlatformException {
