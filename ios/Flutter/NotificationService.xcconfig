@@ -1,0 +1,7 @@
+// Build settings for the Notification Service Extension target. The Flutter
+// version (for its Info.plist) and the Go core linkage are the app's own; the
+// Pods configuration is deliberately left out -- the extension links no plugin.
+#include "Generated.xcconfig"
+#include "FreizoneCore.xcconfig"
+#include "Entitlements.xcconfig"
+CODE_SIGN_ENTITLEMENTS = $(FREIZONE_EXTENSION_ENTITLEMENTS)

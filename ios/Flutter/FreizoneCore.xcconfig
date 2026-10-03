@@ -14,3 +14,7 @@ FREIZONE_CORE_LIB[sdk=iphonesimulator*] = $(FREIZONE_CORE_DIR)/iphonesimulator/l
 
 OTHER_LDFLAGS = $(inherited) -force_load "$(FREIZONE_CORE_LIB)" -Wl,-export_dynamic -framework CoreFoundation -framework Security -lresolv
 STRIP_STYLE = non-global
+
+// native/build_ios.sh builds the simulator core for Apple Silicon only, so no
+// target that links it may build an Intel simulator slice.
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = $(inherited) x86_64

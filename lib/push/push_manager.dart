@@ -29,6 +29,7 @@
 // function with no captured app/UI state -- each one loads whatever it
 // needs directly from LocalStateStore/AppSettings.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:isolate';
@@ -77,7 +78,18 @@ final FlutterLocalNotificationsPlugin _notifications =
 
 /// One id per account, shared between showing and clearing its
 /// notification so they always refer to the same one.
-int _notificationIdFor(String instance) => instance.hashCode & 0x7fffffff;
+///
+/// 31-bit FNV-1a over the account id's UTF-8 bytes rather than
+/// [String.hashCode]: on iOS the Notification Service Extension shows the same
+/// account's notification from Swift (ios/NotificationService), and both sides
+/// have to arrive at the same number. KEEP IN STEP with its notificationId.
+int _notificationIdFor(String instance) {
+  var hash = 0x811c9dc5;
+  for (final byte in utf8.encode(instance)) {
+    hash = ((hash ^ byte) * 0x01000193) & 0xffffffff;
+  }
+  return hash & 0x7fffffff;
+}
 
 /// Clears instance's "new message(s)" notification, if any is showing --
 /// call once it has no more unread conversations, so the launcher icon's
