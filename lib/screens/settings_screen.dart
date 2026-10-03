@@ -13,6 +13,7 @@ import '../state/contact_store.dart';
 import '../util/gallery.dart';
 import '../util/share_shortcuts.dart';
 import 'push_status_screen.dart';
+import '../widgets/readable_width.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
@@ -110,157 +111,162 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
-      body: ListenableBuilder(
-        listenable: settings,
-        builder: (context, _) {
-          return ListView(
-            children: [
-              _sectionTitle(context, 'Appearance'),
-              RadioGroup<ThemeMode>(
-                groupValue: settings.themeMode,
-                onChanged: (mode) {
-                  if (mode != null) settings.setThemeMode(mode);
-                },
-                child: Column(
-                  children: const [
-                    RadioListTile<ThemeMode>(
-                      value: ThemeMode.system,
-                      title: Text('Follow system'),
-                    ),
-                    RadioListTile<ThemeMode>(
-                      value: ThemeMode.light,
-                      title: Text('Light'),
-                    ),
-                    RadioListTile<ThemeMode>(
-                      value: ThemeMode.dark,
-                      title: Text('Dark'),
-                    ),
-                  ],
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Text('Accent color'),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    for (final preset in AccentPreset.values)
-                      _AccentSwatch(
-                        preset: preset,
-                        selected: settings.accentPreset == preset,
-                        onTap: () => settings.setAccentPreset(preset),
-                      ),
-                  ],
-                ),
-              ),
-              const Divider(height: 32),
-              _sectionTitle(context, 'Addresses'),
-              SwitchListTile(
-                title: const Text('Copy short address by default'),
-                subtitle: const Text(
-                  'Use the 5-character id prefix instead of the full id for "Copy my address"',
-                ),
-                value: settings.copyIdShort,
-                onChanged: settings.setCopyIdShort,
-              ),
-              const Divider(height: 32),
-              _sectionTitle(context, 'Push delivery'),
-              // UnifiedPush vs. FCM is an Android choice; iOS has exactly one
-              // way to be woken (APNs), so there is nothing to pick there.
-              if (Platform.isAndroid)
-                RadioGroup<PushPreference>(
-                  groupValue: settings.pushPreference,
-                  onChanged: (pref) {
-                    if (pref != null) _setPushPreference(pref);
+      body: ReadableWidth(
+        child: ListenableBuilder(
+          listenable: settings,
+          builder: (context, _) {
+            return ListView(
+              children: [
+                _sectionTitle(context, 'Appearance'),
+                RadioGroup<ThemeMode>(
+                  groupValue: settings.themeMode,
+                  onChanged: (mode) {
+                    if (mode != null) settings.setThemeMode(mode);
                   },
                   child: Column(
+                    children: const [
+                      RadioListTile<ThemeMode>(
+                        value: ThemeMode.system,
+                        title: Text('Follow system'),
+                      ),
+                      RadioListTile<ThemeMode>(
+                        value: ThemeMode.light,
+                        title: Text('Light'),
+                      ),
+                      RadioListTile<ThemeMode>(
+                        value: ThemeMode.dark,
+                        title: Text('Dark'),
+                      ),
+                    ],
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Text('Accent color'),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
                     children: [
-                      for (final pref in PushPreference.values)
-                        RadioListTile<PushPreference>(
-                          value: pref,
-                          title: Text(pref.label),
+                      for (final preset in AccentPreset.values)
+                        _AccentSwatch(
+                          preset: preset,
+                          selected: settings.accentPreset == preset,
+                          onTap: () => settings.setAccentPreset(preset),
                         ),
                     ],
                   ),
                 ),
-              // The distributor only matters when UnifiedPush is in play --
-              // hidden when FCM is forced, since it wouldn't be used then.
-              if (Platform.isAndroid &&
-                  settings.pushPreference != PushPreference.forceFcm)
-                _PushDistributorTile(manager: manager),
-              _PushStatusLine(manager: manager, settings: settings),
-              const Divider(height: 32),
-              _sectionTitle(context, 'Notifications'),
-              SwitchListTile(
-                title: const Text('Sound'),
-                value: settings.notificationSound,
-                onChanged: settings.setNotificationSound,
-              ),
-              SwitchListTile(
-                title: const Text('Vibration'),
-                value: settings.notificationVibration,
-                onChanged: settings.setNotificationVibration,
-              ),
-              const Divider(height: 32),
-              _sectionTitle(context, 'Privacy'),
-              SwitchListTile(
-                title: const Text('Read receipts'),
-                subtitle: const Text(
-                  'Reciprocal: turning this off also stops you from seeing '
-                  'whether the people you message have read theirs',
+                const Divider(height: 32),
+                _sectionTitle(context, 'Addresses'),
+                SwitchListTile(
+                  title: const Text('Copy short address by default'),
+                  subtitle: const Text(
+                    'Use the 5-character id prefix instead of the full id for "Copy my address"',
+                  ),
+                  value: settings.copyIdShort,
+                  onChanged: settings.setCopyIdShort,
                 ),
-                value: settings.readReceiptsEnabled,
-                onChanged: _setReadReceiptsEnabled,
-              ),
-              SwitchListTile(
-                title: const Text('Save pictures to your gallery'),
-                subtitle: const Text(
-                  'Off by default. Turn this on to have every picture you '
-                  'receive copied into the phone\'s gallery as it arrives. A '
-                  'copy there is outside Freizone: other apps can read it, '
-                  'and a photo backup will normally upload it. Without this '
-                  'you can still save any single picture by hand, from the '
-                  'picture itself or by holding the message.',
+                const Divider(height: 32),
+                _sectionTitle(context, 'Push delivery'),
+                // UnifiedPush vs. FCM is an Android choice; iOS has exactly one
+                // way to be woken (APNs), so there is nothing to pick there.
+                if (Platform.isAndroid)
+                  RadioGroup<PushPreference>(
+                    groupValue: settings.pushPreference,
+                    onChanged: (pref) {
+                      if (pref != null) _setPushPreference(pref);
+                    },
+                    child: Column(
+                      children: [
+                        for (final pref in PushPreference.values)
+                          RadioListTile<PushPreference>(
+                            value: pref,
+                            title: Text(pref.label),
+                          ),
+                      ],
+                    ),
+                  ),
+                // The distributor only matters when UnifiedPush is in play --
+                // hidden when FCM is forced, since it wouldn't be used then.
+                if (Platform.isAndroid &&
+                    settings.pushPreference != PushPreference.forceFcm)
+                  _PushDistributorTile(manager: manager),
+                _PushStatusLine(manager: manager, settings: settings),
+                const Divider(height: 32),
+                _sectionTitle(context, 'Notifications'),
+                SwitchListTile(
+                  title: const Text('Sound'),
+                  value: settings.notificationSound,
+                  onChanged: settings.setNotificationSound,
                 ),
-                value: settings.autoSavePicturesToGallery,
-                onChanged: (value) =>
-                    _setAutoSavePicturesToGallery(context, value),
-              ),
-              const Divider(height: 32),
-              _sectionTitle(context, 'Chat'),
-              SwitchListTile(
-                title: const Text('Send with Enter'),
-                subtitle: const Text(
-                  'When on, Enter sends the message. With an external '
-                  'keyboard, Shift+Enter still inserts a line break. When '
-                  'off, Enter inserts a line break and you send with the '
-                  'button.',
+                // iOS gives apps no vibration switch of their own: it follows
+                // the sound and the system's settings, so this would do nothing.
+                if (!Platform.isIOS)
+                SwitchListTile(
+                  title: const Text('Vibration'),
+                  value: settings.notificationVibration,
+                  onChanged: settings.setNotificationVibration,
                 ),
-                value: settings.enterSendsMessage,
-                onChanged: settings.setEnterSendsMessage,
-              ),
-              SwitchListTile(
-                title: const Text('Offer chats when sharing'),
-                subtitle: const Text(
-                  'Off by default. Turn this on to let other apps share '
-                  'straight into a specific chat, so your recent contacts '
-                  'appear in the system share sheet itself. Their names and '
-                  'avatars have to be handed to Android for that — the one '
-                  'place Freizone passes contact details outside the app. '
-                  'Switching it back off removes them again. Sharing into '
-                  'Freizone works either way; without this you pick the chat '
-                  'afterwards.',
+                const Divider(height: 32),
+                _sectionTitle(context, 'Privacy'),
+                SwitchListTile(
+                  title: const Text('Read receipts'),
+                  subtitle: const Text(
+                    'Reciprocal: turning this off also stops you from seeing '
+                    'whether the people you message have read theirs',
+                  ),
+                  value: settings.readReceiptsEnabled,
+                  onChanged: _setReadReceiptsEnabled,
                 ),
-                value: settings.directShareEnabled,
-                onChanged: _setDirectShareEnabled,
-              ),
-            ],
-          );
-        },
+                SwitchListTile(
+                  title: const Text('Save pictures to your gallery'),
+                  subtitle: const Text(
+                    'Off by default. Turn this on to have every picture you '
+                    'receive copied into the phone\'s gallery as it arrives. A '
+                    'copy there is outside Freizone: other apps can read it, '
+                    'and a photo backup will normally upload it. Without this '
+                    'you can still save any single picture by hand, from the '
+                    'picture itself or by holding the message.',
+                  ),
+                  value: settings.autoSavePicturesToGallery,
+                  onChanged: (value) =>
+                      _setAutoSavePicturesToGallery(context, value),
+                ),
+                const Divider(height: 32),
+                _sectionTitle(context, 'Chat'),
+                SwitchListTile(
+                  title: const Text('Send with Enter'),
+                  subtitle: const Text(
+                    'When on, Enter sends the message. With an external '
+                    'keyboard, Shift+Enter still inserts a line break. When '
+                    'off, Enter inserts a line break and you send with the '
+                    'button.',
+                  ),
+                  value: settings.enterSendsMessage,
+                  onChanged: settings.setEnterSendsMessage,
+                ),
+                SwitchListTile(
+                  title: const Text('Offer chats when sharing'),
+                  subtitle: const Text(
+                    'Off by default. Turn this on to let other apps share '
+                    'straight into a specific chat, so your recent contacts '
+                    'appear in the system share sheet itself. Their names and '
+                    'avatars have to be handed to Android for that — the one '
+                    'place Freizone passes contact details outside the app. '
+                    'Switching it back off removes them again. Sharing into '
+                    'Freizone works either way; without this you pick the chat '
+                    'afterwards.',
+                  ),
+                  value: settings.directShareEnabled,
+                  onChanged: _setDirectShareEnabled,
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }

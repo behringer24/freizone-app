@@ -16,6 +16,7 @@ import '../util/freizone_address.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/rename_dialog.dart';
 import '../widgets/verified_badge.dart';
+import '../widgets/readable_width.dart';
 
 class PeerProfileScreen extends StatelessWidget {
   const PeerProfileScreen({
@@ -114,99 +115,133 @@ class PeerProfileScreen extends StatelessWidget {
 
         return Scaffold(
           appBar: AppBar(title: Text('Profile $shortId')),
-          body: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            children: [
-              Center(
-                child: PeerAvatar(accountId: convo.peerAccountId, radius: 48),
-              ),
-              if (session.isBlocked(peerAccountId)) ...[
-                const SizedBox(height: 12),
+          body: ReadableWidth(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              children: [
                 Center(
-                  child: Chip(
-                    label: const Text('Blocked'),
-                    backgroundColor: Theme.of(context).colorScheme.error,
-                    labelStyle: TextStyle(
-                      color: Theme.of(context).colorScheme.onError,
+                  child: PeerAvatar(accountId: convo.peerAccountId, radius: 48),
+                ),
+                if (session.isBlocked(peerAccountId)) ...[
+                  const SizedBox(height: 12),
+                  Center(
+                    child: Chip(
+                      label: const Text('Blocked'),
+                      backgroundColor: Theme.of(context).colorScheme.error,
+                      labelStyle: TextStyle(
+                        color: Theme.of(context).colorScheme.onError,
+                      ),
+                      visualDensity: VisualDensity.compact,
                     ),
-                    visualDensity: VisualDensity.compact,
                   ),
-                ),
-              ] else if (convo.pendingApproval) ...[
-                const SizedBox(height: 12),
-                Center(
-                  child: Chip(
-                    label: const Text('Pending request'),
-                    visualDensity: VisualDensity.compact,
+                ] else if (convo.pendingApproval) ...[
+                  const SizedBox(height: 12),
+                  Center(
+                    child: Chip(
+                      label: const Text('Pending request'),
+                      visualDensity: VisualDensity.compact,
+                    ),
                   ),
-                ),
-              ],
-              const SizedBox(height: 16),
-              Center(
-                child: Text(
-                  primaryText,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Text(
-                  hasAlias ? shortAddress : peerServer,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-              ListTile(
-                title: const Text('Peer name'),
-                subtitle: Text(
-                  assignedName ?? 'No name set -- shows the address instead',
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: 'Edit name',
-                  onPressed: () => _showRenameDialog(context, convo),
-                ),
-              ),
-              ListTile(
-                title: const Text('Short address'),
-                subtitle: Text(shortAddress),
-                trailing: IconButton(
-                  icon: const Icon(Icons.copy),
-                  tooltip: 'Copy short address',
-                  onPressed: () =>
-                      _copy(context, 'Short address', shortAddress),
-                ),
-              ),
-              ListTile(
-                title: const Text('Full address'),
-                subtitle: Text(fullAddress),
-                trailing: IconButton(
-                  icon: const Icon(Icons.copy),
-                  tooltip: 'Copy full address',
-                  onPressed: () => _copy(context, 'Full address', fullAddress),
-                ),
-              ),
-              // On its own line attached to the *server*, never beside the
-              // person's name above -- this attestation is about the server,
-              // and reads as being about the person if it sits next to a
-              // display name (APP-22).
-              _ServerListTile(session: session, server: peerServer),
-              if (convo.pendingApproval) ...[
+                ],
                 const SizedBox(height: 16),
+                Center(
+                  child: Text(
+                    primaryText,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Text(
+                    hasAlias ? shortAddress : peerServer,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                ListTile(
+                  title: const Text('Peer name'),
+                  subtitle: Text(
+                    assignedName ?? 'No name set -- shows the address instead',
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.edit_outlined),
+                    tooltip: 'Edit name',
+                    onPressed: () => _showRenameDialog(context, convo),
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Short address'),
+                  subtitle: Text(shortAddress),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy),
+                    tooltip: 'Copy short address',
+                    onPressed: () =>
+                        _copy(context, 'Short address', shortAddress),
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Full address'),
+                  subtitle: Text(fullAddress),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy),
+                    tooltip: 'Copy full address',
+                    onPressed: () => _copy(context, 'Full address', fullAddress),
+                  ),
+                ),
+                // On its own line attached to the *server*, never beside the
+                // person's name above -- this attestation is about the server,
+                // and reads as being about the person if it sits next to a
+                // display name (APP-22).
+                _ServerListTile(session: session, server: peerServer),
+                if (convo.pendingApproval) ...[
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'This is a pending message request -- accept to start chatting, or block below.',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: FilledButton.icon(
+                      onPressed: () => session.acceptConversation(peerAccountId),
+                      icon: const Icon(Icons.check),
+                      label: const Text('Accept'),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 32),
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    'Encryption',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Text(
-                    'This is a pending message request -- accept to start chatting, or block below.',
-                    textAlign: TextAlign.center,
+                    'If messages with this contact stop arriving or can no longer be read, the '
+                    'secure session may be out of sync. Resetting re-establishes encryption on your '
+                    'next message -- history is kept and the other side is not notified.',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
@@ -215,89 +250,57 @@ class PeerProfileScreen extends StatelessWidget {
                 const SizedBox(height: 12),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: FilledButton.icon(
-                    onPressed: () => session.acceptConversation(peerAccountId),
-                    icon: const Icon(Icons.check),
-                    label: const Text('Accept'),
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        confirmAndResetSession(context, session, contacts, convo),
+                    icon: const Icon(Icons.lock_reset),
+                    label: const Text('Reset secure session'),
                   ),
+                ),
+                const SizedBox(height: 24),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    'Protection',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    'Freizone has open registration, so blocking is currently the only protection against an '
+                    'unwanted contact. It only applies on this device -- the other side is never notified.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: session.isBlocked(peerAccountId)
+                      ? FilledButton.icon(
+                          onPressed: () => _toggleBlock(context, convo),
+                          icon: const Icon(Icons.block_flipped),
+                          label: const Text('Unblock'),
+                        )
+                      : OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Theme.of(context).colorScheme.error,
+                            side: BorderSide(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
+                          onPressed: () => _toggleBlock(context, convo),
+                          icon: const Icon(Icons.block),
+                          label: const Text('Block this contact'),
+                        ),
                 ),
               ],
-              const SizedBox(height: 32),
-              const Divider(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text(
-                  'Encryption',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  'If messages with this contact stop arriving or can no longer be read, the '
-                  'secure session may be out of sync. Resetting re-establishes encryption on your '
-                  'next message -- history is kept and the other side is not notified.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: OutlinedButton.icon(
-                  onPressed: () =>
-                      confirmAndResetSession(context, session, contacts, convo),
-                  icon: const Icon(Icons.lock_reset),
-                  label: const Text('Reset secure session'),
-                ),
-              ),
-              const SizedBox(height: 24),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Text(
-                  'Protection',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  'Freizone has open registration, so blocking is currently the only protection against an '
-                  'unwanted contact. It only applies on this device -- the other side is never notified.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: session.isBlocked(peerAccountId)
-                    ? FilledButton.icon(
-                        onPressed: () => _toggleBlock(context, convo),
-                        icon: const Icon(Icons.block_flipped),
-                        label: const Text('Unblock'),
-                      )
-                    : OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Theme.of(context).colorScheme.error,
-                          side: BorderSide(
-                            color: Theme.of(context).colorScheme.error,
-                          ),
-                        ),
-                        onPressed: () => _toggleBlock(context, convo),
-                        icon: const Icon(Icons.block),
-                        label: const Text('Block this contact'),
-                      ),
-              ),
-            ],
+            ),
           ),
         );
       },

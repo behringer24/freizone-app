@@ -26,6 +26,7 @@ import '../util/freizone_address.dart';
 import '../util/role_icon.dart';
 import '../widgets/peer_avatar.dart';
 import 'chat_screen.dart';
+import '../widgets/readable_width.dart';
 
 class AdminAccountScreen extends StatefulWidget {
   const AdminAccountScreen({
@@ -144,27 +145,29 @@ class _AdminAccountScreenState extends State<AdminAccountScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Account')),
-      body: ListenableBuilder(
-        listenable: widget.session,
-        builder: (context, _) {
-          final account = widget.session.adminAccounts
-              .where((a) => a.id == widget.accountId)
-              .firstOrNull;
-          // Gone from the list: deleted, here or elsewhere. Say so rather than
-          // leaving a screen full of stale figures.
-          if (account == null) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text('This account no longer exists on this server.'),
-              ),
+      body: ReadableWidth(
+        child: ListenableBuilder(
+          listenable: widget.session,
+          builder: (context, _) {
+            final account = widget.session.adminAccounts
+                .where((a) => a.id == widget.accountId)
+                .firstOrNull;
+            // Gone from the list: deleted, here or elsewhere. Say so rather than
+            // leaving a screen full of stale figures.
+            if (account == null) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('This account no longer exists on this server.'),
+                ),
+              );
+            }
+            return ListView(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              children: _details(context, account),
             );
-          }
-          return ListView(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            children: _details(context, account),
-          );
-        },
+          },
+        ),
       ),
     );
   }

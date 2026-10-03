@@ -26,6 +26,7 @@ import '../util/server_url.dart';
 import '../widgets/qr_scan_button.dart';
 import '../widgets/verified_badge.dart';
 import 'qr_scan_screen.dart';
+import '../widgets/readable_width.dart';
 
 enum _WizardStep { address, bootstrap, invite, openRegister, closed, recover }
 
@@ -673,13 +674,15 @@ class _SetupScreenState extends State<SetupScreen> {
                   onPressed: _handleBack,
                 ),
         ),
-        body: Padding(
-          padding: const EdgeInsets.all(16),
-          child: switch (_step) {
-            _WizardStep.address => _buildAddressStep(),
-            _WizardStep.recover => _buildRecoverStep(),
-            _ => _buildFinalStep(),
-          },
+        body: ReadableWidth(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: switch (_step) {
+              _WizardStep.address => _buildAddressStep(),
+              _WizardStep.recover => _buildRecoverStep(),
+              _ => _buildFinalStep(),
+            },
+          ),
         ),
       ),
     );

@@ -20,6 +20,7 @@ import '../util/group_actions.dart';
 import '../util/person_label.dart';
 import '../util/role_icon.dart';
 import '../widgets/peer_avatar.dart';
+import '../widgets/readable_width.dart';
 
 class GroupInfoScreen extends StatelessWidget {
   const GroupInfoScreen({
@@ -72,24 +73,26 @@ class GroupInfoScreen extends StatelessWidget {
 
         return Scaffold(
           appBar: AppBar(title: const Text('Group info')),
-          body: ListView(
-            children: [
-              _header(context, resolved, me),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text(
-                  '${resolved.members.length} member(s)',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
+          body: ReadableWidth(
+            child: ListView(
+              children: [
+                _header(context, resolved, me),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    '${resolved.members.length} member(s)',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
                   ),
                 ),
-              ),
-              for (final member in _ordered(resolved))
-                _memberTile(context, resolved, me, member),
-              const Divider(height: 1),
-              _footer(context, resolved, me),
-            ],
+                for (final member in _ordered(resolved))
+                  _memberTile(context, resolved, me, member),
+                const Divider(height: 1),
+                _footer(context, resolved, me),
+              ],
+            ),
           ),
         );
       },
