@@ -49,6 +49,9 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FreizoneApns") {
       ApnsChannel.register(with: registrar)
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FreizoneShareIntake") {
+      ShareIntakeChannel.register(with: registrar)
+    }
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FreizoneGallery") {
       GalleryChannel.register(with: registrar)
     }

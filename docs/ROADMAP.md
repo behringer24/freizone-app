@@ -96,6 +96,17 @@ The Flutter app on iPhone and iPad (iOS 16+), developed on the long-running
   wake actually staying hidden, and memory on a device (6 MB peak footprint
   measured on the Mac, against an extension limit of about 24 MB).
 
+- 2026-10-03 — **sharing to Freizone (APP-15 on iOS).** A Share Extension parks
+  the shared text or picture in the App Group container and brings the app
+  forward through a `freizone-share://` link, and the app collects it through
+  the same `freizone/share_intake` calls as Android -- so the target picker,
+  the composer prefill and the downscaling (now with an iOS half) are shared.
+  Bringing the app forward from an extension has no official API; it goes up
+  the responder chain to `UIApplication`, which works on iOS 27, and falls back
+  to collecting the share on the next resume. Exercised in the simulator: a
+  picture from Photos (downscaled to 1600 px and sent) and a page from Safari
+  (title and URL, received by the other side).
+
 ### APP-04 — Multimedia messaging
 Status: `in progress` · Also affects: freizone-server (SRV-07)
 Design: [design/04-multimedia-messaging.md](design/04-multimedia-messaging.md)

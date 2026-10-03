@@ -2,7 +2,9 @@
 //
 // The Android side (MainActivity.kt) captures an ACTION_SEND intent, copies
 // any shared image out of the sending app's content:// URI into our cache, and
-// parks the result. This is the Dart half.
+// parks the result. On iOS the Share Extension (ios/ShareExtension) parks it
+// in the App Group container and brings the app forward, and
+// ShareIntakeChannel.swift answers the same calls. This is the Dart half.
 //
 // Pull-based on purpose: a share can arrive as a *cold start*, where the
 // process exists only because the user picked Freizone in the share sheet. At
@@ -54,7 +56,7 @@ Future<IncomingShare?> takePendingShare() async {
     );
     return IncomingShare.fromMap(result);
   } on MissingPluginException {
-    return null; // not Android, or the channel isn't wired up
+    return null; // no platform side, or the channel isn't wired up
   } on PlatformException {
     return null;
   }
