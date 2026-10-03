@@ -18,6 +18,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../ffi/core_models.dart' show GroupInfo;
 import '../ffi/freizone_core.dart';
+import '../ffi/freizone_core_exception.dart';
 import '../ffi/models.dart';
 import '../net/api_client.dart';
 import '../net/dto.dart';
@@ -707,10 +708,20 @@ class AppSession extends ChangeNotifier {
       _stopStream();
       return;
     }
-    // Whatever the background push wake (push_manager.dart) received while
-    // this session was frozen -- it opens the same core handle's on-disk
-    // state, see doCoreSync -- rather than re-reading a Dart-side profile the
-    // wake no longer writes.
+    // Back from the background on iOS: take the account up again first, since
+    // everything below reads or writes through it.
+    if (coreAccount.suspended) {
+      try {
+        coreAccount.resume(await _openCore());
+      } catch (e) {
+        _noteFailure('reopening the account', e);
+        return;
+      }
+    }
+    // Whatever the background push wake (push_manager.dart, or on iOS the
+    // Notification Service Extension) received while this session was frozen
+    // -- it opens the same core state on disk, see doCoreSync -- rather than
+    // re-reading a Dart-side profile the wake no longer writes.
     applyCoreState(state, coreAccount);
     // Reopen the live stream that backgrounding closed, so the foregrounded
     // app is back on the fast path (and the server stops pushing to it).
@@ -817,26 +828,7 @@ class AppSession extends ChangeNotifier {
     // signedPrekeyPriv are what let it decrypt at all -- see
     // FreizoneCore.coreSetIdentity's own doc comment -- so this is not
     // optional the way it was while this handle only ever held a stream.
-    final handle = core.coreOpen(await coreStatePath(state.accountId));
-    core.coreSetIdentity(
-      handle: handle,
-      accountId: state.accountId,
-      server: state.server,
-      rootPub: state.rootPub,
-      rootPriv: state.rootPriv,
-      deviceId: state.deviceId,
-      devicePub: state.devicePub,
-      devicePriv: state.devicePriv,
-      dhIdentityPub: state.dhIdentityPub,
-      dhIdentityPriv: state.dhIdentityPriv,
-      signedPrekeyId: state.signedPrekeyId,
-      signedPrekeyPub: state.signedPrekeyPub,
-      signedPrekeyPriv: state.signedPrekeyPriv,
-      nextSignedPrekeyId: state.nextSignedPrekeyId,
-      nextOtpkKeyId: state.nextOtpkKeyId,
-      recoveryBackupDone: state.recoveryBackupDone,
-      pushMechanism: state.pushMechanism,
-    );
+    final handle = await _openCore();
     coreAccount = CoreAccount(
       core: core,
       handle: handle,
@@ -863,6 +855,66 @@ class AppSession extends ChangeNotifier {
     // gets its first automatic attempt here (APP-08 step 2). Not awaited:
     // a backlog against a slow peer must not hold up startup.
     unawaited(flushOutbox());
+  }
+
+  /// Opens this account in the core and hands it the identity -- once at
+  /// [init], and again on iOS each time the app returns from the background
+  /// (see [suspendCore]).
+  ///
+  /// On iOS the Notification Service Extension may be holding the account at
+  /// that moment, syncing for a push wake. It holds it for one sync, so this
+  /// waits and tries again rather than failing; anything other than "in use"
+  /// fails at once, as before.
+  Future<int> _openCore() async {
+    final path = await coreStatePath(state.accountId);
+    final deadline = DateTime.now().add(const Duration(seconds: 35));
+    int handle;
+    while (true) {
+      try {
+        handle = core.coreOpen(path);
+        break;
+      } on FreizoneCoreException catch (e) {
+        if (e.code != CoreErrorCode.accountInUse ||
+            DateTime.now().isAfter(deadline)) {
+          rethrow;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    }
+    core.coreSetIdentity(
+      handle: handle,
+      accountId: state.accountId,
+      server: state.server,
+      rootPub: state.rootPub,
+      rootPriv: state.rootPriv,
+      deviceId: state.deviceId,
+      devicePub: state.devicePub,
+      devicePriv: state.devicePriv,
+      dhIdentityPub: state.dhIdentityPub,
+      dhIdentityPriv: state.dhIdentityPriv,
+      signedPrekeyId: state.signedPrekeyId,
+      signedPrekeyPub: state.signedPrekeyPub,
+      signedPrekeyPriv: state.signedPrekeyPriv,
+      nextSignedPrekeyId: state.nextSignedPrekeyId,
+      nextOtpkKeyId: state.nextOtpkKeyId,
+      recoveryBackupDone: state.recoveryBackupDone,
+      pushMechanism: state.pushMechanism,
+    );
+    return handle;
+  }
+
+  /// Lets go of the account while the app is in the background, so the
+  /// Notification Service Extension can open it for a push wake and iOS does
+  /// not terminate the app for holding a lock in the shared container (see
+  /// [CoreAccount.suspend]). iOS only: on Android nothing else opens the
+  /// account, and a push wake there runs inside this process.
+  ///
+  /// The stream is already down by now -- [setForeground] stopped it when the
+  /// app left the screen -- so this only has the handle itself to close.
+  Future<void> suspendCore() async {
+    if (!Platform.isIOS) return;
+    _stopStream();
+    await coreAccount.suspend();
   }
 
   /// Hands this account's core the read-receipts setting.

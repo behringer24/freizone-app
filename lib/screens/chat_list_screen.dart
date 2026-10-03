@@ -509,9 +509,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
             PushRegistration.needsDistributorChoice =>
               'Choose a push target in Settings > Push delivery. '
                   'Chat still works while Freizone is open.',
-            // Nothing the user could install or switch on iOS -- its only
-            // wake mechanism (APNs) isn't wired up yet (APP-03), and Settings
-            // already says so.
+            // Nothing the user could install or switch on iOS: APNs is the
+            // only mechanism, and when a build cannot get a token there is
+            // nothing to do about it here. Settings says so.
             PushRegistration.unavailable when !Platform.isAndroid => null,
             PushRegistration.unavailable =>
               'No push notifications available -- install a UnifiedPush app '

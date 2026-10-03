@@ -139,6 +139,7 @@ class _PushStatusScreenState extends State<PushStatusScreen> {
 String _describeMechanism(String? stored) {
   if (stored == null || stored.isEmpty) return 'unknown';
   if (stored == 'fcm') return 'Firebase Cloud Messaging';
+  if (stored == 'apns') return 'Apple Push Notification service';
   if (stored.startsWith('unifiedpush:')) {
     final pkg = stored.substring('unifiedpush:'.length);
     return pkg.isEmpty

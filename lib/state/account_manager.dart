@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
 import '../net/core_stream.dart';
@@ -210,6 +211,23 @@ class AccountManager extends ChangeNotifier {
     unawaited(_sessions[accountId]!.refreshRegistrationPolicy());
     unawaited(_sessions[accountId]!.refreshMyRole());
     notifyListeners();
+  }
+
+  /// Lets go of every account while the app is in the background on iOS, then
+  /// tells the platform side it may let the app be suspended -- see
+  /// AppSession.suspendCore and ios/Runner/BackgroundGrace.swift.
+  Future<void> releaseForBackground() async {
+    if (!Platform.isIOS) return;
+    await Future.wait(sessions.map((s) => s.suspendCore()));
+    try {
+      await const MethodChannel(
+        'freizone/lifecycle',
+      ).invokeMethod<void>('accountsReleased');
+    } on MissingPluginException {
+      // No platform side (a test); nothing is waiting for this.
+    } on PlatformException {
+      // The background time runs out on its own.
+    }
   }
 
   @override

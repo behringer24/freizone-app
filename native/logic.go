@@ -80,6 +80,10 @@ func errorCode(err error) string {
 	if client.IsUnreachable(err) {
 		return codeServerUnreachable
 	}
+	var inUse *client.ErrAccountInUse
+	if errors.As(err, &inUse) {
+		return codeAccountInUse
+	}
 	return ""
 }
 
@@ -87,6 +91,13 @@ func errorCode(err error) string {
 // KEEP IN STEP with CoreErrorCode.serverUnreachable in
 // lib/ffi/freizone_core_exception.dart.
 const codeServerUnreachable = "server_unreachable"
+
+// codeAccountInUse: another process holds the account open. On iOS that is the
+// Notification Service Extension syncing during a push wake, and the app opening
+// the account at the same moment waits for it rather than failing (APP-03).
+// KEEP IN STEP with CoreErrorCode.accountInUse in
+// lib/ffi/freizone_core_exception.dart and NotificationService.swift.
+const codeAccountInUse = "account_in_use"
 
 // verifyResult is the shared shape for "did this signature/certificate
 // verify" calls: verification failure is a normal, expected outcome (not a

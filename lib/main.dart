@@ -121,6 +121,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     for (final session in manager.sessions) {
       unawaited(session.setForeground(foreground));
     }
+    // `paused` is the app actually leaving the screen (not just the app
+    // switcher or a pulled-down notification centre, which are `inactive`).
+    // On iOS that is when the accounts have to be let go of -- see
+    // AccountManager.releaseForBackground. A no-op elsewhere.
+    if (state == AppLifecycleState.paused) {
+      unawaited(manager.releaseForBackground());
+    }
     // Republished on resume rather than on every conversation change (APP-15):
     // cheap enough here, and it keeps the share sheet roughly current without
     // listeners on every session. See syncShareShortcuts.

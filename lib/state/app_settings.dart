@@ -8,7 +8,8 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
+
+import '../util/app_storage.dart';
 
 /// A small, curated set of seed colors for the app's Material theme,
 /// rather than an arbitrary color picker -- keeps every combination
@@ -159,7 +160,7 @@ class AppSettings extends ChangeNotifier {
   static const _fileName = 'freizone_settings.json';
 
   static Future<File> _file() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await appDataDirectory();
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
   }
 

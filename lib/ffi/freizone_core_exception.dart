@@ -33,6 +33,11 @@ class CoreErrorCode {
   /// banner that is supposed to mean "look at this".
   static const serverUnreachable = 'server_unreachable';
 
+  /// Another process holds this account open -- on iOS, the Notification
+  /// Service Extension handling a push wake (APP-03). Only ever lasts as long as
+  /// one sync, so whoever gets it waits a moment and tries again.
+  static const accountInUse = 'account_in_use';
+
   /// Whether [code] means the session with this peer is unlikely to ever
   /// decrypt again, so it should be re-established rather than retried
   /// (ratchet.SuggestsDesync). False for a duplicate (nothing is wrong) and

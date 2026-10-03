@@ -96,8 +96,30 @@ layout as above applies.
    a free Apple ID is enough for that, but its provisioning expires after 7 days.
 
 A simulator reaches a server on the same Mac as `http://127.0.0.1:<port>`.
-Push notifications are not available on iOS yet: messages arrive while the
-app is open.
+
+**Push on iOS** goes through APNs and [freizone-gateway](https://github.com/behringer24/freizone-gateway):
+the app registers its APNs token as the account's push target, and the wake
+the gateway sends is handled by a Notification Service Extension
+(`ios/NotificationService`) that syncs and decrypts through the same Go core
+and shows the same per-account notification the Android app does. For that,
+iOS keeps the app's data in an App Group container, and the app lets go of its
+accounts whenever it is in the background.
+
+Push and the App Group need a paid Apple developer team to sign for a device;
+the simulator needs no team. To sign for a device with a free Apple ID, create
+`ios/Flutter/Local.xcconfig` (gitignored) with
+
+```
+FREIZONE_APP_ENTITLEMENTS =
+FREIZONE_EXTENSION_ENTITLEMENTS =
+```
+
+The app then keeps its files in Documents and gets no push wakes.
+
+`xcrun simctl push` never starts a service extension, so the extension's sync
+can only be watched with a real push -- or with
+`ios/NotificationService/Harness/run.sh`, which runs the extension's own code
+on the Mac against a simulator's data (put the app in the background first).
 
 ## Running the tests
 

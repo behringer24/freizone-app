@@ -7,10 +7,9 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../ffi/models.dart';
 import '../net/api_client.dart';
+import '../util/app_storage.dart';
 import 'conversation.dart';
 import 'group_conversation.dart';
 
@@ -250,7 +249,7 @@ class LocalStateStore {
   static String _profileFileName(String accountId) =>
       'freizone_profile_$accountId.json';
 
-  static Future<Directory> _dir() async => getApplicationDocumentsDirectory();
+  static Future<Directory> _dir() async => appDataDirectory();
 
   static Future<File> _profileFile(String accountId) async {
     final dir = await _dir();
