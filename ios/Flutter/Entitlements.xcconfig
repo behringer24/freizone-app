@@ -1,16 +1,19 @@
-// Push (aps-environment) and the App Group the Notification Service Extension
-// shares with the app. Both need a paid Apple Developer team to sign for a
-// device; the simulator needs no team at all.
+// Push (aps-environment) and the App Group the app shares with its extensions
+// (Notification Service, Share). Both need a paid Apple Developer team to sign
+// for a device; the simulator needs no team at all.
 //
 // Signing for a device with a free Apple ID: create ios/Flutter/Local.xcconfig
 // (gitignored) containing
 //
 //   FREIZONE_APP_ENTITLEMENTS =
 //   FREIZONE_EXTENSION_ENTITLEMENTS =
+//   FREIZONE_SHARE_ENTITLEMENTS =
 //
-// The app then keeps its files in Documents and gets no push wakes -- see
+// The app then keeps its files in Documents and gets no push wakes, and
+// sharing to Freizone from other apps finds nothing to hand over -- see
 // ios/Runner/SharedStorage.swift.
 FREIZONE_APP_ENTITLEMENTS = Runner/Runner.entitlements
 FREIZONE_EXTENSION_ENTITLEMENTS = NotificationService/NotificationService.entitlements
+FREIZONE_SHARE_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements
 
 #include? "Local.xcconfig"

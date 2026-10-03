@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -133,6 +134,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // listeners on every session. See syncShareShortcuts.
     if (foreground) {
       unawaited(syncShareShortcuts(manager, widget.settings, widget.contacts));
+      // On iOS a share reaches the app through the Share Extension, which
+      // brings it forward with a link that also nudges (onShareReceived). This
+      // is the fallback for when that link could not open the app: the share
+      // is still parked, and coming back to the app collects it.
+      if (Platform.isIOS) unawaited(_collectPendingShare());
     } else {
       // Works around a stale on-screen-keyboard inset on Android: leaving the
       // app with a text field focused and the keyboard open can come back to

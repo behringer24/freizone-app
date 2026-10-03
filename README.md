@@ -112,9 +112,17 @@ the simulator needs no team. To sign for a device with a free Apple ID, create
 ```
 FREIZONE_APP_ENTITLEMENTS =
 FREIZONE_EXTENSION_ENTITLEMENTS =
+FREIZONE_SHARE_ENTITLEMENTS =
 ```
 
-The app then keeps its files in Documents and gets no push wakes.
+The app then keeps its files in Documents, gets no push wakes, and sharing
+to Freizone from other apps finds nothing to hand over.
+
+**Sharing to Freizone** from another app goes through a Share Extension
+(`ios/ShareExtension`): it parks the text or picture in the App Group
+container and brings the app forward, which then asks for the chat exactly as
+on Android. Opening the app from a share extension is not an official iOS API;
+should it ever stop working, the share waits until Freizone is next opened.
 
 `xcrun simctl push` never starts a service extension, so the extension's sync
 can only be watched with a real push -- or with
