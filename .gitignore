@@ -80,5 +80,5 @@ CLAUDE.md
 .vscode/tasks.json
 # iOS build of the Go core (native/build_ios.sh) -- regenerated, not source.
 /ios/Frameworks/FreizoneCore/
-# Per-developer signing overrides (see ios/Flutter/Entitlements.xcconfig).
+# Per-developer signing overrides (see ios/Flutter/Signing.xcconfig).
 /ios/Flutter/Local.xcconfig

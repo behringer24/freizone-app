@@ -32,6 +32,15 @@ final class ShareViewController: UIViewController {
   }
 
   private func handOver() async {
+    // Without the App Group (a build signed by a free Apple ID) the app could
+    // never see what is parked here; say so instead of pretending.
+    guard SharedStorage.groupDirectory != nil else {
+      await showHint(
+        title: "Not available in this build",
+        message: "Sharing to Freizone needs a build signed with an Apple developer team.")
+      extensionContext?.completeRequest(returningItems: nil)
+      return
+    }
     let inbox = SharedStorage.directory.appendingPathComponent(Self.inboxName, isDirectory: true)
     // One share at a time, as on Android: an earlier one the app never
     // collected is superseded, not queued.
@@ -74,7 +83,9 @@ final class ShareViewController: UIViewController {
     if !pending.isEmpty, let data = try? JSONSerialization.data(withJSONObject: pending) {
       try? data.write(to: inbox.appendingPathComponent(Self.pendingName), options: .atomic)
       if !openApp() {
-        await showOpenAppHint()
+        await showHint(
+          title: "Ready in Freizone",
+          message: "Open Freizone to choose the chat to send this to.")
       }
     }
     extensionContext?.completeRequest(returningItems: nil)
@@ -132,12 +143,9 @@ final class ShareViewController: UIViewController {
     return false
   }
 
-  private func showOpenAppHint() async {
+  private func showHint(title: String, message: String) async {
     await withCheckedContinuation { continuation in
-      let alert = UIAlertController(
-        title: "Ready in Freizone",
-        message: "Open Freizone to choose the chat to send this to.",
-        preferredStyle: .alert)
+      let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
       alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in continuation.resume() })
       present(alert, animated: true)
     }

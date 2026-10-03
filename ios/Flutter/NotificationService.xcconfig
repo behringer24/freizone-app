@@ -3,5 +3,5 @@
 // Pods configuration is deliberately left out -- the extension links no plugin.
 #include "Generated.xcconfig"
 #include "FreizoneCore.xcconfig"
-#include "Entitlements.xcconfig"
+#include "Signing.xcconfig"
 CODE_SIGN_ENTITLEMENTS = $(FREIZONE_EXTENSION_ENTITLEMENTS)

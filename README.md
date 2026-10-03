@@ -106,17 +106,24 @@ iOS keeps the app's data in an App Group container, and the app lets go of its
 accounts whenever it is in the background.
 
 Push and the App Group need a paid Apple developer team to sign for a device;
-the simulator needs no team. To sign for a device with a free Apple ID, create
-`ios/Flutter/Local.xcconfig` (gitignored) with
+the simulator needs no team. Signing for a device is set up in
+`ios/Flutter/Local.xcconfig` (gitignored) rather than in Xcode's Signing tab,
+which would write the team into the shared project file -- see
+`ios/Flutter/Signing.xcconfig`. With a free Apple ID:
 
 ```
+DEVELOPMENT_TEAM = <your personal team id>
+FREIZONE_BUNDLE_ID = de.behringer24.freizone.dev
 FREIZONE_APP_ENTITLEMENTS =
 FREIZONE_EXTENSION_ENTITLEMENTS =
 FREIZONE_SHARE_ENTITLEMENTS =
 ```
 
-The app then keeps its files in Documents, gets no push wakes, and sharing
-to Freizone from other apps finds nothing to hand over.
+The app then keeps its files in Documents, gets no push wakes, and cannot take
+shares from other apps. Install it with `flutter run --release -d <device>`:
+a debug build only starts while `flutter run` is attached, and a free Apple ID's
+provisioning expires after 7 days, after which the same command renews it
+(the app's data is kept).
 
 **Sharing to Freizone** from another app goes through a Share Extension
 (`ios/ShareExtension`): it parks the text or picture in the App Group

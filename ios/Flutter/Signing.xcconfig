@@ -1,0 +1,30 @@
+// Everything about who signs Freizone and with which identity, for the app
+// and both of its extensions (Notification Service, Share).
+//
+// The defaults are what a paid Apple Developer team signs: the real bundle id,
+// push (aps-environment) and the App Group the extensions share with the app.
+// The simulator needs no team at all and uses them as they are.
+//
+// To sign for a device, create ios/Flutter/Local.xcconfig (gitignored) --
+// rather than picking a team in Xcode, which writes it into the shared
+// project file. With a paid team:
+//
+//   DEVELOPMENT_TEAM = <your team id>
+//
+// With a free Apple ID ("Personal Team"), which can sign neither push nor an
+// App Group, and which should not claim the real bundle id:
+//
+//   DEVELOPMENT_TEAM = <your personal team id>
+//   FREIZONE_BUNDLE_ID = de.behringer24.freizone.dev
+//   FREIZONE_APP_ENTITLEMENTS =
+//   FREIZONE_EXTENSION_ENTITLEMENTS =
+//   FREIZONE_SHARE_ENTITLEMENTS =
+//
+// Such a build keeps its files in Documents, gets no push wakes, and cannot
+// take shares from other apps -- see ios/Runner/SharedStorage.swift.
+FREIZONE_BUNDLE_ID = de.behringer24.freizone
+FREIZONE_APP_ENTITLEMENTS = Runner/Runner.entitlements
+FREIZONE_EXTENSION_ENTITLEMENTS = NotificationService/NotificationService.entitlements
+FREIZONE_SHARE_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements
+
+#include? "Local.xcconfig"
