@@ -23,10 +23,9 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../ffi/freizone_core.dart';
 import '../ffi/freizone_core_exception.dart';
+import '../util/app_storage.dart';
 import '../util/log.dart';
 
 /// What one blocking `CorePoll` returned.
@@ -360,7 +359,7 @@ Map<String, dynamic> _pollInIsolate(int handle, String? libraryPath) =>
 /// SQLite -- besides being a lie now, that name is already taken on any install
 /// from that period, and creating a directory where a file sits fails.
 Future<String> coreStatePath(String accountId) async {
-  final dir = await getApplicationDocumentsDirectory();
+  final dir = await appDataDirectory();
   return '${dir.path}${Platform.pathSeparator}core-$accountId';
 }
 

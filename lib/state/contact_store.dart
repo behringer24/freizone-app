@@ -15,7 +15,8 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+
+import '../util/app_storage.dart';
 
 /// One named address.
 ///
@@ -157,7 +158,7 @@ class ContactStore extends ChangeNotifier {
   static const _fileName = 'freizone_contacts.json';
 
   static Future<File> _file() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await appDataDirectory();
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
   }
 
